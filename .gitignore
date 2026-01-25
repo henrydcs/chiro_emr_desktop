@@ -1,0 +1,28 @@
+# Local machine settings
+settings_local.json
+
+# PHI / patient data (never track)
+CASES/
+EMR_Data/
+patients/
+exports/
+uploads/
+db/
+
+# Safety net (common PHI file types)
+*.pdf
+*.sqlite
+*.sqlite3
+*.db
+*.jpg
+*.jpeg
+*.png
+*.tif
+*.tiff
+
+# Python
+__pycache__/
+*.pyc
+.venv/
+.env
+
