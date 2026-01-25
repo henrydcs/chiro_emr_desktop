@@ -14,7 +14,7 @@ from plan_page import PlanPage
 from pathlib import Path
 
 from paths import patients_dir
-print("PATIENTS_DIR =", patients_dir())
+#print("PATIENTS_DIR =", patients_dir())
 
 
 # ----------- OPTIONAL: Pillow (Tkinter logo) -----------
