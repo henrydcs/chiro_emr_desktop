@@ -14,7 +14,21 @@ from plan_page import PlanPage
 from pathlib import Path
 
 from paths import patients_dir
-#print("PATIENTS_DIR =", patients_dir())
+
+#Git Hub to Work Between Computers
+
+#Start of Day
+#git pull
+
+#End of Day Push
+# git status
+# git add .
+# git commit -m "End of day updates"
+# git push
+
+#And remember to make sure to be in the REPO FOLDER (OFFICE COMPUTER):
+#...\EMRchiropractic\chiro_emr_desktop
+#If not in ROOT folder, make sure to "cd chiro_emr_desktop" without the quotes
 
 
 # ----------- OPTIONAL: Pillow (Tkinter logo) -----------
