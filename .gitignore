@@ -10,15 +10,15 @@ uploads/
 db/
 
 # Safety net (common PHI file types)
-*.pdf
-*.sqlite
-*.sqlite3
-*.db
-*.jpg
-*.jpeg
-*.png
-*.tif
-*.tiff
+# *.pdf
+# *.sqlite
+# *.sqlite3
+# *.db
+# *.jpg
+# *.jpeg
+# *.png
+# *.tif
+# *.tiff
 
 # Python
 __pycache__/
