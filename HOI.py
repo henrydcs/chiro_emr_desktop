@@ -6,6 +6,9 @@ from tkinter import ttk, messagebox
 
 from HOIpdf import build_hoi_flowables
 
+from scrollframe import ScrollFrame
+
+
 
 AUTO_MOI_TAG = "[AUTO:MOI]"
 
@@ -192,13 +195,23 @@ class ROFImagingBlock(ttk.Frame):
             self.on_change()
 
     def get_selected(self) -> dict:
+        parts = list(self._parts_selected)
+
+        # ✅ FORCE read from widget at export-time
+        if self.parts_listbox is not None:
+            try:
+                parts = [self.parts_listbox.get(i) for i in self.parts_listbox.curselection()]
+            except Exception:
+                pass
+
         return {
-            "type": self.imaging_type_var.get(),            
+            "type": self.imaging_type_var.get(),
             "facility": self.facility_var.get(),
             "city": self.city_var.get(),
             "date": self.date_var.get(),
-            "parts": list(self._parts_selected),
+            "parts": parts,
         }
+
 
     def to_dict(self) -> dict:
         return self.get_selected()
@@ -736,6 +749,8 @@ class HOIPage(ttk.Frame):
         super().__init__(parent)
         self.on_change_callback = on_change_callback
 
+        #print("HOIPage INIT id:", id(self))       
+
                 # ----------------
         # ROF / Status Update (new structured ROF block)
         # ----------------
@@ -874,12 +889,19 @@ class HOIPage(ttk.Frame):
             self.sf_circumstance_var, self.sf_landing_var,
             self.db_location_var, self.db_severity_var,
             self.auto_moi_var,
-            self.rof_mode_var,
-            self.rof_imaging_date_var,
-            self.rof_include_city_var,
+            #self.rof_mode_var,
+            #self.rof_imaging_date_var,
+            #self.rof_include_city_var,
         ]
         for v in regen_drivers:
             v.trace_add("write", lambda *_: self._on_struct_changed())
+
+                # -------------------------
+        # ROF traces (DO NOT route through _on_struct_changed)
+        # -------------------------
+        for v in (self.rof_mode_var, self.rof_imaging_date_var, self.rof_include_city_var):
+            v.trace_add("write", lambda *_: self._on_rof_struct_changed())
+
 
         autosave_only = [
             self.moi_var,
@@ -1279,11 +1301,16 @@ class HOIPage(ttk.Frame):
         add_btn("Diagnostics")
         add_btn("Review of Findings")
 
-        # container
-        self.container = ttk.Frame(self)
-        self.container.pack(fill="both", expand=True, padx=padx, pady=(0, 10))
+                # container
+        # ✅ Wrap everything below the top buttons in a vertical ScrollFrame
+        self.scroll = ScrollFrame(self)
+        self.scroll.pack(fill="both", expand=True, padx=padx, pady=(0, 10))
+
+        self.container = ttk.Frame(self.scroll.content)
+        self.container.pack(fill="both", expand=True)
         self.container.grid_rowconfigure(0, weight=1)
         self.container.grid_columnconfigure(0, weight=1)
+
 
         self.frames = {
             "History of Injury": self._build_history_block(self.container),
@@ -1636,7 +1663,19 @@ class HOIPage(ttk.Frame):
         def _on_mousewheel(event):
             canvas.yview_scroll(int(-1 * (event.delta / 120)), "units")
 
-        canvas.bind_all("<MouseWheel>", _on_mousewheel)
+        #canvas.bind_all("<MouseWheel>", _on_mousewheel)
+
+        def _enable_wheel(_e=None):
+            canvas.bind("<MouseWheel>", _on_mousewheel)
+
+        def _disable_wheel(_e=None):
+            canvas.unbind("<MouseWheel>")
+
+        canvas.bind("<Enter>", _enable_wheel)
+        canvas.bind("<Leave>", _disable_wheel)
+        inner.bind("<Enter>", _enable_wheel)
+        inner.bind("<Leave>", _disable_wheel)
+
 
 
         # ✅ THIS replaces `self._rof_blocks_row = row`
@@ -1680,6 +1719,17 @@ class HOIPage(ttk.Frame):
     # ---------------- Export ----------------
     def to_dict(self) -> dict:
         self._flush_all_text_widgets()
+
+        # ✅ FORCE ROF flush (bulletproof)
+        if self._rof_manual_text is not None and self._rof_manual_text.winfo_exists():
+            self.rof_manual_paragraph_var.set(self._rof_manual_text.get("1.0", "end-1c"))
+        if self._rof_auto_text is not None and self._rof_auto_text.winfo_exists():
+            self.rof_auto_paragraph_var.set(self._rof_auto_text.get("1.0", "end-1c"))
+
+        #print("ROF manual widget preview:", self._rof_manual_text.get("1.0","end-1c")[:80] if self._rof_manual_text else None)
+        #print("ROF manual var preview:", (self.rof_manual_paragraph_var.get() or "")[:80])
+        #print("ROF blocks:", [b.get_selected() for b in (self.rof_imaging_blocks or [])])
+
 
         imaging_blocks_struct = [b.to_dict() for b in self.imaging_blocks] if self.imaging_blocks else []
 
@@ -1884,8 +1934,26 @@ class HOIPage(ttk.Frame):
     # ---------------- Utilities ----------------
     def has_content(self) -> bool:
         self._flush_all_text_widgets()
+
+        # If ANY ROF content exists, count it
+        if _clean(self.rof_manual_paragraph_var.get()):
+            return True
+        if _clean(self.rof_auto_paragraph_var.get()):
+            return True
+        if _clean(self.rof_imaging_date_var.get()):
+            return True
+        if any(_clean((b.get_selected() or {}).get("type", "")) not in ("", "(none)") or
+            any(_clean(x) for x in ((b.get_selected() or {}).get("parts") or [])) or
+            _clean((b.get_selected() or {}).get("facility", "")) not in ("", "(none)") or
+            _clean((b.get_selected() or {}).get("city", "")) or
+            _clean((b.get_selected() or {}).get("date", ""))
+            for b in (self.rof_imaging_blocks or [])):
+            return True
+
+        # Existing check
         if _clean(self.injury_type_var.get()) not in ("", "(none)"):
             return True
+
         return any(
             _clean(v.get())
             for v in (
@@ -1937,12 +2005,35 @@ class HOIPage(ttk.Frame):
                 except Exception:
                     pass
             self.imaging_blocks.clear()
+
+            # =========================
+            # ✅ INSERT ROF RESET HERE
+            # =========================
+            self.rof_mode_var.set("ROF")
+            self.rof_imaging_date_var.set("")
+            self.rof_include_city_var.set(False)
+            self.rof_auto_paragraph_var.set("")
+            self.rof_manual_paragraph_var.set("")
+
+            for b in list(self.rof_imaging_blocks):
+                try:
+                    b.destroy()
+                except Exception:
+                    pass
+            self.rof_imaging_blocks.clear()
+
         finally:
             self._loading = False
 
         # recreate one empty imaging block (after loading guard ends)
         if self._imaging_blocks_row is not None:
             self._add_imaging_block()
+
+        # =========================
+        # ✅ ADD THIS RIGHT AFTER imaging block recreation
+        # =========================
+        if self._rof_blocks_row is not None:
+            self._add_rof_block()
 
         # legacy reset
         self._imaging_selected = []
@@ -1960,6 +2051,9 @@ class HOIPage(ttk.Frame):
         self.db_severity_var.set(self.DB_SEVERITY[0])
 
         self._push_vars_into_text_widgets()
+
+        # optional: regenerate ROF auto paragraph after resetting blocks
+        self._regen_rof_now()
 
         self._regen_moi_now()
         self._show_block("History of Injury")

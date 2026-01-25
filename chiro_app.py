@@ -1298,7 +1298,9 @@ class App(tk.Tk):
         subj_struct = self.subjectives_page.to_dict()
 
         try:
+            #print("SAVE uses HOIPage id:", id(self.hoi_page))
             hoi_struct = self.hoi_page.to_dict() or {}
+            #print("DEBUG HOI ROF:", hoi_struct.get("rof"))
         except Exception:
             hoi_struct = {}
 
