@@ -26,8 +26,8 @@ from paths import patients_dir
 # git commit -m "End of day updates"
 # git push
 
-#And remember to make sure to be in the REPO FOLDER (OFFICE COMPUTER):
-#...\EMRchiropractic\chiro_emr_desktop
+#And remember to make sure to be in the REPO FOLDER (OFFICE COMPUTER or HOME COMPUTER):
+#...\EMRchiropractic\chiro_emr_desktop OR EMR_Code\chiro_emr_desktop
 #If not in ROOT folder, make sure to "cd chiro_emr_desktop" without the quotes
 
 
