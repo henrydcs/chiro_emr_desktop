@@ -1628,11 +1628,12 @@ class HOIPage(ttk.Frame):
 
         # --- scrollable ROF imaging row (H + V) ---
         wrap = ttk.Frame(f)
-        wrap.pack(fill="both", expand=True, padx=10, pady=(0, 8))
+        wrap.pack(fill="x", expand=False, padx=10, pady=(0, 8))
         wrap.grid_rowconfigure(0, weight=1)
         wrap.grid_columnconfigure(0, weight=1)
 
         canvas = tk.Canvas(wrap, highlightthickness=0)
+        canvas.configure(height=220)   # <-- add this (try 200–260)
         canvas.grid(row=0, column=0, sticky="nsew")
 
         # Vertical scrollbar
@@ -1644,6 +1645,7 @@ class HOIPage(ttk.Frame):
         hbar.grid(row=1, column=0, sticky="ew")
 
         canvas.configure(
+            height=220,
             xscrollcommand=hbar.set,
             yscrollcommand=vbar.set,
         )
@@ -1691,6 +1693,8 @@ class HOIPage(ttk.Frame):
         txt_auto.pack(fill="x", expand=False, padx=10, pady=(0, 10))
         self._rof_auto_text = txt_auto
         txt_auto.insert("1.0", self.rof_auto_paragraph_var.get() or "")
+        # ✅ make auto paragraph read-only
+        txt_auto.configure(state="disabled")
 
         # Manual paragraph (findings narrative)
         ttk.Label(f, text="Manual findings paragraph (you type):").pack(anchor="w", padx=10, pady=(0, 4))
