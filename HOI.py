@@ -177,6 +177,37 @@ class ROFImagingBlock(ttk.Frame):
         self.parts_listbox = lb             # ✅ REQUIRED
         lb.bind("<<ListboxSelect>>", lambda e: self._sync_parts())  # ✅ REQUIRED
 
+        # ✅ wheel only when hovering this body-parts listbox
+        # Note: HOIPage helper is not available here, so bind directly:
+        def _lb_wheel(e):
+            # Windows/Mac
+            if getattr(e, "delta", 0):
+                step = int(-1 * (e.delta / 120)) if abs(e.delta) >= 120 else (-1 if e.delta > 0 else 1)
+                lb.yview_scroll(step, "units")
+            return "break"
+
+        def _lb_up(_e):
+            lb.yview_scroll(-1, "units")
+            return "break"
+
+        def _lb_down(_e):
+            lb.yview_scroll(1, "units")
+            return "break"
+
+        def _enable(_e=None):
+            lb.bind("<MouseWheel>", _lb_wheel)
+            lb.bind("<Button-4>", _lb_up)
+            lb.bind("<Button-5>", _lb_down)
+
+        def _disable(_e=None):
+            lb.unbind("<MouseWheel>")
+            lb.unbind("<Button-4>")
+            lb.unbind("<Button-5>")
+
+        lb.bind("<Enter>", _enable)
+        lb.bind("<Leave>", _disable)
+
+
 
     def set_number(self, n: int):
         self.index = n
@@ -431,6 +462,58 @@ class HOIPage(ttk.Frame):
     # -----------------------------
     
         # ---------------- ROF helpers ----------------
+    
+    def _bind_wheel_to_widget(self, widget, *, yview_func=None, xview_func=None):
+        """
+        Routes mouse wheel to a specific widget only while the mouse is over it.
+        - yview_func: callable like widget.yview_scroll
+        - xview_func: callable like widget.xview_scroll (optional)
+        Supports Windows/Mac (<MouseWheel>) and Linux (<Button-4/5>).
+        """
+
+        def _on_mousewheel(event):
+            # SHIFT + wheel -> horizontal if provided
+            if (event.state & 0x0001) and xview_func is not None:
+                # Windows/Mac: event.delta; Linux: no delta on Button-4/5
+                if hasattr(event, "delta") and event.delta:
+                    step = -1 if event.delta > 0 else 1
+                    xview_func(step, "units")
+                return "break"
+
+            if yview_func is not None:
+                if hasattr(event, "delta") and event.delta:
+                    # Windows: delta = 120 per notch; Mac may be smaller
+                    step = int(-1 * (event.delta / 120)) if abs(event.delta) >= 120 else (-1 if event.delta > 0 else 1)
+                    yview_func(step, "units")
+                return "break"
+
+        def _on_linux_up(_event):
+            if yview_func is not None:
+                yview_func(-1, "units")
+            return "break"
+
+        def _on_linux_down(_event):
+            if yview_func is not None:
+                yview_func(1, "units")
+            return "break"
+
+        def _enable(_event=None):
+            widget.bind("<MouseWheel>", _on_mousewheel)     # Win/Mac
+            widget.bind("<Shift-MouseWheel>", _on_mousewheel)
+            widget.bind("<Button-4>", _on_linux_up)         # Linux
+            widget.bind("<Button-5>", _on_linux_down)
+
+        def _disable(_event=None):
+            widget.unbind("<MouseWheel>")
+            widget.unbind("<Shift-MouseWheel>")
+            widget.unbind("<Button-4>")
+            widget.unbind("<Button-5>")
+
+        widget.bind("<Enter>", _enable)
+        widget.bind("<Leave>", _disable)
+
+    
+    
     def _layout_rof_blocks(self):
         if self._rof_blocks_row is None:
             return
@@ -484,12 +567,16 @@ class HOIPage(ttk.Frame):
     def _set_rof_auto_text(self, text: str):
         text = text or ""
         self.rof_auto_paragraph_var.set(text)
-        if self._rof_auto_text is not None and self._rof_auto_text.winfo_exists():
+
+        txt = getattr(self, "_rof_auto_text", None)
+        if txt is not None and txt.winfo_exists():
             try:
-                self._rof_auto_text.delete("1.0", "end")
-                self._rof_auto_text.insert("1.0", text)
-            except Exception:
-                pass
+                txt.configure(state="normal")      # ✅ unlock
+                txt.delete("1.0", "end")
+                txt.insert("1.0", text)
+            finally:
+                txt.configure(state="disabled")    # ✅ lock again
+
 
     def _on_rof_struct_changed(self):
         if self._loading:
@@ -584,15 +671,15 @@ class HOIPage(ttk.Frame):
         chunks: list[str] = []
 
         # Sentence 1 (date anchor)
-        if date_txt:
-            chunks.append(f"{first} underwent diagnostic imaging on {date_txt}.")
+        if date_txt:            
+            chunks.append(f"{first} underwent diagnostic imaging on {date_txt},")
         else:
-            chunks.append(f"{first} underwent diagnostic imaging.")
+            chunks.append(f"{first} underwent diagnostic imaging,")
 
         # Sentence templates for facilities 1–4
         # Each template expects: detail, facility_text (optional)
         templates = [
-            ("The imaging included {detail}{date_clause} at {place}.",
+            ("which included {detail}{date_clause} at {place}.",
             "The imaging included {detail}{date_clause}."),
 
             ("The patient also received {detail}{date_clause} at {place}.",
@@ -1687,6 +1774,11 @@ class HOIPage(ttk.Frame):
         if not self.rof_imaging_blocks:
             self._add_rof_block()
 
+        # ✅ wheel only when hovering the imaging canvas area
+        self._bind_wheel_to_widget(canvas, yview_func=canvas.yview_scroll, xview_func=canvas.xview_scroll)
+        self._bind_wheel_to_widget(inner, yview_func=canvas.yview_scroll, xview_func=canvas.xview_scroll)
+
+
         # Auto paragraph (smaller)
         ttk.Label(f, text="Auto paragraph (generated):").pack(anchor="w", padx=10, pady=(6, 4))
         txt_auto = tk.Text(f, height=5, wrap="word")
@@ -1826,13 +1918,19 @@ class HOIPage(ttk.Frame):
                 # ensure at least one empty block exists
                 self._add_rof_block()
 
-            # push text into widgets if UI already built
-            if self._rof_auto_text is not None and self._rof_auto_text.winfo_exists():
+            # push text into widgets if UI already built (ROF auto)
+            txt = getattr(self, "_rof_auto_text", None)
+            if txt is not None and txt.winfo_exists():
                 try:
-                    self._rof_auto_text.delete("1.0", "end")
-                    self._rof_auto_text.insert("1.0", self.rof_auto_paragraph_var.get() or "")
-                except Exception:
-                    pass
+                    txt.configure(state="normal")   # ✅ temporarily unlock
+                    txt.delete("1.0", "end")
+                    txt.insert("1.0", self.rof_auto_paragraph_var.get() or "")
+                finally:
+                    try:
+                        txt.configure(state="disabled")  # ✅ lock back
+                    except Exception:
+                        pass
+
 
             if self._rof_manual_text is not None and self._rof_manual_text.winfo_exists():
                 try:

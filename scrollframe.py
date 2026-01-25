@@ -68,32 +68,36 @@ class ScrollFrame(ttk.Frame):
     def _enable_mousewheel(self, event=None):
         sys = platform.system()
         if sys in ("Windows", "Darwin"):
-            self.bind_all("<MouseWheel>", self._on_mousewheel)
+            self.canvas.bind("<MouseWheel>", self._on_mousewheel)
+            self.content.bind("<MouseWheel>", self._on_mousewheel)
         else:
-            self.bind_all("<Button-4>", self._on_mousewheel)
-            self.bind_all("<Button-5>", self._on_mousewheel)
+            self.canvas.bind("<Button-4>", self._on_mousewheel)
+            self.canvas.bind("<Button-5>", self._on_mousewheel)
+            self.content.bind("<Button-4>", self._on_mousewheel)
+            self.content.bind("<Button-5>", self._on_mousewheel)
 
     def _disable_mousewheel(self, event=None):
         sys = platform.system()
         if sys in ("Windows", "Darwin"):
-            self.unbind_all("<MouseWheel>")
+            self.canvas.unbind("<MouseWheel>")
+            self.content.unbind("<MouseWheel>")
         else:
-            self.unbind_all("<Button-4>")
-            self.unbind_all("<Button-5>")
+            for seq in ("<Button-4>", "<Button-5>"):
+                self.canvas.unbind(seq)
+                self.content.unbind(seq)
+
 
     def _on_mousewheel(self, event):
-        # Linux (Button-4/5)
         if getattr(event, "num", None) == 4:
             self.canvas.yview_scroll(-1, "units")
-            return
+            return "break"
         if getattr(event, "num", None) == 5:
             self.canvas.yview_scroll(1, "units")
-            return
+            return "break"
 
-        # Windows/macOS: MouseWheel with delta
         delta = getattr(event, "delta", 0)
         if delta == 0:
-            return
+            return "break"
 
         if platform.system() == "Darwin":
             step = -1 if delta > 0 else 1
@@ -102,6 +106,9 @@ class ScrollFrame(ttk.Frame):
 
         if step:
             self.canvas.yview_scroll(step, "units")
+
+        return "break"
+
 
     # ---------- convenience ----------
     def scroll_to_top(self):
