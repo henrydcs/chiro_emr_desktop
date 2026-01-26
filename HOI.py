@@ -685,19 +685,18 @@ class HOIPage(ttk.Frame):
             fac = _clean(facility)
             c = _clean(city)
 
-            # normalize "(none)"
-            if fac == "(none)":
+            # normalize placeholders
+            if fac.lower() in ("(none)", "none", "n/a"):
                 fac = ""
+            if c.lower() in ("(none)", "none", "n/a"):
+                c = ""
 
             if fac and c:
                 return f"{fac} in {c}"
-
             if fac:
                 return fac
-
             if c:
                 return c
-
             return ""
 
 
@@ -1035,9 +1034,8 @@ class HOIPage(ttk.Frame):
                 # -------------------------
         # ROF traces (DO NOT route through _on_struct_changed)
         # -------------------------
-        for v in (self.rof_mode_var,):
+        for v in (self.rof_mode_var, self.rof_input_mode_var, self.rof_manual_paragraph_var):
             v.trace_add("write", lambda *_: self._on_rof_struct_changed())
-
 
 
         autosave_only = [
@@ -2050,19 +2048,20 @@ class HOIPage(ttk.Frame):
     def has_content(self) -> bool:
         self._flush_all_text_widgets()
 
-        # If ANY ROF content exists, count it
+        # --- ROF checks (new model) ---
+        # Manual ROF paragraph (Text/Write mode)
         if _clean(self.rof_manual_paragraph_var.get()):
             return True
-        if _clean(self.rof_auto_paragraph_var.get()):
-            return True
-        if _clean(self.rof_imaging_date_var.get()):
-            return True
-        if any(_clean((b.get_selected() or {}).get("type", "")) not in ("", "(none)") or
+
+        # Any structured imaging blocks content
+        if any(
+            _clean((b.get_selected() or {}).get("type", "")) not in ("", "(none)") or
             any(_clean(x) for x in ((b.get_selected() or {}).get("parts") or [])) or
             _clean((b.get_selected() or {}).get("facility", "")) not in ("", "(none)") or
             _clean((b.get_selected() or {}).get("city", "")) or
             _clean((b.get_selected() or {}).get("date", ""))
-            for b in (self.rof_imaging_blocks or [])):
+            for b in (self.rof_imaging_blocks or [])
+        ):
             return True
 
         # Existing check
@@ -2080,6 +2079,7 @@ class HOIPage(ttk.Frame):
                 self.other_notes_var,
             )
         )
+
 
     def reset(self):
         if not messagebox.askyesno("Reset HOI", "Are you sure you want to clear ALL HOI fields?"):

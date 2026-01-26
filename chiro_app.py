@@ -177,6 +177,14 @@ class App(tk.Tk):
             self.status_var.set("Ready. (New blank form)")
 
     def refresh_live_preview(self):
+        # 🔒 During startup/build, this may fire before pages exist
+        if not hasattr(self, "hoi_page"):
+            return
+
+        txt = getattr(self, "hoi_preview_text", None)
+        if txt is None or not txt.winfo_exists():
+            return
+
         parts = []
 
         try:
@@ -188,11 +196,6 @@ class App(tk.Tk):
 
         text = "\n".join([p for p in parts if p]).strip()
 
-        # ✅ Guard: preview widget might not exist yet
-        txt = getattr(self, "hoi_preview_text", None)
-        if txt is None or not txt.winfo_exists():
-            return
-
         try:
             txt.configure(state="normal")
             txt.delete("1.0", "end")
@@ -202,6 +205,7 @@ class App(tk.Tk):
                 txt.configure(state="disabled")
             except Exception:
                 pass
+
 
     def _rebuild_exam_nav_buttons(self):
         # Remove old exam buttons only (leave label + add buttons alone)
@@ -808,6 +812,7 @@ class App(tk.Tk):
         # Keep HOIPage created so saving/PDF still works,
         # but it will no longer be shown as a "page" button.
         self.hoi_page = HOIPage(self.content, self.schedule_autosave)
+        self.after(50, self.refresh_live_preview)
 
         self.subjectives_page = SubjectivesPage(self.content, self.schedule_autosave)
         self.objectives_page = ObjectivesPage(self.content, self.schedule_autosave)
