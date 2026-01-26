@@ -1,3 +1,9 @@
+import os, sys
+print("RUNNING FILE:", os.path.abspath(__file__))
+print("CWD:", os.getcwd())
+print("PYTHON:", sys.executable)
+
+
 # chiro_app.py
 import json
 import os
