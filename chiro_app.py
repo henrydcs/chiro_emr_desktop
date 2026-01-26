@@ -202,11 +202,9 @@ class App(tk.Tk):
 
     
     def refresh_live_preview(self):
-        # prevent re-entrant refresh (twitching / feedback loops)
         if getattr(self, "_refreshing_preview", False):
             return
         self._refreshing_preview = True
-
         try:
             if not hasattr(self, "hoi_page"):
                 return
@@ -215,32 +213,33 @@ class App(tk.Tk):
             if txt is None or not txt.winfo_exists():
                 return
 
-            # capture top visible line (stable)
-            try:
-                top_index = txt.index("@0,0")
-            except Exception:
-                top_index = "1.0"
-
+            # Build runs
             runs = []
             try:
                 if hasattr(self.hoi_page, "get_live_preview_runs"):
-                    runs.extend(self.hoi_page.get_live_preview_runs() or [])
+                    runs = self.hoi_page.get_live_preview_runs() or []
                 else:
-                    hoi_text = self.hoi_page.get_live_preview_text()
-                    if hoi_text:
-                        runs.append((hoi_text, None))
+                    s = self.hoi_page.get_live_preview_text()
+                    if s:
+                        runs = [(s, None)]
             except Exception as e:
-                print("refresh_live_preview (HOI build) error:", e)
+                print("refresh_live_preview error:", e)
+                runs = []
+
+            # ✅ If content didn’t change, do NOTHING (prevents jitter)
+            new_key = tuple((chunk or "", tag or "") for chunk, tag in runs)
+            if getattr(self, "_last_preview_key", None) == new_key:
+                return
+            self._last_preview_key = new_key
+
+            # Preserve current view
+            try:
+                y0 = txt.yview()[0]
+            except Exception:
+                y0 = 0.0
 
             try:
                 txt.configure(state="normal")
-
-                # keep Tk from auto-scrolling to insertion cursor
-                try:
-                    txt.mark_set("insert", "1.0")
-                except Exception:
-                    pass
-
                 txt.delete("1.0", "end")
 
                 for chunk, tag in runs:
@@ -251,11 +250,7 @@ class App(tk.Tk):
                     else:
                         txt.insert("end", chunk)
 
-                # restore view
-                try:
-                    txt.see(top_index)
-                except Exception:
-                    pass
+                txt.yview_moveto(y0)
 
             finally:
                 try:
@@ -265,6 +260,8 @@ class App(tk.Tk):
 
         finally:
             self._refreshing_preview = False
+
+
 
 
     def _rebuild_exam_nav_buttons(self):
@@ -1348,12 +1345,18 @@ class App(tk.Tk):
     def schedule_autosave(self):
         if self._loading:
             return
+
         if self._autosave_after_id is not None:
             try:
                 self.after_cancel(self._autosave_after_id)
             except Exception:
                 pass
+
         self._autosave_after_id = self.after(AUTOSAVE_DEBOUNCE_MS, self._autosave)
+
+        # ✅ ONE place to refresh preview (debounced)
+        self.request_live_preview_refresh()
+
 
         
 

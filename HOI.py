@@ -1826,7 +1826,19 @@ class HOIPage(ttk.Frame):
         txt_manual.pack(fill="both", expand=True, padx=10, pady=(0, 10))
         self._rof_manual_text = txt_manual
         txt_manual.insert("1.0", self.rof_manual_paragraph_var.get() or "")
-        self._bind_text_to_var(txt_manual, self.rof_manual_paragraph_var)
+        def _rof_manual_changed(_evt=None):
+            if self._loading:
+                return
+            try:
+                self.rof_manual_paragraph_var.set(txt_manual.get("1.0", "end-1c"))
+            except Exception:
+                return
+            self._on_rof_struct_changed()  # ✅ this triggers ROF regen + _changed()
+
+        txt_manual.bind("<KeyRelease>", _rof_manual_changed)
+        txt_manual.bind("<FocusOut>", _rof_manual_changed)
+        txt_manual.bind("<<Paste>>", lambda e: self.after(1, _rof_manual_changed))
+        txt_manual.bind("<<Cut>>",   lambda e: self.after(1, _rof_manual_changed))
 
         # initialize visibility
         self._on_rof_input_mode_changed()
@@ -2131,9 +2143,7 @@ class HOIPage(ttk.Frame):
             # =========================
             # ✅ INSERT ROF RESET HERE
             # =========================
-            self.rof_mode_var.set("ROF")
-            self.rof_imaging_date_var.set("")
-            self.rof_include_city_var.set(False)
+            self.rof_mode_var.set("ROF")        
             self.rof_auto_paragraph_var.set("")
             self.rof_manual_paragraph_var.set("")
 
