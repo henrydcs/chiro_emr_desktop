@@ -488,30 +488,37 @@ class HOIPage(ttk.Frame):
         self._on_rof_struct_changed()
 
 
-    def get_live_preview_text(self) -> str:
+    def get_live_preview_runs(self):
         """
-        Returns the HOI-related text that should appear in the Live Preview panel.
-        For now: ROF only (when mode == 'ROF').
-        Later: you can append Intro/ReExam/Final sections here too.
+        Returns a list of (text, tag) tuples.
+        tag can be None for normal text.
         """
         mode = _clean(self.rof_mode_var.get())
         if mode != "ROF":
-            return ""
+            return []
 
-        # Ensure paragraph is up to date
         self._regen_rof_now()
 
-        para = _clean(self.rof_auto_paragraph_var.get())
-        if not para:
-            return ""
+        structured = _clean(self.rof_auto_paragraph_var.get())
+        textwrite  = _clean(self.rof_manual_paragraph_var.get())
 
-        # PDF-like formatting
-        out = []
-        out.append("REVIEW OF FINDINGS")
-        out.append("")  # blank line
-        out.append(para)
-        out.append("")  # blank line after block
-        return "\n".join(out)
+        if not (structured or textwrite):
+            return []
+
+        runs = []
+        runs.append(("REVIEW OF FINDINGS\n", "H_BOLD"))
+        runs.append(("\n", None))
+
+        # structured first
+        if structured:
+            runs.append((structured + "\n\n", None))
+
+        # text/write paragraph underneath
+        if textwrite:
+            runs.append((textwrite + "\n\n", None))
+
+        return runs
+
 
     
     def _bind_wheel_to_widget(self, widget, *, yview_func=None, xview_func=None):

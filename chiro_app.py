@@ -12,6 +12,7 @@ import re
 from HOI import HOIPage
 from plan_page import PlanPage
 from pathlib import Path
+import tkinter.font as tkfont
 
 from paths import patients_dir
 
@@ -126,7 +127,12 @@ def _next_number(existing: list[str], prefix: str) -> int:
 class App(tk.Tk):
     def __init__(self):
         super().__init__()
-        ensure_year_root()       
+        ensure_year_root()    
+
+        self._live_preview_job = None  
+
+        self._refreshing_preview = False
+
 
         self._start_blank = "--new" in sys.argv
 
@@ -160,7 +166,8 @@ class App(tk.Tk):
         self.last_all_exams_pdf_path = ""
 
         self._mousewheel_target = None
-        self._tk_logo_image = None
+        self._tk_logo_image = None        
+
 
         self._build_ui()
         self._wire_autosave_triggers()
@@ -176,35 +183,82 @@ class App(tk.Tk):
         else:
             self.status_var.set("Ready. (New blank form)")
 
-    def refresh_live_preview(self):
-        # 🔒 During startup/build, this may fire before pages exist
-        if not hasattr(self, "hoi_page"):
-            return
-
-        txt = getattr(self, "hoi_preview_text", None)
-        if txt is None or not txt.winfo_exists():
-            return
-
-        parts = []
-
-        try:
-            hoi_text = self.hoi_page.get_live_preview_text()
-            if hoi_text:
-                parts.append(hoi_text)
-        except Exception as e:
-            print("refresh_live_preview (HOI build) error:", e)
-
-        text = "\n".join([p for p in parts if p]).strip()
-
-        try:
-            txt.configure(state="normal")
-            txt.delete("1.0", "end")
-            txt.insert("1.0", text)
-        finally:
+    def request_live_preview_refresh(self):
+        # Debounce: cancel pending refresh and schedule a new one
+        if getattr(self, "_live_preview_job", None) is not None:
             try:
-                txt.configure(state="disabled")
+                self.after_cancel(self._live_preview_job)
             except Exception:
                 pass
+            self._live_preview_job = None
+
+        self._live_preview_job = self.after(80, self.refresh_live_preview)  # 60–120ms feels good
+
+    
+    def refresh_live_preview(self):
+        # prevent re-entrant refresh (twitching / feedback loops)
+        if getattr(self, "_refreshing_preview", False):
+            return
+        self._refreshing_preview = True
+
+        try:
+            if not hasattr(self, "hoi_page"):
+                return
+
+            txt = getattr(self, "hoi_preview_text", None)
+            if txt is None or not txt.winfo_exists():
+                return
+
+            # capture top visible line (stable)
+            try:
+                top_index = txt.index("@0,0")
+            except Exception:
+                top_index = "1.0"
+
+            runs = []
+            try:
+                if hasattr(self.hoi_page, "get_live_preview_runs"):
+                    runs.extend(self.hoi_page.get_live_preview_runs() or [])
+                else:
+                    hoi_text = self.hoi_page.get_live_preview_text()
+                    if hoi_text:
+                        runs.append((hoi_text, None))
+            except Exception as e:
+                print("refresh_live_preview (HOI build) error:", e)
+
+            try:
+                txt.configure(state="normal")
+
+                # keep Tk from auto-scrolling to insertion cursor
+                try:
+                    txt.mark_set("insert", "1.0")
+                except Exception:
+                    pass
+
+                txt.delete("1.0", "end")
+
+                for chunk, tag in runs:
+                    if not chunk:
+                        continue
+                    if tag:
+                        txt.insert("end", chunk, tag)
+                    else:
+                        txt.insert("end", chunk)
+
+                # restore view
+                try:
+                    txt.see(top_index)
+                except Exception:
+                    pass
+
+            finally:
+                try:
+                    txt.configure(state="disabled")
+                except Exception:
+                    pass
+
+        finally:
+            self._refreshing_preview = False
 
 
     def _rebuild_exam_nav_buttons(self):
@@ -805,6 +859,15 @@ class App(tk.Tk):
         self.hoi_preview_scroll.pack(side="right", fill="y")
         self.hoi_preview_text.pack(side="left", fill="both", expand=True)
 
+        def apply_preview_styles(txt: "tk.Text"):
+            base = tkfont.nametofont("TkDefaultFont")
+            bold = base.copy()
+            bold.configure(weight="bold")
+            txt.tag_configure("H_BOLD", font=bold)
+
+        # call once after widget is created:
+        apply_preview_styles(self.hoi_preview_text)
+
 
         # =========================
         # Create pages (unchanged logic, same widgets)
@@ -812,7 +875,7 @@ class App(tk.Tk):
         # Keep HOIPage created so saving/PDF still works,
         # but it will no longer be shown as a "page" button.
         self.hoi_page = HOIPage(self.content, self.schedule_autosave)
-        self.after(50, self.refresh_live_preview)
+        self.after(50, self.request_live_preview_refresh)
 
         self.subjectives_page = SubjectivesPage(self.content, self.schedule_autosave)
         self.objectives_page = ObjectivesPage(self.content, self.schedule_autosave)
@@ -1286,8 +1349,7 @@ class App(tk.Tk):
                 pass
         self._autosave_after_id = self.after(AUTOSAVE_DEBOUNCE_MS, self._autosave)
 
-        # ✅ update live preview immediately on change
-        self.refresh_live_preview()
+        
 
     def _current_exam_has_content(self) -> bool:
         if hasattr(self, "hoi_page") and self.hoi_page.has_content():
@@ -1538,8 +1600,7 @@ class App(tk.Tk):
             self._apply_exam_color_theme()
         finally:
             self._loading = False
-            if hasattr(self, "hoi_preview_text"):
-                self.refresh_live_preview()           
+                   
 
 
     # ---------- Reset ----------
