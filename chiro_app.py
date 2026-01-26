@@ -176,6 +176,33 @@ class App(tk.Tk):
         else:
             self.status_var.set("Ready. (New blank form)")
 
+    def refresh_live_preview(self):
+        parts = []
+
+        try:
+            hoi_text = self.hoi_page.get_live_preview_text()
+            if hoi_text:
+                parts.append(hoi_text)
+        except Exception as e:
+            print("refresh_live_preview (HOI build) error:", e)
+
+        text = "\n".join([p for p in parts if p]).strip()
+
+        # ✅ Guard: preview widget might not exist yet
+        txt = getattr(self, "hoi_preview_text", None)
+        if txt is None or not txt.winfo_exists():
+            return
+
+        try:
+            txt.configure(state="normal")
+            txt.delete("1.0", "end")
+            txt.insert("1.0", text)
+        finally:
+            try:
+                txt.configure(state="disabled")
+            except Exception:
+                pass
+
     def _rebuild_exam_nav_buttons(self):
         # Remove old exam buttons only (leave label + add buttons alone)
         for name, btn in list(self.exam_buttons.items()):
@@ -769,6 +796,7 @@ class App(tk.Tk):
         self.hoi_preview_text = tk.Text(preview, wrap="word")
         self.hoi_preview_scroll = ttk.Scrollbar(preview, orient="vertical", command=self.hoi_preview_text.yview)
         self.hoi_preview_text.configure(yscrollcommand=self.hoi_preview_scroll.set)
+        self.hoi_preview_text.configure(state="disabled")
 
         self.hoi_preview_scroll.pack(side="right", fill="y")
         self.hoi_preview_text.pack(side="left", fill="both", expand=True)
@@ -1253,6 +1281,9 @@ class App(tk.Tk):
                 pass
         self._autosave_after_id = self.after(AUTOSAVE_DEBOUNCE_MS, self._autosave)
 
+        # ✅ update live preview immediately on change
+        self.refresh_live_preview()
+
     def _current_exam_has_content(self) -> bool:
         if hasattr(self, "hoi_page") and self.hoi_page.has_content():
             return True
@@ -1502,6 +1533,9 @@ class App(tk.Tk):
             self._apply_exam_color_theme()
         finally:
             self._loading = False
+            if hasattr(self, "hoi_preview_text"):
+                self.refresh_live_preview()           
+
 
     # ---------- Reset ----------
 

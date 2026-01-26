@@ -462,6 +462,57 @@ class HOIPage(ttk.Frame):
     # -----------------------------
     
         # ---------------- ROF helpers ----------------
+
+    def _on_rof_input_mode_changed(self):
+        if self._loading:
+            return
+
+        # show/hide the two areas (you'll set these refs below)
+        mode = (self.rof_input_mode_var.get() or "Structured")
+
+        try:
+            if mode == "Text/Write":
+                if getattr(self, "_rof_structured_wrap", None):
+                    self._rof_structured_wrap.pack_forget()
+                if getattr(self, "_rof_text_wrap", None):
+                    self._rof_text_wrap.pack(fill="both", expand=True, padx=10, pady=(0, 10))
+            else:
+                if getattr(self, "_rof_text_wrap", None):
+                    self._rof_text_wrap.pack_forget()
+                if getattr(self, "_rof_structured_wrap", None):
+                    self._rof_structured_wrap.pack(fill="x", expand=False, padx=10, pady=(0, 8))
+        except Exception:
+            pass
+
+        # regenerate preview/rof logic
+        self._on_rof_struct_changed()
+
+
+    def get_live_preview_text(self) -> str:
+        """
+        Returns the HOI-related text that should appear in the Live Preview panel.
+        For now: ROF only (when mode == 'ROF').
+        Later: you can append Intro/ReExam/Final sections here too.
+        """
+        mode = _clean(self.rof_mode_var.get())
+        if mode != "ROF":
+            return ""
+
+        # Ensure paragraph is up to date
+        self._regen_rof_now()
+
+        para = _clean(self.rof_auto_paragraph_var.get())
+        if not para:
+            return ""
+
+        # PDF-like formatting
+        out = []
+        out.append("REVIEW OF FINDINGS")
+        out.append("")  # blank line
+        out.append(para)
+        out.append("")  # blank line after block
+        return "\n".join(out)
+
     
     def _bind_wheel_to_widget(self, widget, *, yview_func=None, xview_func=None):
         """
@@ -565,17 +616,12 @@ class HOIPage(ttk.Frame):
         self._on_rof_struct_changed()
 
     def _set_rof_auto_text(self, text: str):
-        text = text or ""
-        self.rof_auto_paragraph_var.set(text)
+        """
+        Store the generated ROF paragraph.
+        Display is handled by the Live Preview, not here.
+        """
+        self.rof_auto_paragraph_var.set(text or "")
 
-        txt = getattr(self, "_rof_auto_text", None)
-        if txt is not None and txt.winfo_exists():
-            try:
-                txt.configure(state="normal")      # ✅ unlock
-                txt.delete("1.0", "end")
-                txt.insert("1.0", text)
-            finally:
-                txt.configure(state="disabled")    # ✅ lock again
 
 
     def _on_rof_struct_changed(self):
@@ -599,9 +645,6 @@ class HOIPage(ttk.Frame):
 
         ctx = self._patient_ctx()
         first = _clean(ctx.get("first", "")) or "The patient"
-
-        date_txt = _clean(self.rof_imaging_date_var.get())
-        include_city = bool(self.rof_include_city_var.get())
 
         # collect meaningful entries (preserve the order blocks appear)
         entries: list[dict] = []
@@ -641,14 +684,22 @@ class HOIPage(ttk.Frame):
         def facility_text(facility: str, city: str) -> str:
             fac = _clean(facility)
             c = _clean(city)
-            if fac and fac != "(none)":
-                if include_city and c:
-                    return f"{fac} in {c}"
+
+            # normalize "(none)"
+            if fac == "(none)":
+                fac = ""
+
+            if fac and c:
+                return f"{fac} in {c}"
+
+            if fac:
                 return fac
-            # if no facility name, don't force "at (none)"
-            if include_city and c:
+
+            if c:
                 return c
+
             return ""
+
 
         def detail_for_items(items: list[dict]) -> str:
             phrase_list: list[str] = []
@@ -670,11 +721,9 @@ class HOIPage(ttk.Frame):
 
         chunks: list[str] = []
 
-        # Sentence 1 (date anchor)
-        if date_txt:            
-            chunks.append(f"{first} underwent diagnostic imaging on {date_txt},")
-        else:
-            chunks.append(f"{first} underwent diagnostic imaging,")
+        # Sentence 1 (neutral anchor — no global date)
+        chunks.append(f"{first} underwent diagnostic imaging,")
+
 
         # Sentence templates for facilities 1–4
         # Each template expects: detail, facility_text (optional)
@@ -842,9 +891,7 @@ class HOIPage(ttk.Frame):
         # ROF / Status Update (new structured ROF block)
         # ----------------
         self.rof_mode_var = tk.StringVar(value="ROF")  # Initial / Re-Exam / ROF / Final
-        self.rof_imaging_date_var = tk.StringVar(value="")  # used mainly for ROF imaging date
-        self.rof_include_city_var = tk.BooleanVar(value=False)
-
+        
         # Facilities (edit this list anytime)
         self.ROF_FACILITIES = [
             "South Coast Imaging",
@@ -858,8 +905,7 @@ class HOIPage(ttk.Frame):
         self.rof_auto_paragraph_var = tk.StringVar(value="")
         self.rof_manual_paragraph_var = tk.StringVar(value="")
 
-        # UI refs
-        self._rof_auto_text: tk.Text | None = None
+        # UI refs        
         self._rof_manual_text: tk.Text | None = None
         self._rof_blocks_row: ttk.Frame | None = None
 
@@ -870,6 +916,9 @@ class HOIPage(ttk.Frame):
 
         #Notes for Type of Injury
         self.course_notes_var = tk.StringVar(value="")  # type.course_notes (new)
+
+        self.rof_input_mode_var = tk.StringVar(value="Structured")  # "Structured" or "Text"
+
 
         
         # Optional providers
@@ -986,8 +1035,9 @@ class HOIPage(ttk.Frame):
                 # -------------------------
         # ROF traces (DO NOT route through _on_struct_changed)
         # -------------------------
-        for v in (self.rof_mode_var, self.rof_imaging_date_var, self.rof_include_city_var):
+        for v in (self.rof_mode_var,):
             v.trace_add("write", lambda *_: self._on_rof_struct_changed())
+
 
 
         autosave_only = [
@@ -1672,7 +1722,9 @@ class HOIPage(ttk.Frame):
     def _build_rof_block(self, parent):
         f = ttk.LabelFrame(parent, text="Review of Findings")
 
-        # Mode row
+        # =========================
+        # Row 0: Mode + Entry toggle
+        # =========================
         top = ttk.Frame(f)
         top.pack(fill="x", padx=10, pady=(10, 8))
 
@@ -1687,24 +1739,39 @@ class HOIPage(ttk.Frame):
                 command=self._on_rof_struct_changed,
             ).pack(side="left", padx=(10, 0))
 
-        # ROF-only controls: imaging date + include city
-        rof_controls = ttk.Frame(f)
-        rof_controls.pack(fill="x", padx=10, pady=(0, 8))
+        ttk.Label(top, text="   |   Entry:").pack(side="left", padx=(14, 0))
 
-        ttk.Label(rof_controls, text="Imaging date (MM/DD/YYYY):").pack(side="left")
-        ent_date = ttk.Entry(rof_controls, textvariable=self.rof_imaging_date_var, width=18)
-        ent_date.pack(side="left", padx=(8, 16))
+        ttk.Radiobutton(
+            top,
+            text="Structured",
+            value="Structured",
+            variable=self.rof_input_mode_var,
+            command=self._on_rof_input_mode_changed,
+        ).pack(side="left", padx=(8, 0))
 
-        ttk.Checkbutton(
-            rof_controls,
-            text="Include city in sentence (optional)",
-            variable=self.rof_include_city_var,
-            command=self._on_rof_struct_changed,
-        ).pack(side="left")
+        ttk.Radiobutton(
+            top,
+            text="Text/Write",
+            value="Text/Write",
+            variable=self.rof_input_mode_var,
+            command=self._on_rof_input_mode_changed,
+        ).pack(side="left", padx=(8, 0))
 
-        # imaging blocks
-        row_ctrls = ttk.Frame(f)
-        row_ctrls.pack(fill="x", padx=10, pady=(0, 6))
+        # =========================
+        # Two wraps (toggle visibility)
+        # =========================
+        structured_wrap = ttk.Frame(f)
+        structured_wrap.pack(fill="both", expand=True, padx=10, pady=(0, 8))
+        self._rof_structured_wrap = structured_wrap
+
+        text_wrap = ttk.Frame(f)
+        self._rof_text_wrap = text_wrap  # not packed until Text/Write is active
+
+        # =========================
+        # STRUCTURED area (controls + imaging)
+        # =========================
+        row_ctrls = ttk.Frame(structured_wrap)
+        row_ctrls.pack(fill="x", pady=(0, 6))
 
         ttk.Button(row_ctrls, text="Add Imaging", command=self._add_rof_block).pack(side="left")
         ttk.Label(
@@ -1713,103 +1780,55 @@ class HOIPage(ttk.Frame):
             foreground="gray",
         ).pack(side="left", padx=(10, 0))
 
-        # --- scrollable ROF imaging row (H + V) ---
-        wrap = ttk.Frame(f)
-        wrap.pack(fill="x", expand=False, padx=10, pady=(0, 8))
+        # Imaging area should expand downward
+        wrap = ttk.Frame(structured_wrap)
+        wrap.pack(fill="both", expand=True)  # ✅ this is the key
+
         wrap.grid_rowconfigure(0, weight=1)
         wrap.grid_columnconfigure(0, weight=1)
 
         canvas = tk.Canvas(wrap, highlightthickness=0)
-        canvas.configure(height=220)   # <-- add this (try 200–260)
         canvas.grid(row=0, column=0, sticky="nsew")
 
-        # Vertical scrollbar
         vbar = ttk.Scrollbar(wrap, orient="vertical", command=canvas.yview)
         vbar.grid(row=0, column=1, sticky="ns")
 
-        # Horizontal scrollbar
         hbar = ttk.Scrollbar(wrap, orient="horizontal", command=canvas.xview)
         hbar.grid(row=1, column=0, sticky="ew")
 
-        canvas.configure(
-            height=220,
-            xscrollcommand=hbar.set,
-            yscrollcommand=vbar.set,
-        )
+        canvas.configure(xscrollcommand=hbar.set, yscrollcommand=vbar.set)
 
-        # Inner frame (your ROF imaging blocks live here)
         inner = ttk.Frame(canvas)
-        self._rof_blocks_row = inner  # ✅ keep your existing reference
-
+        self._rof_blocks_row = inner
         canvas.create_window((0, 0), window=inner, anchor="nw")
 
         def _on_configure(_evt=None):
             canvas.configure(scrollregion=canvas.bbox("all"))
-
         inner.bind("<Configure>", _on_configure)
 
-        # --- Mouse wheel vertical scrolling (Windows) ---
-        def _on_mousewheel(event):
-            canvas.yview_scroll(int(-1 * (event.delta / 120)), "units")
-
-        #canvas.bind_all("<MouseWheel>", _on_mousewheel)
-
-        def _enable_wheel(_e=None):
-            canvas.bind("<MouseWheel>", _on_mousewheel)
-
-        def _disable_wheel(_e=None):
-            canvas.unbind("<MouseWheel>")
-
-        canvas.bind("<Enter>", _enable_wheel)
-        canvas.bind("<Leave>", _disable_wheel)
-        inner.bind("<Enter>", _enable_wheel)
-        inner.bind("<Leave>", _disable_wheel)
-
-
-
-        # ✅ THIS replaces `self._rof_blocks_row = row`
-        self._rof_blocks_row = inner
-
+        # hover-only wheel routing
+        self._bind_wheel_to_widget(canvas, yview_func=canvas.yview_scroll, xview_func=canvas.xview_scroll)
+        self._bind_wheel_to_widget(inner,  yview_func=canvas.yview_scroll, xview_func=canvas.xview_scroll)
 
         if not self.rof_imaging_blocks:
             self._add_rof_block()
 
-        # ✅ wheel only when hovering the imaging canvas area
-        self._bind_wheel_to_widget(canvas, yview_func=canvas.yview_scroll, xview_func=canvas.xview_scroll)
-        self._bind_wheel_to_widget(inner, yview_func=canvas.yview_scroll, xview_func=canvas.xview_scroll)
-
-
-        # Auto paragraph (smaller)
-        ttk.Label(f, text="Auto paragraph (generated):").pack(anchor="w", padx=10, pady=(6, 4))
-        txt_auto = tk.Text(f, height=5, wrap="word")
-        txt_auto.pack(fill="x", expand=False, padx=10, pady=(0, 10))
-        self._rof_auto_text = txt_auto
-        txt_auto.insert("1.0", self.rof_auto_paragraph_var.get() or "")
-        # ✅ make auto paragraph read-only
-        txt_auto.configure(state="disabled")
-
-        # Manual paragraph (findings narrative)
-        ttk.Label(f, text="Manual findings paragraph (you type):").pack(anchor="w", padx=10, pady=(0, 4))
-        txt_manual = tk.Text(f, height=6, wrap="word")
+        # =========================
+        # TEXT/WRITE area
+        # =========================
+        ttk.Label(text_wrap, text="Manual findings paragraph (you type):").pack(anchor="w", padx=10, pady=(0, 4))
+        txt_manual = tk.Text(text_wrap, height=12, wrap="word")
         txt_manual.pack(fill="both", expand=True, padx=10, pady=(0, 10))
         self._rof_manual_text = txt_manual
         txt_manual.insert("1.0", self.rof_manual_paragraph_var.get() or "")
         self._bind_text_to_var(txt_manual, self.rof_manual_paragraph_var)
 
-        # Enable/disable ROF imaging controls based on mode
-        def update_enabled(*_):
-            is_rof = (self.rof_mode_var.get() == "ROF")
-            state = "normal" if is_rof else "disabled"
-            try:
-                ent_date.configure(state=state)
-            except Exception:
-                pass
-
-        self.rof_mode_var.trace_add("write", lambda *_: update_enabled())
-        update_enabled()
-
+        # initialize visibility
+        self._on_rof_input_mode_changed()
         self._regen_rof_now()
         return f
+
+
 
 
     # ---------------- Export ----------------
@@ -1819,8 +1838,7 @@ class HOIPage(ttk.Frame):
         # ✅ FORCE ROF flush (bulletproof)
         if self._rof_manual_text is not None and self._rof_manual_text.winfo_exists():
             self.rof_manual_paragraph_var.set(self._rof_manual_text.get("1.0", "end-1c"))
-        if self._rof_auto_text is not None and self._rof_auto_text.winfo_exists():
-            self.rof_auto_paragraph_var.set(self._rof_auto_text.get("1.0", "end-1c"))
+       
 
         #print("ROF manual widget preview:", self._rof_manual_text.get("1.0","end-1c")[:80] if self._rof_manual_text else None)
         #print("ROF manual var preview:", (self.rof_manual_paragraph_var.get() or "")[:80])
@@ -1837,8 +1855,6 @@ class HOIPage(ttk.Frame):
 
             "rof": {
                 "mode": self.rof_mode_var.get(),
-                "imaging_date": self.rof_imaging_date_var.get(),
-                "include_city": bool(self.rof_include_city_var.get()),
                 "auto_paragraph": self.rof_auto_paragraph_var.get(),
                 "manual_paragraph": self.rof_manual_paragraph_var.get(),
                 "imaging_blocks": rof_blocks_struct,
@@ -1895,10 +1911,7 @@ class HOIPage(ttk.Frame):
             # -------- ROF (new structured) --------
             rof = data.get("rof") or {}
 
-            self.rof_mode_var.set(rof.get("mode", "ROF") or "ROF")
-            self.rof_imaging_date_var.set(rof.get("imaging_date", "") or "")
-            self.rof_include_city_var.set(bool(rof.get("include_city", False)))
-
+            self.rof_mode_var.set(rof.get("mode", "ROF") or "ROF")            
             self.rof_auto_paragraph_var.set(rof.get("auto_paragraph", "") or "")
             self.rof_manual_paragraph_var.set(rof.get("manual_paragraph", "") or "")
 
