@@ -35,6 +35,37 @@ except ModuleNotFoundError:
 _RE_REEXAM = re.compile(r"^\s*Re-Exam\s+\d+\s*$", re.IGNORECASE)
 _RE_ROF    = re.compile(r"^\s*Review of Findings\s+\d+\s*$", re.IGNORECASE)
 
+from xml.sax.saxutils import escape as xml_escape
+from reportlab.platypus import Paragraph, Spacer
+from reportlab.lib.units import inch
+
+def _as_paragraph(text: str, styles):
+    t = (text or "").strip()
+    if not t:
+        return None
+    safe = xml_escape(t).replace("\n\n", "<br/><br/>").replace("\n", "<br/>")
+    return Paragraph(safe, styles["BodyText"])
+
+
+def _hoi_manual_text_for_exam(exam_name: str, hoi_struct: dict) -> str:
+    ex = (exam_name or "").strip().lower()
+    hoi_struct = hoi_struct or {}
+
+    if ex == "initial":
+        return (hoi_struct.get("manual_initial") or "").strip()
+
+    if ex.startswith("re-exam"):
+        return (hoi_struct.get("manual_reexam") or "").strip()
+
+    if ex.startswith("review of findings"):
+        return (hoi_struct.get("manual_rof") or "").strip()
+
+    if ex == "final":
+        return (hoi_struct.get("manual_final") or "").strip()
+
+    return ""
+
+
 def pdf_exam_label(exam_name: str) -> str:
     s = (exam_name or "").strip()
     if _RE_REEXAM.match(s):
@@ -1413,6 +1444,15 @@ def build_combined_pdf(path: str, payloads: list):
         if hoi_flow:
             story.extend(hoi_flow)
             story.append(Spacer(1, 0.12 * inch))
+
+        # manual = _hoi_manual_text_for_exam(exam_name, hoi_struct)
+        # if manual:
+        #     story.append(Paragraph("<b>Additional Notes</b>", styles["Heading3"]))
+        #     story.append(Spacer(1, 0.06 * inch))
+        #     safe = xml_escape(manual).replace("\n\n", "<br/><br/>").replace("\n", "<br/>")
+        #     story.append(Paragraph(safe, styles["BodyText"]))
+        #     story.append(Spacer(1, 0.12 * inch))
+
 
         # Subjectives
         story.append(Paragraph("<b>Subjectives</b>", styles["Heading2"]))

@@ -19,6 +19,7 @@ from paths import patients_dir
 
 #Git Hub to Work Between Computers
 
+
 #Start of Day
 #git pull
 
@@ -1402,6 +1403,11 @@ class App(tk.Tk):
         try:
             #print("SAVE uses HOIPage id:", id(self.hoi_page))
             hoi_struct = self.hoi_page.to_dict() or {}
+             # ✅ Add per-mode manual text into hoi_struct for PDF saving/printing
+            hoi_struct["manual_initial"] = self.hoi_page.manual_initial_var.get()
+            hoi_struct["manual_reexam"]  = self.hoi_page.manual_reexam_var.get()
+            hoi_struct["manual_rof"]     = self.hoi_page.manual_rof_var.get()
+            hoi_struct["manual_final"]   = self.hoi_page.manual_final_var.get()
             #print("DEBUG HOI ROF:", hoi_struct.get("rof"))
         except Exception:
             hoi_struct = {}

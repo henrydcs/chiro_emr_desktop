@@ -129,10 +129,18 @@ def build_hoi_flowables(hoi_struct: dict, styles, doc_width):
     # Legacy fallback:
     #   hoi_struct["rof_text"]
     # -------------------------------------------------
+    # -------------------------------------------------
+# Review of Findings / Status Update (printed FIRST)
+# -------------------------------------------------
     rof_struct = hoi_struct.get("rof") or {}
+    if not isinstance(rof_struct, dict):
+        rof_struct = {}
 
     rof_mode = _clean_text(rof_struct.get("mode", ""))
+
     rof_auto = _clean_text(rof_struct.get("auto_paragraph", ""))
+
+    # ✅ Always define rof_manual (no UnboundLocalError possible)
     rof_manual = _clean_text(rof_struct.get("manual_paragraph", ""))
 
     # Legacy fallback support (older JSONs)
@@ -141,8 +149,6 @@ def build_hoi_flowables(hoi_struct: dict, styles, doc_width):
     # Choose heading based on mode (ROF keeps classic title)
     heading = "Review of Findings"
     if rof_mode and rof_mode != "ROF":
-        # We can tune wording later; this is a clean default.
-        # Examples: "Re-Exam Update", "Initial Visit Summary", "Final Visit Summary"
         if rof_mode == "Re-Exam":
             heading = "Status Update"
         elif rof_mode == "Initial":
@@ -152,7 +158,7 @@ def build_hoi_flowables(hoi_struct: dict, styles, doc_width):
         else:
             heading = rof_mode
 
-    # Determine content order: auto paragraph first, then manual findings paragraph.
+    # Determine content order: auto paragraph first, then manual paragraph.
     rof_paragraphs = []
     if rof_auto:
         rof_paragraphs.append(rof_auto)
@@ -167,7 +173,6 @@ def build_hoi_flowables(hoi_struct: dict, styles, doc_width):
         out.append(Paragraph(f"<b>{xml_escape(heading)}</b>", styles["Heading2"]))
         out.append(Spacer(1, 0.08 * inch))
 
-        # print each paragraph with spacing, preserving line breaks inside each
         for i, para in enumerate(rof_paragraphs):
             safe_para = _format_multiline(para)
             out.append(Paragraph(safe_para, styles["BodyText"]))

@@ -13,7 +13,6 @@ from scrollframe import ScrollFrame
 AUTO_MOI_TAG = "[AUTO:MOI]"
 
 
-
 def _clean(s: str) -> str:
     return (s or "").strip()
 
@@ -297,8 +296,9 @@ class ImagingBlock(ttk.Frame):
         self._types_selected: list[str] = []
         self._parts_selected: list[str] = []
 
-        self._build_ui()
+        self._build_ui()            
 
+    
     def _build_ui(self):
         header = ttk.Frame(self)
         header.pack(fill="x", padx=8, pady=(8, 6))              
@@ -463,6 +463,30 @@ class HOIPage(ttk.Frame):
     
         # ---------------- ROF helpers ----------------
 
+    def _manual_var_for_mode(self, mode: str) -> tk.StringVar:
+        mode = _clean(mode) or "ROF"
+        if mode == "Initial":
+            return self.manual_initial_var
+        if mode == "Re-Exam":
+            return self.manual_reexam_var
+        if mode == "Final":
+            return self.manual_final_var
+        return self.manual_rof_var  # default ROF     
+
+    def _sync_manual_var_for_mode(self):
+        """Copy the correct per-mode manual text into rof_manual_paragraph_var and refresh the textbox."""
+        mode = _clean(self.rof_mode_var.get()) or "ROF"
+        src = self._manual_var_for_mode(mode)
+
+        self._loading = True
+        try:
+            self.rof_manual_paragraph_var.set(src.get() or "")
+            if self._rof_manual_text is not None and self._rof_manual_text.winfo_exists():
+                self._rof_manual_text.delete("1.0", "end")
+                self._rof_manual_text.insert("1.0", self.rof_manual_paragraph_var.get() or "")
+        finally:
+            self._loading = False
+
     def _build_intro_structured_panel(self, parent):
         f = ttk.Frame(parent)
 
@@ -538,7 +562,7 @@ class HOIPage(ttk.Frame):
         entry_mode = (self.rof_input_mode_var.get() or "Structured")
         mode = (self.rof_mode_var.get() or "ROF")
 
-        # hide everything first
+        # hide everything first...
         if getattr(self, "_rof_text_wrap", None):
             self._rof_text_wrap.pack_forget()
         if getattr(self, "_rof_structured_wrap", None):
@@ -547,20 +571,24 @@ class HOIPage(ttk.Frame):
         # TEXT/WRITE
         if entry_mode == "Text/Write":
             self._rof_text_wrap.pack(fill="both", expand=True, padx=10, pady=(0, 10))
+
+            # ✅ load the manual paragraph for this mode
+            self._sync_manual_var_for_mode()
+
             self._on_rof_struct_changed()
             return
 
         # STRUCTURED
         self._rof_structured_wrap.pack(fill="both", expand=True, padx=10, pady=(0, 10))
 
-        # ✅ Intro only for Initial/Re-Exam/Final
+        # intro panel show/hide...
         if getattr(self, "_intro_structured_wrap", None):
             if mode in ("Initial", "Re-Exam", "Final"):
                 self._intro_structured_wrap.pack(fill="x", pady=(0, 8))
             else:
                 self._intro_structured_wrap.pack_forget()
 
-        # ✅ Imaging only for ROF
+        # imaging show/hide...
         if getattr(self, "_rof_imaging_wrap", None):
             if mode == "ROF":
                 self._rof_imaging_wrap.pack(fill="both", expand=True)
@@ -568,6 +596,7 @@ class HOIPage(ttk.Frame):
                 self._rof_imaging_wrap.pack_forget()
 
         self._on_rof_struct_changed()
+
 
 
     def get_live_preview_runs(self):
@@ -1045,6 +1074,12 @@ class HOIPage(ttk.Frame):
 
         # Two paragraphs: auto-generated + manual findings
         self.rof_auto_paragraph_var = tk.StringVar(value="")
+        # ✅ Per-mode manual paragraphs
+        self.manual_initial_var = tk.StringVar(value="")
+        self.manual_reexam_var  = tk.StringVar(value="")
+        self.manual_rof_var     = tk.StringVar(value="")
+        self.manual_final_var   = tk.StringVar(value="")
+
         self.rof_manual_paragraph_var = tk.StringVar(value="")
 
         # UI refs        
@@ -2003,10 +2038,18 @@ class HOIPage(ttk.Frame):
             if self._loading:
                 return
             try:
-                self.rof_manual_paragraph_var.set(txt_manual.get("1.0", "end-1c"))
+                text = txt_manual.get("1.0", "end-1c")
             except Exception:
                 return
-            self._on_rof_struct_changed()  # ✅ this triggers ROF regen + _changed()
+
+            self.rof_manual_paragraph_var.set(text)
+
+            # ✅ persist into the correct per-mode var
+            mode = _clean(self.rof_mode_var.get()) or "ROF"
+            self._manual_var_for_mode(mode).set(text)
+
+            self._on_rof_struct_changed()
+
 
         txt_manual.bind("<KeyRelease>", _rof_manual_changed)
         txt_manual.bind("<FocusOut>", _rof_manual_changed)
@@ -2040,6 +2083,22 @@ class HOIPage(ttk.Frame):
         # ✅ REVIEW OF FINDINGS (NEW STRUCTURED)
         rof_blocks_struct = [b.to_dict() for b in self.rof_imaging_blocks] if self.rof_imaging_blocks else []
 
+        # ----------------------------------
+        # Resolve correct manual paragraph by mode
+        # (This is what the PDF prints)
+        # ----------------------------------
+        mode = (self.rof_mode_var.get() or "").strip()
+
+        manual_map = {
+            "Initial": self.manual_initial_var.get(),
+            "Re-Exam": self.manual_reexam_var.get(),
+            "ROF": self.manual_rof_var.get(),
+            "Final": self.manual_final_var.get(),
+        }
+
+        manual_paragraph = (manual_map.get(mode) or "").strip()
+
+
         return {
             "active_block": self.active_block.get(),
 
@@ -2047,7 +2106,21 @@ class HOIPage(ttk.Frame):
                 "mode": self.rof_mode_var.get(),
                 "input_mode": self.rof_input_mode_var.get(),   # ✅ ADD
                 "auto_paragraph": self.rof_auto_paragraph_var.get(),
-                "manual_paragraph": self.rof_manual_paragraph_var.get(),
+                # ✅ SAVE Intro dropdown settings (Initial/Re-Exam/Final)
+                "intro": {
+                    "event_word": self.intro_event_word_var.get(),
+                    "eval_type": self.eval_type_var.get(),
+                    "purpose": self.eval_purpose_var.get(),
+                    "exam_scope": self.eval_exam_scope_var.get(),
+                    "consent": bool(self.eval_consent_var.get()),
+                },
+                # ✅ THIS is what HOIpdf.py reads and prints
+                "manual_paragraph": manual_paragraph,
+                # ✅ per-mode manual paragraphs
+                "manual_initial": self.manual_initial_var.get(),
+                "manual_reexam": self.manual_reexam_var.get(),
+                "manual_rof": self.manual_rof_var.get(),
+                "manual_final": self.manual_final_var.get(),
                 "imaging_blocks": rof_blocks_struct,
             },
 
@@ -2105,7 +2178,25 @@ class HOIPage(ttk.Frame):
             self.rof_mode_var.set(rof.get("mode", "ROF") or "ROF")
             self.rof_input_mode_var.set(rof.get("input_mode", "Structured") or "Structured")  # ✅ ADD
             self.rof_auto_paragraph_var.set(rof.get("auto_paragraph", "") or "")
-            self.rof_manual_paragraph_var.set(rof.get("manual_paragraph", "") or "")
+            self.manual_initial_var.set(rof.get("manual_initial", "") or "")
+            self.manual_reexam_var.set(rof.get("manual_reexam", "") or "")
+            self.manual_rof_var.set(rof.get("manual_rof", "") or "")
+            self.manual_final_var.set(rof.get("manual_final", "") or "")
+
+            # ✅ restore Intro dropdown settings
+            intro = rof.get("intro") or {}
+            self.intro_event_word_var.set(intro.get("event_word", self.intro_event_options[0]) or self.intro_event_options[0])
+            self.eval_type_var.set(intro.get("eval_type", "initial evaluation") or "initial evaluation")
+            self.eval_purpose_var.set(intro.get("purpose", "evaluate the nature and extent of the reported injuries") or
+                                    "evaluate the nature and extent of the reported injuries")
+            self.eval_exam_scope_var.set(intro.get("exam_scope",
+                "a physical examination including orthopedic, neurological, and functional assessments as clinically indicated"
+            ) or
+                "a physical examination including orthopedic, neurological, and functional assessments as clinically indicated"
+            )
+            self.eval_consent_var.set(bool(intro.get("consent", True)))
+
+
 
             # rebuild ROF imaging blocks
             for b in list(self.rof_imaging_blocks):
@@ -2311,9 +2402,18 @@ class HOIPage(ttk.Frame):
             # ✅ INSERT ROF RESET HERE
             # =========================
             self.rof_mode_var.set("ROF")  
-            self.rof_input_mode_var.set("Structured")   # ✅ ADD
+            self.rof_input_mode_var.set("Structured")   # ✅ ADD           
+            
+            self.manual_initial_var.set("")
+            self.manual_reexam_var.set("")
+            self.manual_rof_var.set("")
+            self.manual_final_var.set("")
+
             self.rof_auto_paragraph_var.set("")
             self.rof_manual_paragraph_var.set("")
+
+
+
 
             for b in list(self.rof_imaging_blocks):
                 try:
@@ -2356,6 +2456,8 @@ class HOIPage(ttk.Frame):
         self._on_rof_input_mode_changed()
 
         # optional: regenerate ROF auto paragraph after resetting blocks
+        self._sync_manual_var_for_mode()
+
         self._regen_rof_now()
 
         self._regen_moi_now()
