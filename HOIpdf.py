@@ -146,7 +146,7 @@ def build_hoi_flowables(hoi_struct: dict, styles, doc_width):
         if rof_mode == "Re-Exam":
             heading = "Status Update"
         elif rof_mode == "Initial":
-            heading = "Initial Visit Summary"
+            heading = "Introduction"
         elif rof_mode == "Final":
             heading = "Final Visit Summary"
         else:

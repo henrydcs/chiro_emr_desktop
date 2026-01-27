@@ -463,58 +463,144 @@ class HOIPage(ttk.Frame):
     
         # ---------------- ROF helpers ----------------
 
+    def _build_intro_structured_panel(self, parent):
+        f = ttk.Frame(parent)
+
+        ttk.Label(
+            f,
+            text="Initial / Interval Evaluation – Structured Introduction",
+            font=("Segoe UI", 10, "bold")
+        ).pack(anchor="w", pady=(0, 6))
+
+        grid = ttk.Frame(f)
+        grid.pack(fill="x")
+
+        ttk.Label(grid, text="Evaluation type:").grid(row=0, column=0, sticky="w", padx=6, pady=4)
+        ttk.Combobox(
+            grid,
+            textvariable=self.eval_type_var,
+            values=[
+                "initial chiropractic evaluation",
+                "re-examination",
+                "final evaluation",
+            ],
+            state="readonly",
+            width=28
+        ).grid(row=0, column=1, sticky="w", padx=6, pady=4)
+
+        ttk.Label(grid, text="Purpose (primary):").grid(row=2, column=0, sticky="w", padx=6, pady=4)
+        ttk.Combobox(
+            grid,
+            textvariable=self.eval_purpose_var,
+            values=[
+                "evaluate the nature and extent of the reported injuries",
+                "assess clinical progress since the prior evaluation",
+                "determine maximum medical improvement status",
+            ],
+            width=48
+        ).grid(row=2, column=1, sticky="w", padx=6, pady=4)
+
+        ttk.Label(grid, text="Examination included:").grid(row=3, column=0, sticky="w", padx=6, pady=4)
+        ttk.Combobox(
+            grid,
+            textvariable=self.eval_exam_scope_var,
+            values=[
+                "a physical examination including orthopedic, neurological, and functional assessments as clinically indicated",
+                "a focused re-examination of previously identified findings",
+                "a final clinical examination and record review",
+            ],
+            width=70
+        ).grid(row=3, column=1, sticky="w", padx=6, pady=4)
+
+        ttk.Label(grid, text="Event wording:").grid(row=1, column=0, sticky="w", padx=6, pady=4)        
+        ttk.Combobox(
+            grid,
+            textvariable=self.intro_event_word_var,
+            values=self.intro_event_options,
+            state="readonly",
+            width=28
+        ).grid(row=1, column=1, sticky="w", padx=6, pady=4)
+
+
+        ttk.Checkbutton(
+            f,
+            text="Include informed consent statement",
+            variable=self.eval_consent_var
+        ).pack(anchor="w", pady=(6, 0))
+
+        return f
+
+
     def _on_rof_input_mode_changed(self):
         if self._loading:
             return
 
-        # show/hide the two areas (you'll set these refs below)
-        mode = (self.rof_input_mode_var.get() or "Structured")
+        entry_mode = (self.rof_input_mode_var.get() or "Structured")
+        mode = (self.rof_mode_var.get() or "ROF")
 
-        try:
-            if mode == "Text/Write":
-                if getattr(self, "_rof_structured_wrap", None):
-                    self._rof_structured_wrap.pack_forget()
-                if getattr(self, "_rof_text_wrap", None):
-                    self._rof_text_wrap.pack(fill="both", expand=True, padx=10, pady=(0, 10))
+        # hide everything first
+        if getattr(self, "_rof_text_wrap", None):
+            self._rof_text_wrap.pack_forget()
+        if getattr(self, "_rof_structured_wrap", None):
+            self._rof_structured_wrap.pack_forget()
+
+        # TEXT/WRITE
+        if entry_mode == "Text/Write":
+            self._rof_text_wrap.pack(fill="both", expand=True, padx=10, pady=(0, 10))
+            self._on_rof_struct_changed()
+            return
+
+        # STRUCTURED
+        self._rof_structured_wrap.pack(fill="both", expand=True, padx=10, pady=(0, 10))
+
+        # ✅ Intro only for Initial/Re-Exam/Final
+        if getattr(self, "_intro_structured_wrap", None):
+            if mode in ("Initial", "Re-Exam", "Final"):
+                self._intro_structured_wrap.pack(fill="x", pady=(0, 8))
             else:
-                if getattr(self, "_rof_text_wrap", None):
-                    self._rof_text_wrap.pack_forget()
-                if getattr(self, "_rof_structured_wrap", None):
-                    self._rof_structured_wrap.pack(fill="x", expand=False, padx=10, pady=(0, 8))
-        except Exception:
-            pass
+                self._intro_structured_wrap.pack_forget()
 
-        # regenerate preview/rof logic
+        # ✅ Imaging only for ROF
+        if getattr(self, "_rof_imaging_wrap", None):
+            if mode == "ROF":
+                self._rof_imaging_wrap.pack(fill="both", expand=True)
+            else:
+                self._rof_imaging_wrap.pack_forget()
+
         self._on_rof_struct_changed()
 
 
     def get_live_preview_runs(self):
-        """
-        Returns a list of (text, tag) tuples.
-        tag can be None for normal text.
-        """
-        mode = _clean(self.rof_mode_var.get())
-        if mode != "ROF":
-            return []
+        runs = []
 
+        mode = _clean(self.rof_mode_var.get()) or "ROF"
+
+        title_map = {
+            "Initial": "INTRODUCTION",
+            "Re-Exam": "RE-EXAMINATION",
+            "Final": "FINAL EVALUATION",
+            "ROF": "REVIEW OF FINDINGS",
+        }
+        title = title_map.get(mode, "REVIEW OF FINDINGS")
+
+        # Always regenerate whatever applies to current mode
         self._regen_rof_now()
 
         structured = _clean(self.rof_auto_paragraph_var.get())
-        textwrite  = _clean(self.rof_manual_paragraph_var.get())
+        textwrite = _clean(self.rof_manual_paragraph_var.get())
 
         if not (structured or textwrite):
             return []
 
-        runs = []
-        runs.append(("REVIEW OF FINDINGS\n", "H_BOLD"))
+        runs.append((title + "\n", "H_BOLD"))
         runs.append(("\n", None))
 
-        # structured first
+        # ✅ Always show structured paragraph first (Intro OR ROF imaging)
         if structured:
             runs.append((structured + "\n\n", None))
 
-        # text/write paragraph underneath
-        if textwrite:
+        # ✅ Only show manual paragraph when Text/Write is active
+        if (self.rof_input_mode_var.get() == "Text/Write") and textwrite:
             runs.append((textwrite + "\n\n", None))
 
         return runs
@@ -637,11 +723,47 @@ class HOIPage(ttk.Frame):
         self._regen_rof_now()
         self._changed()
 
+    
+    def _regen_intro_now(self):
+        ctx = self._patient_ctx()
+
+        incident_noun = _clean(self.intro_event_word_var.get()) or "incident"
+
+        first = _clean(ctx.get("first", ""))  # ✅ ADD THIS
+        subj = first if first else "The patient"
+
+
+        last = _clean(ctx.get("last", "")) or "the patient"
+        clinic = _clean(self._patient_provider().get("clinic", "the clinic")) if callable(self._patient_provider) else "the clinic"
+        doi = _clean(ctx.get("doi", "")) or "____/____/________"
+        eval_date = "the date of this evaluation"
+
+        eval_type = _clean(self.eval_type_var.get())
+        purpose = _clean(self.eval_purpose_var.get())
+        scope = _clean(self.eval_exam_scope_var.get())
+
+        parts = [
+            f"{subj} presented to {clinic} on {eval_date} for an {eval_type} regarding injuries allegedly sustained in an {incident_noun} that occurred on {doi}.",
+            f"The purpose of this evaluation is to {purpose}.",
+            f"The patient provided a history and underwent {scope}."
+        ]
+
+        if self.eval_consent_var.get():
+            parts.append("Informed consent was obtained prior to the commencement of the evaluation.")
+
+        self._set_rof_auto_text(" ".join(parts))
+
+
     def _regen_rof_now(self):
         if self._loading:
             return
 
-        mode = _clean(self.rof_mode_var.get())
+        mode = _clean(self.rof_mode_var.get()) or "ROF"
+
+        # Initial / Re-Exam / Final use intro templates
+        if mode in ("Initial", "Re-Exam", "Final"):
+            self._regen_intro_now()   # you create this function
+            return
 
         # For now:
         # - ROF mode generates the imaging paragraph from blocks.
@@ -891,12 +1013,26 @@ class HOIPage(ttk.Frame):
         super().__init__(parent)
         self.on_change_callback = on_change_callback
 
+        self.intro_event_options = ["incident", "accident", "event", "injury"]
+        self.intro_event_word_var = tk.StringVar(value=self.intro_event_options[0])
+
+
         #print("HOIPage INIT id:", id(self))       
 
                 # ----------------
         # ROF / Status Update (new structured ROF block)
         # ----------------
-        self.rof_mode_var = tk.StringVar(value="ROF")  # Initial / Re-Exam / ROF / Final
+        self.rof_mode_var = tk.StringVar(value="Initial")  # Initial / Re-Exam / ROF / Final
+
+        # Intro / Evaluation vars (Initial / Re-Exam / Final)
+        # ----------------
+        self.eval_type_var = tk.StringVar(value="initial evaluation")
+        self.eval_purpose_var = tk.StringVar(value="evaluate the nature and extent of the reported injuries")
+        self.eval_exam_scope_var = tk.StringVar(
+            value="a physical examination including orthopedic, neurological, and functional assessments as clinically indicated"
+        )
+        self.eval_consent_var = tk.BooleanVar(value=True)
+
         
         # Facilities (edit this list anytime)
         self.ROF_FACILITIES = [
@@ -1031,18 +1167,37 @@ class HOIPage(ttk.Frame):
             self.sf_circumstance_var, self.sf_landing_var,
             self.db_location_var, self.db_severity_var,
             self.auto_moi_var,
+            
+            #self.intro_event_word_var.trace_add("write", lambda *_: self._on_rof_struct_changed())
+
             #self.rof_mode_var,
             #self.rof_imaging_date_var,
             #self.rof_include_city_var,
         ]
+
+        # --- main MOI regen drivers ---
         for v in regen_drivers:
-            v.trace_add("write", lambda *_: self._on_struct_changed())
+            if hasattr(v, "trace_add"):
+                v.trace_add("write", lambda *_: self._on_struct_changed())
+
+        # --- Intro / ROF regen drivers (Initial/Re-Exam/Final intro paragraph) ---
+        for v in (self.eval_type_var, self.eval_purpose_var, self.eval_exam_scope_var, self.intro_event_word_var):
+            v.trace_add("write", lambda *_: self._on_rof_struct_changed())
+
+        self.eval_consent_var.trace_add("write", lambda *_: self._on_rof_struct_changed())
+
+
 
                 # -------------------------
         # ROF traces (DO NOT route through _on_struct_changed)
         # -------------------------
-        for v in (self.rof_mode_var, self.rof_input_mode_var, self.rof_manual_paragraph_var):
-            v.trace_add("write", lambda *_: self._on_rof_struct_changed())
+        # Mode + Entry changes must re-layout the UI first
+        for v in (self.rof_mode_var, self.rof_input_mode_var):
+            v.trace_add("write", lambda *_: self._on_rof_input_mode_changed())
+
+        # Manual paragraph can just regen
+        self.rof_manual_paragraph_var.trace_add("write", lambda *_: self._on_rof_struct_changed())
+
 
 
         autosave_only = [
@@ -1741,8 +1896,10 @@ class HOIPage(ttk.Frame):
                 text=label,
                 value=label,
                 variable=self.rof_mode_var,
-                command=self._on_rof_struct_changed,
+                command=self._on_rof_input_mode_changed,
             ).pack(side="left", padx=(10, 0))
+
+
 
         ttk.Label(top, text="   |   Entry:").pack(side="left", padx=(14, 0))
 
@@ -1773,9 +1930,25 @@ class HOIPage(ttk.Frame):
         self._rof_text_wrap = text_wrap  # not packed until Text/Write is active
 
         # =========================
+        # INTRO structured panel (Initial / Re-Exam / Final)
+        # =========================
+        intro_wrap = ttk.Frame(structured_wrap)
+        self._intro_structured_wrap = intro_wrap
+        intro_wrap.pack(fill="x", pady=(0, 8))
+
+
+        intro_panel = self._build_intro_structured_panel(intro_wrap)
+        intro_panel.pack(fill="x", pady=(0, 8))
+
+        # ✅ NEW: ROF imaging wrapper (everything related to imaging goes inside here)
+        rof_imaging_wrap = ttk.Frame(structured_wrap)
+        self._rof_imaging_wrap = rof_imaging_wrap
+        rof_imaging_wrap.pack(fill="both", expand=True)   # it will be hidden/shown by mode
+
+        # =========================
         # STRUCTURED area (controls + imaging)
         # =========================
-        row_ctrls = ttk.Frame(structured_wrap)
+        row_ctrls = ttk.Frame(rof_imaging_wrap)
         row_ctrls.pack(fill="x", pady=(0, 6))
 
         ttk.Button(row_ctrls, text="Add Imaging", command=self._add_rof_block).pack(side="left")
@@ -1786,7 +1959,7 @@ class HOIPage(ttk.Frame):
         ).pack(side="left", padx=(10, 0))
 
         # Imaging area should expand downward
-        wrap = ttk.Frame(structured_wrap)
+        wrap = ttk.Frame(rof_imaging_wrap)
         wrap.pack(fill="both", expand=True)  # ✅ this is the key
 
         wrap.grid_rowconfigure(0, weight=1)
@@ -1872,6 +2045,7 @@ class HOIPage(ttk.Frame):
 
             "rof": {
                 "mode": self.rof_mode_var.get(),
+                "input_mode": self.rof_input_mode_var.get(),   # ✅ ADD
                 "auto_paragraph": self.rof_auto_paragraph_var.get(),
                 "manual_paragraph": self.rof_manual_paragraph_var.get(),
                 "imaging_blocks": rof_blocks_struct,
@@ -1928,7 +2102,8 @@ class HOIPage(ttk.Frame):
             # -------- ROF (new structured) --------
             rof = data.get("rof") or {}
 
-            self.rof_mode_var.set(rof.get("mode", "ROF") or "ROF")            
+            self.rof_mode_var.set(rof.get("mode", "ROF") or "ROF")
+            self.rof_input_mode_var.set(rof.get("input_mode", "Structured") or "Structured")  # ✅ ADD
             self.rof_auto_paragraph_var.set(rof.get("auto_paragraph", "") or "")
             self.rof_manual_paragraph_var.set(rof.get("manual_paragraph", "") or "")
 
@@ -1947,20 +2122,7 @@ class HOIPage(ttk.Frame):
             else:
                 # ensure at least one empty block exists
                 self._add_rof_block()
-
-            # push text into widgets if UI already built (ROF auto)
-            txt = getattr(self, "_rof_auto_text", None)
-            if txt is not None and txt.winfo_exists():
-                try:
-                    txt.configure(state="normal")   # ✅ temporarily unlock
-                    txt.delete("1.0", "end")
-                    txt.insert("1.0", self.rof_auto_paragraph_var.get() or "")
-                finally:
-                    try:
-                        txt.configure(state="disabled")  # ✅ lock back
-                    except Exception:
-                        pass
-
+           
 
             if self._rof_manual_text is not None and self._rof_manual_text.winfo_exists():
                 try:
@@ -2048,6 +2210,10 @@ class HOIPage(ttk.Frame):
         finally:
             self._loading = False
 
+        self._on_rof_input_mode_changed()
+        self._regen_rof_now()
+
+
         self._regen_moi_now()
         self._show_block(self.active_block.get())
 
@@ -2121,6 +2287,7 @@ class HOIPage(ttk.Frame):
 
             self.sex_var.set(self.SEX_OPTIONS[0])
             self.course_var.set(self.COURSE[0])
+            self.course_notes_var.set("")  # ✅ ADD (you were missing this)
 
             self.treatment_received_var.set(self.TREATMENT_RECEIVED[0])
             self.care_setting_var.set("(none)")
@@ -2143,7 +2310,8 @@ class HOIPage(ttk.Frame):
             # =========================
             # ✅ INSERT ROF RESET HERE
             # =========================
-            self.rof_mode_var.set("ROF")        
+            self.rof_mode_var.set("ROF")  
+            self.rof_input_mode_var.set("Structured")   # ✅ ADD
             self.rof_auto_paragraph_var.set("")
             self.rof_manual_paragraph_var.set("")
 
@@ -2183,6 +2351,9 @@ class HOIPage(ttk.Frame):
         self.db_severity_var.set(self.DB_SEVERITY[0])
 
         self._push_vars_into_text_widgets()
+
+        # ✅ Ensure ROF UI matches the mode after reset
+        self._on_rof_input_mode_changed()
 
         # optional: regenerate ROF auto paragraph after resetting blocks
         self._regen_rof_now()
