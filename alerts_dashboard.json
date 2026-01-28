@@ -1,0 +1,13 @@
+{
+  "alerts": {
+    "red_flags": [
+      "DFDFD"
+    ],
+    "rapport": [
+      "FDFDF"
+    ],
+    "conversation_prompts": [
+      "DFDF"
+    ]
+  }
+}

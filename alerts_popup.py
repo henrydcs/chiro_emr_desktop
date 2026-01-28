@@ -1,10 +1,13 @@
 # alerts_popup.py
 from __future__ import annotations
-
 import json
 import os
 import tkinter as tk
 from tkinter import ttk, messagebox
+
+
+#"alerts": {"red_flags": ["Progressive neuro deficits", "Night pain not relieved by rest"],"rapport": ["Likes fishing", "Has 2 kids", "Works night shift"], "conversation_prompts": ["Ask about the new puppy", "Follow up on hiking trip"]}
+
 
 
 def _clean(s: str) -> str:

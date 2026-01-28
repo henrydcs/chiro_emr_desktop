@@ -14,7 +14,7 @@ from HOI import HOIPage
 from plan_page import PlanPage
 from pathlib import Path
 import tkinter.font as tkfont
-
+from alerts_popup import AlertsPopup
 from paths import patients_dir
 
 #Git Hub to Work Between Computers
@@ -51,7 +51,7 @@ from config import (
     SETTINGS_PATH,
     AUTOSAVE_DEBOUNCE_MS,
     LOGO_PATH, CLINIC_NAME, CLINIC_ADDR, CLINIC_PHONE_FAX,
-    YEAR_CASES_ROOT, NEXT_YEAR_CASES_ROOT,
+    YEAR_CASES_ROOT, NEXT_YEAR_CASES_ROOT, BASE_DIR,
     PATIENT_SUBDIR_EXAMS, PATIENT_SUBDIR_PDFS,
 )
 
@@ -131,6 +131,9 @@ class App(tk.Tk):
         super().__init__()
         ensure_year_root()    
 
+        self._alerts_popup_open = False
+
+
         self._live_preview_job = None  
 
         self._refreshing_preview = False
@@ -174,6 +177,26 @@ class App(tk.Tk):
         self._build_ui()
         self._wire_autosave_triggers()
 
+        self._apply_demographics_visibility()
+
+        alerts_path = os.path.join(BASE_DIR, "alerts_dashboard.json")
+
+        # Pop up every time the app launches
+        self.after_idle(lambda: self.show_alerts_popup(alerts_path))
+
+    def show_alerts_popup(self, path: str):
+        if getattr(self, "_alerts_popup_open", False):
+            return
+        self._alerts_popup_open = True
+
+        pop = AlertsPopup(self, json_path=path)
+
+        # When popup closes, allow it to open again
+        pop.bind("<Destroy>", lambda e: setattr(self, "_alerts_popup_open", False))
+
+        
+
+        
         # Mousewheel scroll routing (Subjectives canvas)
         self.bind_all("<MouseWheel>", self._on_mousewheel)
         self.bind_all("<Button-4>", self._on_mousewheel_linux_up)
@@ -982,7 +1005,7 @@ class App(tk.Tk):
         ):
             v.trace_add("write", self._refresh_demo_summary)
 
-        self._apply_demographics_visibility()
+        
 
 
 
