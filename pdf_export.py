@@ -1286,6 +1286,8 @@ def payload_to_exam_sections(payload: dict):
                     "tokens": tokens_from_subjective_block(b),
                 })
 
+    family_social = (soap.get("family_social") or "").strip()
+
     objectives_text = (soap.get("objectives") or "").strip()
     objectives_struct = soap.get("objectives_struct") or {}
 
@@ -1299,7 +1301,7 @@ def payload_to_exam_sections(payload: dict):
     plan_struct = soap.get("plan", {}) or {}
 
     exam_date = normalize_mmddyyyy(patient.get("exam_date", "")) or today_mmddyyyy()
-    return exam_name, patient, narratives, objectives_text, objectives_struct, diagnosis, plan_struct, exam_date
+    return exam_name, patient, narratives, family_social, objectives_text, objectives_struct, diagnosis, plan_struct, exam_date
 
 
 
@@ -1408,7 +1410,7 @@ def build_combined_pdf(path: str, payloads: list):
 
     story = []
     for idx, payload in enumerate(payloads):
-        exam_name, patient, narratives, objectives_text, objectives_struct, diagnosis, plan_struct, exam_date = payload_to_exam_sections(payload)
+        exam_name, patient, narratives, family_social, objectives_text, objectives_struct, diagnosis, plan_struct, exam_date = payload_to_exam_sections(payload)
 
 
         story.append(ExamStart(exam_name, patient, exam_date))
@@ -1478,6 +1480,19 @@ def build_combined_pdf(path: str, payloads: list):
             story.append(Paragraph("—", styles["BodyText"]))
 
         story.append(Spacer(1, 0.12 * inch))
+
+        # ✅ Family / Social History (between Subjectives and Objectives)
+        story.append(Paragraph("<b>Family / Social History</b>", styles["Heading2"]))
+        story.append(Spacer(1, 0.08 * inch))
+
+        if family_social:
+            safe_fs = xml_escape(family_social).replace("\n\n", "<br/><br/>").replace("\n", "<br/>")
+            story.append(Paragraph(safe_fs, styles["BodyText"]))
+        else:
+            story.append(Paragraph("—", styles["BodyText"]))
+
+        story.append(Spacer(1, 0.12 * inch))
+
 
         # Objectives
         story.append(Paragraph("<b>Objectives</b>", styles["Heading2"]))

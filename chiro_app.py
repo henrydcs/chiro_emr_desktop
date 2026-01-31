@@ -857,8 +857,15 @@ class App(tk.Tk):
         soap_nav.pack(fill="x")
         ttk.Label(soap_nav, text="Section:").pack(side="left", padx=(0, 8))
 
+        # Build nav list but inject Family/Social History between Subjectives and Objectives
+        nav_pages = []
+        for p in UI_PAGES:
+            nav_pages.append(p)
+            if p == "Subjectives" and "Family/Social History" not in nav_pages:
+                nav_pages.append("Family/Social History")
+
         self.page_buttons: dict[str, ttk.Button] = {}
-        for page in UI_PAGES:
+        for page in nav_pages:
             b = ttk.Button(soap_nav, text=page, command=lambda p=page: self.show_page(p))
             b.pack(side="left", padx=4)
             self.page_buttons[page] = b
@@ -900,6 +907,7 @@ class App(tk.Tk):
         self.after(50, self.request_live_preview_refresh)
 
         self.subjectives_page = SubjectivesPage(self.content, self.schedule_autosave)
+        self.family_social_page = TextPage(self.content, "Family/Social History", self.schedule_autosave)
         self.objectives_page = ObjectivesPage(self.content, self.schedule_autosave)
         self.diagnosis_page = DiagnosisPage(self.content, self.schedule_autosave)
 
@@ -915,6 +923,7 @@ class App(tk.Tk):
         self.pages = {
             "HOI History": self.hoi_page,
             "Subjectives": self.subjectives_page,
+            "Family/Social History": self.family_social_page,
             "Objectives": self.objectives_page,
             "Diagnosis": self.diagnosis_page,
             "Plan": self.plan_page,
@@ -1384,6 +1393,8 @@ class App(tk.Tk):
             return True
         if self.subjectives_page.has_content():
             return True
+        if hasattr(self, "family_social_page") and self.family_social_page.has_content():
+            return True
         if self.objectives_page.has_content():
             return True
         if self.diagnosis_page.has_content():
@@ -1391,6 +1402,7 @@ class App(tk.Tk):
         if self.plan_page.has_content():
             return True
         return False
+
 
     def _autosave(self, force: bool = False):
         if self._loading:
@@ -1475,6 +1487,7 @@ class App(tk.Tk):
             "soap": {
                 "hoi_struct": hoi_struct,
                 "subjectives": subj_struct,
+                "family_social": self.family_social_page.get_value() if hasattr(self, "family_social_page") else "",
                 "objectives": obj_text,
                 "objectives_struct": obj_struct,
                 "diagnosis_struct": self.diagnosis_page.to_dict(),
@@ -1600,6 +1613,13 @@ class App(tk.Tk):
             self.hoi_page.from_dict(soap.get("hoi_struct") or {})
             self.subjectives_page.from_dict(soap.get("subjectives") or {})
 
+            # ✅ NEW: Family/Social History
+            try:
+                fs = (soap.get("family_social") or "")
+                self.family_social_page.set_value(fs)
+            except Exception:
+                pass
+
             obj_struct = soap.get("objectives_struct")
             if isinstance(obj_struct, dict):
                 self.objectives_page.from_dict(obj_struct)
@@ -1663,6 +1683,16 @@ class App(tk.Tk):
             except Exception:
                 pass
 
+        # ✅ NEW: Family/Social History
+        try:
+            self.family_social_page.reset()
+        except Exception:
+            try:
+                self.family_social_page.set_value("")
+            except Exception:
+                pass
+
+        
         # Objectives
         try:
             self.objectives_page.reset()
