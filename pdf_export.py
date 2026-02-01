@@ -839,11 +839,12 @@ def build_objectives_flowables(objectives_struct: dict, styles, doc_width: float
                 out.append(Spacer(1, 0.12 * inch))            
 
 
-            # if adl_para:
-            #     out.append(Paragraph("<b>Functional Status / ADLs</b>", styles["Heading4"]))
-            #     out.append(Spacer(1, 0.05 * inch))
-            #     out.append(adl_para)
-            #     out.append(Spacer(1, 0.12 * inch))
+            if adl_para:
+                out.append(Paragraph("<b>Functional Status / ADLs</b>", styles["Heading4"]))
+                out.append(Spacer(1, 0.05 * inch))
+                out.append(adl_para)  # adl_para is already a Paragraph/flowable
+                out.append(Spacer(1, 0.12 * inch))
+
 
             out.append(Spacer(1, 0.06 * inch))
 
@@ -863,7 +864,8 @@ def build_objectives_flowables(objectives_struct: dict, styles, doc_width: float
             order.append(code)
         grouped[code].append(b)
 
-    col_widths = [doc_width / 2.0, doc_width / 2.0]
+    col_widths = [doc_width / 2.0, doc_width / 2.0]    
+
 
     def first_note(region_blocks, key: str) -> str:
         for bb in region_blocks:

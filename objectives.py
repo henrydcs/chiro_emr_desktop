@@ -613,6 +613,14 @@ class VitalsInspectionPanel(ttk.Frame):
         super().__init__(parent)
         self.on_change = on_change
 
+        def open(self, which: str | None = None):
+            """Ensure the panel is expanded and optionally choose a sub-tab."""
+            self._open.set(True)
+            if which in ("Vitals", "Posture", "Grip", "ADLs"):
+                self.active.set(which)
+            self._apply_open_state()
+            self._show_active()
+
         self._open = tk.BooleanVar(value=False)
         self.active = tk.StringVar(value="Vitals")  # Vitals|Posture|Grip
 
@@ -678,7 +686,7 @@ class VitalsInspectionPanel(ttk.Frame):
         self.radios_frame.pack(side="left", padx=(12, 0))
 
         self.container = ttk.Frame(self)
-        self.container.pack(fill="x", padx=10, pady=(0, 8))
+        self.container.pack(fill="both", expand=True, padx=10, pady=(0, 8))
         self.container.grid_rowconfigure(0, weight=1)
         self.container.grid_columnconfigure(0, weight=1)
 
@@ -688,7 +696,11 @@ class VitalsInspectionPanel(ttk.Frame):
         self.adl_frame = ttk.Frame(self.container)  # ✅ NEW
 
         for f in (self.vitals_frame, self.posture_frame, self.grip_frame, self.adl_frame):
-            f.grid(row=0, column=0, sticky="ew")
+            f.grid(row=0, column=0, sticky="nsew")
+
+        self.container.update_idletasks()
+
+
 
 
         self._build_vitals_panel()
@@ -1019,11 +1031,13 @@ class VitalsInspectionPanel(ttk.Frame):
 # - each section has its own Notes box
 # -----------------------------
 class ObjectivesBlock(ttk.Frame):
-    def __init__(self, parent, block_index: int, on_change_callback, on_region_change=None):
+    def __init__(self, parent, block_index: int, on_change_callback, on_region_change=None, on_show_global=None, on_show_blocks=None):
         super().__init__(parent)
         self.block_index = block_index
         self.on_change_callback = on_change_callback
         self.on_region_change = on_region_change
+        self.on_show_global = on_show_global
+        self.on_show_blocks = on_show_blocks
 
         self.region_var = tk.StringVar(value="(none)")
         self.region_label_var = tk.StringVar(value="")
@@ -1048,6 +1062,30 @@ class ObjectivesBlock(ttk.Frame):
 
         self.region_var.trace_add("write", lambda *_: self._on_region_change())
         self.active_section.trace_add("write", lambda *_: self._show_section(self.active_section.get()))
+
+    def _build_notes_area(self):
+        self.notes_container = ttk.Frame(self)
+        self.notes_container.pack(fill="x", padx=10, pady=(0, 8))
+        self.notes_container.grid_rowconfigure(0, weight=1)
+        self.notes_container.grid_columnconfigure(0, weight=1)
+
+        self.palp_notes_widget = CollapsibleAutoNotes(
+            self.notes_container, "Palpation Notes", self.palp_notes_var, on_change=self._changed
+        )
+        self.ortho_notes_widget = CollapsibleAutoNotes(
+            self.notes_container, "Orthopedic Notes", self.ortho_notes_var, on_change=self._changed
+        )
+        self.rom_notes_widget = CollapsibleAutoNotes(
+            self.notes_container, "ROM Notes", self.rom_notes_var, on_change=self._changed
+        )
+
+        # stack them in same grid cell so we can tkraise
+        for w in (self.palp_notes_widget, self.ortho_notes_widget, self.rom_notes_widget):
+            w.grid(row=0, column=0, sticky="ew")
+
+        self.palp_notes_widget.tkraise()
+
+
 
     def _build_header(self):
         hdr = ttk.Frame(self)
@@ -1078,9 +1116,14 @@ class ObjectivesBlock(ttk.Frame):
                 variable=self.active_section
             ).pack(side="left", padx=6)
 
+        tab_button("Vitals / Inspection")  # ✅ NEW first
         tab_button("Palpation")
         tab_button("Orthopedic")
         tab_button("ROM")
+
+        # ✅ Notes area directly under radios (next section)
+        self._build_notes_area()
+
 
     def _build_section_frames(self):
         self.section_container = ttk.Frame(self)
@@ -1130,8 +1173,8 @@ class ObjectivesBlock(ttk.Frame):
             self.palp_frame.grid_columnconfigure(0, weight=1)
 
             # Palpation notes
-            palp_notes = CollapsibleAutoNotes(self.palp_frame, "Palpation Notes", self.palp_notes_var, on_change=self._changed)
-            palp_notes.grid(row=len(palp_items), column=0, sticky="ew", padx=10, pady=(10, 8))
+            # palp_notes = CollapsibleAutoNotes(self.palp_frame, "Palpation Notes", self.palp_notes_var, on_change=self._changed)
+            # palp_notes.grid(row=len(palp_items), column=0, sticky="ew", padx=10, pady=(10, 8))
 
         else:
             ttk.Label(self.palp_frame, text="(No palpation list configured)").grid(
@@ -1150,8 +1193,8 @@ class ObjectivesBlock(ttk.Frame):
             ttk.Label(self.ortho_frame, text="(No orthopedic tests configured)").pack(anchor="w", padx=10, pady=10)
 
         # Ortho notes
-        ortho_notes = CollapsibleAutoNotes(self.ortho_frame, "Orthopedic Notes", self.ortho_notes_var, on_change=self._changed)
-        ortho_notes.pack(fill="x", padx=10, pady=(10, 8))
+        # ortho_notes = CollapsibleAutoNotes(self.ortho_frame, "Orthopedic Notes", self.ortho_notes_var, on_change=self._changed)
+        # ortho_notes.pack(fill="x", padx=10, pady=(10, 8))
 
         # ROM rows
         rom_items = REGION_ROM_MOTIONS.get(code, []) or []
@@ -1171,16 +1214,30 @@ class ObjectivesBlock(ttk.Frame):
 
 
         # ROM notes
-        rom_notes = CollapsibleAutoNotes(self.rom_frame, "ROM Notes", self.rom_notes_var, on_change=self._changed)
-        rom_notes.pack(fill="x", padx=10, pady=(10, 8))
+        # rom_notes = CollapsibleAutoNotes(self.rom_frame, "ROM Notes", self.rom_notes_var, on_change=self._changed)
+        # rom_notes.pack(fill="x", padx=10, pady=(10, 8))
 
     def _show_section(self, which: str):
+        # If user picks Vitals/Inspection, raise the global panel (ObjectivesPage)
+        if which == "Vitals / Inspection":
+            if callable(self.on_show_global):
+                self.on_show_global()
+            return
+
+        # Otherwise ensure we are in Blocks view
+        if callable(self.on_show_blocks):
+            self.on_show_blocks()
+
         if which == "Palpation":
             self.palp_frame.tkraise()
+            self.palp_notes_widget.tkraise()
         elif which == "Orthopedic":
             self.ortho_frame.tkraise()
+            self.ortho_notes_widget.tkraise()
         else:
             self.rom_frame.tkraise()
+            self.rom_notes_widget.tkraise()
+
 
     def _on_region_change(self):
         self._rebuild_for_region()
@@ -1291,12 +1348,27 @@ class ObjectivesPage(ttk.Frame):
         super().__init__(parent)
         self.on_change_callback = on_change_callback
 
-        self.global_panel = VitalsInspectionPanel(self, self._handle_change)
+        #self.global_panel = VitalsInspectionPanel(self, self._handle_change)
 
         self.blocks: list[ObjectivesBlock] = []
         self.active_index = -1
 
         self._build_ui()
+
+    def show_global(self):
+        self.global_wrap.tkraise()
+        # force expanded so it doesn't look blank
+        try:
+            self.global_panel._open.set(True)
+            self.global_panel._apply_open_state()
+            self.global_panel._show_active()
+        except Exception:
+            pass
+
+
+    def show_blocks(self):
+        self.block_container.tkraise()
+
 
     def _build_ui(self):
         top = ttk.Frame(self)
@@ -1309,12 +1381,25 @@ class ObjectivesPage(ttk.Frame):
         self.btns_frame = ttk.Frame(top)
         self.btns_frame.pack(side="left")
 
-        # Collapsible global panel (starts collapsed)
-        self.global_panel.pack(fill="x", padx=0, pady=(6, 0))
+        self.stack = ttk.Frame(self)
+        self.stack.pack(fill="both", expand=True, padx=0, pady=0)
+        self.stack.grid_rowconfigure(0, weight=1)
+        self.stack.grid_columnconfigure(0, weight=1)
 
-        # Block container
-        self.block_container = ttk.Frame(self)
-        self.block_container.pack(fill="both", expand=True, padx=0, pady=0)
+        # ---- Global (Vitals / Inspection) view ----
+        self.global_wrap = ttk.Frame(self.stack)
+        self.global_wrap.grid(row=0, column=0, sticky="nsew")
+
+        self.global_panel = VitalsInspectionPanel(self.global_wrap, self._handle_change)
+        self.global_panel.pack(fill="both", expand=True, padx=0, pady=(6, 0))
+
+
+        # ---- Blocks view ----
+        self.block_container = ttk.Frame(self.stack)
+        self.block_container.grid(row=0, column=0, sticky="nsew")
+
+        # Default view = blocks
+        self.block_container.tkraise()
 
     def _rebuild_block_buttons(self):
         for c in self.btns_frame.winfo_children():
@@ -1331,7 +1416,9 @@ class ObjectivesPage(ttk.Frame):
             self.block_container,
             idx,
             self._handle_change,
-            on_region_change=self._rebuild_block_buttons
+            on_region_change=self._rebuild_block_buttons,
+            on_show_global=self.show_global,   # or lambda: self.global_wrap.tkraise()
+            on_show_blocks=self.show_blocks,   # or lambda: self.block_container.tkraise()
         )
         block.pack_forget()
         self.blocks.append(block)
@@ -1346,11 +1433,14 @@ class ObjectivesPage(ttk.Frame):
     def show_block(self, index: int):
         if index < 0 or index >= len(self.blocks):
             return
+        self.show_blocks()  # ✅ ensure blocks view is showing
         for b in self.blocks:
             b.pack_forget()
         self.blocks[index].pack(fill="both", expand=True, padx=0, pady=0)
         self.active_index = index
         self._handle_change()
+
+
 
     def _handle_change(self):
         if callable(self.on_change_callback):
@@ -1381,7 +1471,9 @@ class ObjectivesPage(ttk.Frame):
                 self.block_container,
                 i,
                 self._handle_change,
-                on_region_change=self._rebuild_block_buttons
+                on_region_change=self._rebuild_block_buttons,
+                on_show_global=self.show_global,
+                on_show_blocks=self.show_blocks,
             )
             block.pack_forget()
             block.from_dict(bd or {})
