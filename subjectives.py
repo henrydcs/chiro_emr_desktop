@@ -15,7 +15,7 @@ class SubjectivesPage(ttk.Frame):
     - Buttons auto-update when each block's region changes
     """
 
-    def __init__(self, parent, on_change_callback, max_blocks: int = 5):
+    def __init__(self, parent, on_change_callback, max_blocks: int = 10):
         super().__init__(parent)
         self.on_change_callback = on_change_callback
         self.max_blocks = max_blocks

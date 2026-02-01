@@ -66,7 +66,8 @@ class DescriptorBlock:
         self.pain_scale_var = tk.StringVar(value="None")
 
         self.frame = ttk.LabelFrame(parent, text=f"Pain Descriptor Block {block_index}")
-        self._build_widgets()
+        self._build_widgets(host=self.frame)
+
 
         self._last_region_code = self.region_var.get()
 
@@ -93,123 +94,187 @@ class DescriptorBlock:
         # initial auto-fill
         self.update_narrative(overwrite_if_auto=True)
 
-    def _build_widgets(self):
+    def _build_widgets(self, host):
         self._loading_block = True
         try:
             padx, pady = 10, 6
 
-            ttk.Label(self.frame, text="Body region:").grid(
-                row=0, column=0, sticky="w", padx=padx, pady=pady
-            )
+            # -------------------------------
+            # View selector (radio buttons)
+            # -------------------------------
+            self.view_var = tk.StringVar(value="descriptor")
+
+            switch = ttk.Frame(host)
+            switch.grid(row=0, column=0, columnspan=3, sticky="w", padx=padx, pady=(8, 6))
+
+            ttk.Radiobutton(
+                switch, text="Pain Descriptor", value="descriptor",
+                variable=self.view_var, command=self._apply_view
+            ).pack(side="left", padx=(0, 12))
+
+            ttk.Radiobutton(
+                switch, text="Narrative Text", value="narrative",
+                variable=self.view_var, command=self._apply_view
+            ).pack(side="left", padx=(0, 12))
+
+            ttk.Radiobutton(
+                switch, text="Patient Points To", value="points",
+                variable=self.view_var, command=self._apply_view
+            ).pack(side="left")
+
+            # -------------------------------
+            # Three section frames
+            # -------------------------------
+            self.descriptor_frame = ttk.Frame(host)
+            self.descriptor_frame.grid(row=1, column=0, columnspan=3, sticky="ew", padx=padx, pady=(0, 10))
+            self.descriptor_frame.grid_columnconfigure(2, weight=1)
+
+            self.narrative_frame = ttk.Frame(host)
+            self.narrative_frame.grid(row=2, column=0, columnspan=3, sticky="nsew", padx=padx, pady=(0, 10))
+            self.narrative_frame.grid_columnconfigure(0, weight=1)
+            self.narrative_frame.grid_rowconfigure(1, weight=1)
+
+            self.points_frame = ttk.Frame(host)
+            self.points_frame.grid(row=1, column=0, columnspan=3, sticky="ew", padx=padx, pady=(0, 10))
+            self.points_frame.grid_columnconfigure(0, weight=1)
+            self.points_frame.grid_columnconfigure(1, weight=1)
+
+            # Let the host stretch narrative when visible
+            host.grid_columnconfigure(0, weight=1)
+            host.grid_rowconfigure(2, weight=1)
+
+            # ==========================================================
+            # (A) Put your EXISTING descriptor widgets into descriptor_frame
+            # ==========================================================
+
+            # Body region
+            ttk.Label(self.descriptor_frame, text="Body region:").grid(row=0, column=0, sticky="w", padx=0, pady=pady)
             ttk.Combobox(
-                self.frame,
+                self.descriptor_frame,
                 textvariable=self.region_var,
                 values=REGION_OPTIONS,
                 state="readonly",
                 width=10
-            ).grid(row=0, column=1, sticky="w", padx=padx, pady=pady)
+            ).grid(row=0, column=1, sticky="w", padx=(10, 0), pady=pady)
 
-            # Region label (pretty name)
             self.region_label_var = tk.StringVar(value="")
-            ttk.Label(self.frame, textvariable=self.region_label_var, foreground="gray").grid(
-                row=0, column=2, sticky="w", padx=padx, pady=pady
+            ttk.Label(self.descriptor_frame, textvariable=self.region_label_var, foreground="gray").grid(
+                row=0, column=2, sticky="w", padx=(10, 0), pady=pady
             )
 
-            # ✅ must exist BEFORE _rebuild_muscles()
+            # must exist BEFORE _rebuild_muscles()
             self.muscle_vars: dict[str, tk.BooleanVar] = {}
 
-            # Primary / secondary descriptors
-            ttk.Label(self.frame, text="Primary pain descriptor:").grid(
-                row=1, column=0, sticky="w", padx=padx, pady=pady
-            )
+            # Primary descriptor
+            ttk.Label(self.descriptor_frame, text="Primary pain descriptor:").grid(row=1, column=0, sticky="w", padx=0, pady=pady)
             ttk.Combobox(
-                self.frame,
+                self.descriptor_frame,
                 textvariable=self.desc1_var,
                 values=PAIN_DESCRIPTORS,
                 state="readonly",
                 width=26
-            ).grid(row=1, column=1, columnspan=2, sticky="w", padx=padx, pady=pady)
+            ).grid(row=1, column=1, columnspan=2, sticky="w", padx=(10, 0), pady=pady)
 
-            ttk.Label(self.frame, text="Secondary pain descriptor:").grid(
-                row=2, column=0, sticky="w", padx=padx, pady=pady
-            )
+            # Secondary descriptor
+            ttk.Label(self.descriptor_frame, text="Secondary pain descriptor:").grid(row=2, column=0, sticky="w", padx=0, pady=pady)
             ttk.Combobox(
-                self.frame,
+                self.descriptor_frame,
                 textvariable=self.desc2_var,
                 values=["(none)"] + PAIN_DESCRIPTORS,
                 state="readonly",
                 width=26
-            ).grid(row=2, column=1, columnspan=2, sticky="w", padx=padx, pady=pady)
+            ).grid(row=2, column=1, columnspan=2, sticky="w", padx=(10, 0), pady=pady)
 
-            # Radiculopathy
-            ttk.Label(self.frame, text="Radiculopathy symptom:").grid(
-                row=3, column=0, sticky="w", padx=padx, pady=pady
-            )
+            # Radiculopathy symptom
+            ttk.Label(self.descriptor_frame, text="Radiculopathy symptom:").grid(row=3, column=0, sticky="w", padx=0, pady=pady)
             ttk.Combobox(
-                self.frame,
+                self.descriptor_frame,
                 textvariable=self.radic_symptom_var,
                 values=RADIC_SYMPTOMS,
                 state="readonly",
                 width=26
-            ).grid(row=3, column=1, columnspan=2, sticky="w", padx=padx, pady=pady)
+            ).grid(row=3, column=1, columnspan=2, sticky="w", padx=(10, 0), pady=pady)
 
-            ttk.Label(self.frame, text="Radiculopathy location:").grid(
-                row=4, column=0, sticky="w", padx=padx, pady=pady
-            )
+            # Radiculopathy location
+            ttk.Label(self.descriptor_frame, text="Radiculopathy location:").grid(row=4, column=0, sticky="w", padx=0, pady=pady)
             ttk.Combobox(
-                self.frame,
+                self.descriptor_frame,
                 textvariable=self.radic_location_var,
                 values=RADIC_LOCATIONS,
                 state="readonly",
                 width=26
-            ).grid(row=4, column=1, columnspan=2, sticky="w", padx=padx, pady=pady)
+            ).grid(row=4, column=1, columnspan=2, sticky="w", padx=(10, 0), pady=pady)
 
-            # Overall pain scale (ROW 5)
-            ttk.Label(self.frame, text="Overall pain scale:").grid(
-                row=5, column=0, sticky="w", padx=padx, pady=pady
-            )
+            # Pain scale
+            ttk.Label(self.descriptor_frame, text="Overall pain scale:").grid(row=5, column=0, sticky="w", padx=0, pady=pady)
             self.pain_scale_cb = ttk.Combobox(
-                self.frame,
+                self.descriptor_frame,
                 textvariable=self.pain_scale_var,
                 values=PAIN_SCALE_OPTIONS,
                 state="readonly",
                 width=26
             )
-            self.pain_scale_cb.grid(row=5, column=1, columnspan=2, sticky="w", padx=padx, pady=pady)
+            self.pain_scale_cb.grid(row=5, column=1, columnspan=2, sticky="w", padx=(10, 0), pady=pady)
             self.pain_scale_cb.bind("<<ComboboxSelected>>", lambda e: self._on_descriptor_change())
 
-            # Narrative label + textbox (ROWS 6 & 7)
-            ttk.Label(self.frame, text="Narrative (edit if desired):").grid(
-                row=6, column=0, columnspan=3, sticky="w", padx=padx, pady=(10, 0)
+            # ==========================================================
+            # (B) Put your EXISTING narrative widgets into narrative_frame
+            # ==========================================================
+            ttk.Label(self.narrative_frame, text="Narrative (edit if desired):").grid(
+                row=0, column=0, sticky="w", padx=0, pady=(0, 6)
             )
-            self.narrative_text = tk.Text(self.frame, height=6, wrap="word")
-            self.narrative_text.grid(row=7, column=0, columnspan=3, sticky="we", padx=padx, pady=(0, 10))
+            self.narrative_text = tk.Text(self.narrative_frame, height=10, wrap="word")
+            self.narrative_text.grid(row=1, column=0, sticky="nsew", padx=0, pady=0)
 
-            # --- Patient points to (moved BELOW Narrative) ---
-            ttk.Label(
-                self.frame,
-                text="Patient points to:",
-                font=("Segoe UI", 9, "bold")
-            ).grid(row=8, column=0, columnspan=3, sticky="w", padx=padx, pady=(0, 2))
-
-            self.muscles_frame = ttk.Frame(self.frame)
-            self.muscles_frame.grid(row=9, column=0, columnspan=3, sticky="ew", padx=padx, pady=(0, 10))
-            self.muscles_frame.grid_columnconfigure(0, weight=1)
-            self.muscles_frame.grid_columnconfigure(1, weight=1)
-
-            # Narrative bold style
             bold_font = ("Segoe UI", 10, "bold")
             self.narrative_text.tag_configure("bold", font=bold_font)
 
-            # Let the narrative area expand
-            self.frame.grid_columnconfigure(2, weight=1)
+            # ==========================================================
+            # (C) Put your EXISTING "Patient points to" widgets into points_frame
+            # ==========================================================
+            ttk.Label(self.points_frame, text="Patient points to:", font=("Segoe UI", 9, "bold")).grid(
+                row=0, column=0, columnspan=2, sticky="w", padx=0, pady=(0, 6)
+            )
 
-            # ✅ NOW safe: muscles_frame + muscle_vars exist
+            self.muscles_frame = ttk.Frame(self.points_frame)
+            self.muscles_frame.grid(row=1, column=0, columnspan=2, sticky="ew", padx=0, pady=0)
+            self.muscles_frame.grid_columnconfigure(0, weight=1)
+            self.muscles_frame.grid_columnconfigure(1, weight=1)
+
+            # Build muscles now that muscles_frame exists
             self._rebuild_muscles()
+
+            # Apply default view
+            self._apply_view()
 
         finally:
             self._loading_block = False
-        
+
+    def _apply_view(self):
+        v = getattr(self, "view_var", None)
+        if v is None:
+            return
+
+        mode = v.get()
+
+        # Hide all
+        self.descriptor_frame.grid_remove()
+        self.narrative_frame.grid_remove()
+        self.points_frame.grid_remove()
+
+        # Show selected
+        if mode == "descriptor":
+            self.descriptor_frame.grid()
+        elif mode == "narrative":
+            self.narrative_frame.grid()
+        elif mode == "points":
+            self.points_frame.grid()
+
+        # Optional: update layout immediately
+        try:
+            self.frame.update_idletasks()
+        except Exception:
+            pass        
 
     
     def _bold_phrases(self, phrases: list[str]):
