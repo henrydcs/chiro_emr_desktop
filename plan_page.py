@@ -539,11 +539,7 @@ class PlanPage(ttk.Frame):
             parts.append(f"The patient will be re-evaluated at {reeval} to assess response and modify care as indicated.")
 
         # Sentence 6: consent
-        parts.append("The patient verbalizes understanding and agrees with the plan of care.")
-
-        # Optional notes appended at end
-        # if notes:
-        #     parts.append(notes)
+        parts.append("The patient verbalizes understanding and agrees with the plan of care.")        
 
         txt = " ".join([p for p in parts if _clean(p)])
         self._set_plan_text(txt)
