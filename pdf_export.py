@@ -839,11 +839,11 @@ def build_objectives_flowables(objectives_struct: dict, styles, doc_width: float
                 out.append(Spacer(1, 0.12 * inch))            
 
 
-            if adl_para:
-                out.append(Paragraph("<b>Functional Status / ADLs</b>", styles["Heading4"]))
-                out.append(Spacer(1, 0.05 * inch))
-                out.append(adl_para)  # adl_para is already a Paragraph/flowable
-                out.append(Spacer(1, 0.12 * inch))
+            # if adl_para:
+            #     out.append(Paragraph("<b>Functional Status / ADLs</b>", styles["Heading4"]))
+            #     out.append(Spacer(1, 0.05 * inch))
+            #     out.append(adl_para)  # adl_para is already a Paragraph/flowable
+            #     out.append(Spacer(1, 0.12 * inch))
 
 
             out.append(Spacer(1, 0.06 * inch))
@@ -912,6 +912,13 @@ def build_objectives_flowables(objectives_struct: dict, styles, doc_width: float
             except Exception:
                 rom_merged = {}
 
+        # ✅ FILTER OUT motions where both sides are -1
+        rom_merged = {
+            m: st for m, st in (rom_merged or {}).items()
+            if int((st or {}).get("l_sev", -1)) != -1 or int((st or {}).get("r_sev", -1)) != -1
+        }
+        rom_has_findings = bool(rom_merged)
+
 
         palp_notes = _notes_paragraph(first_note(region_blocks, "palpation_notes"), styles)
         ortho_notes = _notes_paragraph(first_note(region_blocks, "ortho_notes"), styles)
@@ -920,7 +927,7 @@ def build_objectives_flowables(objectives_struct: dict, styles, doc_width: float
         has_any = bool(
             palp_left or palp_right or palp_notes or
             ortho_left or ortho_right or ortho_notes or
-            rom_merged or rom_notes
+            rom_has_findings or rom_notes
         )
         if not has_any:
             continue
@@ -1499,19 +1506,18 @@ def build_combined_pdf(path: str, payloads: list):
             story.append(Paragraph("<b>Functional Status / ADLs</b>", styles["Heading2"]))
             story.append(Spacer(1, 0.08 * inch))
             story.append(adl_para)
-            #story.append(Spacer(1, 0.12 * inch))
+            story.append(Spacer(1, 0.12 * inch))
 
-        # ✅ Family / Social History (between Subjectives and Objectives)
-        story.append(Paragraph("<b>Family / Social History</b>", styles["Heading2"]))
-        story.append(Spacer(1, 0.08 * inch))
-
+        # ✅ Family / Social History (print ONLY if not empty)
         if family_social:
+            story.append(Paragraph("<b>Family / Social History</b>", styles["Heading2"]))
+            story.append(Spacer(1, 0.08 * inch))
+
             safe_fs = xml_escape(family_social).replace("\n\n", "<br/><br/>").replace("\n", "<br/>")
             story.append(Paragraph(safe_fs, styles["BodyText"]))
-        else:
-            story.append(Paragraph("—", styles["BodyText"]))
 
-        story.append(Spacer(1, 0.12 * inch))
+            story.append(Spacer(1, 0.12 * inch))
+
 
 
         # Objectives

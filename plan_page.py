@@ -195,6 +195,7 @@ class PlanPage(ttk.Frame):
         self.reeval_other_var = tk.StringVar(value="")
 
         self.auto_plan_var = tk.BooleanVar(value=True)
+        self._last_auto_plan = bool(self.auto_plan_var.get())  # ✅ track toggle state
 
         self.custom_notes_var = tk.StringVar(value="")
 
@@ -238,13 +239,20 @@ class PlanPage(ttk.Frame):
         top.columnconfigure(0, weight=1)
         top.columnconfigure(1, weight=1)
 
-        left = ttk.Labelframe(top, text="Treatment")
-        left.grid(row=0, column=0, sticky="nsew", padx=(0, 8), pady=6)
-        left.columnconfigure(0, weight=1)
+        treat_section = CollapsibleSection(top, "Treatment", start_open=True)
+        treat_section.grid(row=0, column=0, sticky="nsew", padx=(0, 8), pady=6)
+        treat_section.columnconfigure(0, weight=1)
 
-        right = ttk.Labelframe(top, text="Schedule")
-        right.grid(row=0, column=1, sticky="nsew", padx=(8, 0), pady=6)
+        sched_section = CollapsibleSection(top, "Schedule", start_open=True)
+        sched_section.grid(row=0, column=1, sticky="nsew", padx=(8, 0), pady=6)
+        sched_section.columnconfigure(0, weight=1)
+
+        left = treat_section.content
+        right = sched_section.content
+
+        left.columnconfigure(0, weight=1)
         right.columnconfigure(1, weight=1)
+
 
         # Care types
         care_box = ttk.Labelframe(left, text="Care Type(s)")
@@ -339,28 +347,56 @@ class PlanPage(ttk.Frame):
         self._sync_other_entries()
 
     def _wire_triggers(self):
-        def _changed(*_):
+        def _general_changed(*_):
             if self._loading:
                 return
+
             self._sync_other_entries()
+
+            # Only regenerate on general changes if auto is enabled
             if self.auto_plan_var.get():
                 self._regen_plan_now()
+
+            self._notify_change()
+
+        def _auto_toggled(*_):
+            if self._loading:
+                return
+
+            now_auto = bool(self.auto_plan_var.get())
+            last_auto = getattr(self, "_last_auto_plan", now_auto)
+
+            # Only act when it truly changed
+            if now_auto == last_auto:
+                return
+
+            if now_auto:
+                # turned ON -> generate immediately
+                self._regen_plan_now()
+            else:
+                # turned OFF -> clear ONLY if current content is auto-generated
+                cur = self.plan_text.get("1.0", "end").strip()
+                if cur.startswith(AUTO_PLAN_TAG):
+                    self._clear_plan_text()
+
+            self._last_auto_plan = now_auto
             self._notify_change()
 
         # combobox selections
-        self.freq_var.trace_add("write", _changed)
-        self.duration_var.trace_add("write", _changed)
-        self.reeval_var.trace_add("write", _changed)
+        self.freq_var.trace_add("write", _general_changed)
+        self.duration_var.trace_add("write", _general_changed)
+        self.reeval_var.trace_add("write", _general_changed)
 
-        self.freq_other_var.trace_add("write", _changed)
-        self.duration_other_var.trace_add("write", _changed)
-        self.reeval_other_var.trace_add("write", _changed)
+        self.freq_other_var.trace_add("write", _general_changed)
+        self.duration_other_var.trace_add("write", _general_changed)
+        self.reeval_other_var.trace_add("write", _general_changed)
 
-        self.auto_plan_var.trace_add("write", _changed)
+        # auto checkbox gets its OWN handler
+        self.auto_plan_var.trace_add("write", _auto_toggled)
 
         # checkbox changes
         for v in list(self._care_vars.values()) + list(self._region_vars.values()) + list(self._goal_vars.values()):
-            v.trace_add("write", _changed)
+            v.trace_add("write", _general_changed)
 
         # text widgets
         self.custom_notes.bind("<<Modified>>", self._on_custom_notes_modified)
@@ -506,8 +542,8 @@ class PlanPage(ttk.Frame):
         parts.append("The patient verbalizes understanding and agrees with the plan of care.")
 
         # Optional notes appended at end
-        if notes:
-            parts.append(notes)
+        # if notes:
+        #     parts.append(notes)
 
         txt = " ".join([p for p in parts if _clean(p)])
         self._set_plan_text(txt)
