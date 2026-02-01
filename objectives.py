@@ -1218,13 +1218,11 @@ class ObjectivesBlock(ttk.Frame):
         # rom_notes.pack(fill="x", padx=10, pady=(10, 8))
 
     def _show_section(self, which: str):
-        # If user picks Vitals/Inspection, raise the global panel (ObjectivesPage)
         if which == "Vitals / Inspection":
             if callable(self.on_show_global):
                 self.on_show_global()
             return
 
-        # Otherwise ensure we are in Blocks view
         if callable(self.on_show_blocks):
             self.on_show_blocks()
 
@@ -1234,9 +1232,10 @@ class ObjectivesBlock(ttk.Frame):
         elif which == "Orthopedic":
             self.ortho_frame.tkraise()
             self.ortho_notes_widget.tkraise()
-        else:
+        elif which == "ROM":
             self.rom_frame.tkraise()
             self.rom_notes_widget.tkraise()
+
 
 
     def _on_region_change(self):
