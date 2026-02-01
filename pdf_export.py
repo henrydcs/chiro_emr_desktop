@@ -772,7 +772,7 @@ def _build_adl_paragraph(adl: dict, styles):
 
 
 
-def build_objectives_flowables(objectives_struct: dict, styles, doc_width: float):
+def build_objectives_flowables(objectives_struct: dict, styles, doc_width: float, *, include_adl: bool = True):
 
     rom_merged = {}
     rom_notes = None
@@ -789,8 +789,10 @@ def build_objectives_flowables(objectives_struct: dict, styles, doc_width: float
         posture = global_struct.get("posture") or {}
         grip = global_struct.get("grip") or {}
 
-        adl = global_struct.get("adl") or {}
-        adl_para = _build_adl_paragraph(adl, styles)
+        adl_para = None
+        if include_adl:
+            adl = global_struct.get("adl") or {}
+            adl_para = _build_adl_paragraph(adl, styles)
 
 
         vit_tbl = _build_vitals_table(vitals, doc_width)
@@ -834,13 +836,14 @@ def build_objectives_flowables(objectives_struct: dict, styles, doc_width: float
                 if grip_notes:
                     out.append(Spacer(1, 0.10 * inch))
                     out.append(grip_notes)
-                out.append(Spacer(1, 0.12 * inch))
+                out.append(Spacer(1, 0.12 * inch))            
 
-            if adl_para:
-                out.append(Paragraph("<b>Functional Status / ADLs</b>", styles["Heading4"]))
-                out.append(Spacer(1, 0.05 * inch))
-                out.append(adl_para)
-                out.append(Spacer(1, 0.12 * inch))
+
+            # if adl_para:
+            #     out.append(Paragraph("<b>Functional Status / ADLs</b>", styles["Heading4"]))
+            #     out.append(Spacer(1, 0.05 * inch))
+            #     out.append(adl_para)
+            #     out.append(Spacer(1, 0.12 * inch))
 
             out.append(Spacer(1, 0.06 * inch))
 
@@ -1481,6 +1484,21 @@ def build_combined_pdf(path: str, payloads: list):
 
         story.append(Spacer(1, 0.12 * inch))
 
+        # ✅ Functional Status / ADLs — printed after Subjectives
+        adl_para = None
+        try:
+            gs = (objectives_struct or {}).get("global") or {}
+            adl = gs.get("adl") or {}
+            adl_para = _build_adl_paragraph(adl, styles)
+        except Exception:
+            adl_para = None
+
+        if adl_para:
+            story.append(Paragraph("<b>Functional Status / ADLs</b>", styles["Heading2"]))
+            story.append(Spacer(1, 0.08 * inch))
+            story.append(adl_para)
+            #story.append(Spacer(1, 0.12 * inch))
+
         # ✅ Family / Social History (between Subjectives and Objectives)
         story.append(Paragraph("<b>Family / Social History</b>", styles["Heading2"]))
         story.append(Spacer(1, 0.08 * inch))
@@ -1499,6 +1517,7 @@ def build_combined_pdf(path: str, payloads: list):
         story.append(Spacer(1, 0.10 * inch))
 
         obj_flow = build_objectives_flowables(objectives_struct, styles, doc_width)
+
         if obj_flow:
             story.extend(obj_flow)
         else:
