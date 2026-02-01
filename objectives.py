@@ -380,6 +380,50 @@ class LRSeverityRow(ttk.Frame):
         self.l_sev.set(int(data.get("l_sev", -1)))
         self.r_sev.set(int(data.get("r_sev", -1)))
 
+class PalpationCompactRow(ttk.Frame):
+    """
+    Layout:
+    [Muscle name]  [Left 0-9 radios]
+                   [Right 0-9 radios]
+    """
+    def __init__(self, parent, text: str, on_change):
+        super().__init__(parent)
+        self.on_change = on_change
+        self.text = text
+
+        self.l_sev = tk.IntVar(value=-1)
+        self.r_sev = tk.IntVar(value=-1)
+
+        self._build()
+
+    def _build(self):
+        # Column 0: muscle label
+        ttk.Label(self, text=self.text, width=18, anchor="w").grid(
+            row=0, column=0, rowspan=2, sticky="w", padx=(0, 8)
+        )
+
+        # Column 1: left + right radio groups stacked
+        left_grp = ToggleRadioGroup(self, SEVERITY_VALUES, self.l_sev, on_change=self._changed, btn_width=3)
+        left_grp.grid(row=0, column=1, sticky="w")
+
+        right_grp = ToggleRadioGroup(self, SEVERITY_VALUES, self.r_sev, on_change=self._changed, btn_width=3)
+        right_grp.grid(row=1, column=1, sticky="w", pady=(2, 0))
+
+        # Keep it tight
+        self.grid_columnconfigure(1, weight=1)
+
+    def _changed(self):
+        if callable(self.on_change):
+            self.on_change()
+
+    def get_state(self) -> dict:
+        return {"l_sev": int(self.l_sev.get()), "r_sev": int(self.r_sev.get())}
+
+    def set_state(self, data: dict):
+        self.l_sev.set(int(data.get("l_sev", -1)))
+        self.r_sev.set(int(data.get("r_sev", -1)))
+
+
 
 # -----------------------------
 # Orthopedic row:
@@ -400,15 +444,32 @@ class LROrthoRow(ttk.Frame):
         def ortho_text(v):
             return "Neg" if v == 0 else ("Pos" if v == 1 else "")
 
-        left_grp = ToggleRadioGroup(self, [0, 1], self.l_res, on_change=self._changed, text_map=ortho_text, btn_width=4)
-        left_grp.grid(row=0, column=0, sticky="w")
+        # Left radios
+        left_grp = ToggleRadioGroup(
+            self, [0, 1], self.l_res,
+            on_change=self._changed,
+            text_map=ortho_text,
+            btn_width=4
+        )
+        left_grp.grid(row=0, column=0, sticky="w", padx=(0, 6))
 
-        ttk.Label(self, text=self.text, width=26, anchor="center").grid(row=0, column=1, sticky="ew", padx=8)
+        # Label — LEFT aligned, NO stretch
+        ttk.Label(
+            self,
+            text=self.text,
+            width=24,
+            anchor="w"
+        ).grid(row=0, column=1, sticky="w", padx=(4, 6))
 
-        right_grp = ToggleRadioGroup(self, [0, 1], self.r_res, on_change=self._changed, text_map=ortho_text, btn_width=4)
-        right_grp.grid(row=0, column=2, sticky="w")
+        # Right radios
+        right_grp = ToggleRadioGroup(
+            self, [0, 1], self.r_res,
+            on_change=self._changed,
+            text_map=ortho_text,
+            btn_width=4
+        )
+        right_grp.grid(row=0, column=2, sticky="w", padx=(6, 0))   
 
-        self.grid_columnconfigure(1, weight=1)
 
     def _changed(self):
         if callable(self.on_change):
@@ -457,15 +518,37 @@ class LRROMRow(ttk.Frame):
             self.r_sev.trace_add("write", _force_right_off)
 
     def _build(self):
-        self.left_grp = ToggleRadioGroup(self, SEVERITY_VALUES, self.l_sev, on_change=self._changed, btn_width=3)
-        self.left_grp.grid(row=0, column=0, sticky="w")
+        # Column 0: motion label on the LEFT
+        ttk.Label(self, text=self.text, width=16, anchor="w").grid(
+            row=0, column=0, rowspan=(1 if self.disable_right else 2),
+            sticky="w", padx=(0, 8)
+        )
 
-        ttk.Label(self, text=self.text, width=26, anchor="center").grid(row=0, column=1, sticky="ew", padx=8)
+        # Column 1: LEFT radios (always visible)
+        self.left_grp = ToggleRadioGroup(
+            self, SEVERITY_VALUES, self.l_sev,
+            on_change=self._changed,
+            btn_width=3
+        )
+        self.left_grp.grid(row=0, column=1, sticky="w")
 
-        self.right_grp = ToggleRadioGroup(self, SEVERITY_VALUES, self.r_sev, on_change=self._changed, btn_width=3)
-        self.right_grp.grid(row=0, column=2, sticky="w")
+        # Column 1: RIGHT radios (only if not disabled)
+        self.right_grp = ToggleRadioGroup(
+            self, SEVERITY_VALUES, self.r_sev,
+            on_change=self._changed,
+            btn_width=3
+        )
 
+        if self.disable_right:
+            # Keep logic intact: right stays -1, but don't show widgets
+            self.r_sev.set(-1)
+            self.right_grp.grid_forget()
+        else:
+            self.right_grp.grid(row=1, column=1, sticky="w", pady=(2, 0))
+
+        # Keep it tight
         self.grid_columnconfigure(1, weight=1)
+
 
     def _disable_widget_tree(self, w, state: str):
         """Recursively set state on widget + all descendants."""
@@ -1030,24 +1113,31 @@ class ObjectivesBlock(ttk.Frame):
         self.rom_rows.clear()
 
         if code == "(none)" or not label:
-            ttk.Label(self.palp_frame, text="Select a region.").pack(anchor="w", padx=10, pady=10)
+            ttk.Label(self.palp_frame, text="Select a region.").grid(row=0, column=0, sticky="w", padx=10, pady=10)
             ttk.Label(self.ortho_frame, text="Select a region.").pack(anchor="w", padx=10, pady=10)
             ttk.Label(self.rom_frame, text="Select a region.").pack(anchor="w", padx=10, pady=10)
             return
 
+
         # Palpation rows
         palp_items = REGION_MUSCLES.get(code, []) or []
         if palp_items:
-            for item in palp_items:
-                row = LRSeverityRow(self.palp_frame, item, self._changed)
-                row.pack(fill="x", padx=10, pady=3)
+            for i, item in enumerate(palp_items):
+                row = PalpationCompactRow(self.palp_frame, item, self._changed)
+                row.grid(row=i, column=0, sticky="w", padx=10, pady=2)
                 self.palp_rows[item] = row
-        else:
-            ttk.Label(self.palp_frame, text="(No palpation list configured)").pack(anchor="w", padx=10, pady=10)
 
-        # Palpation notes
-        palp_notes = CollapsibleAutoNotes(self.palp_frame, "Palpation Notes", self.palp_notes_var, on_change=self._changed)
-        palp_notes.pack(fill="x", padx=10, pady=(10, 8))
+            self.palp_frame.grid_columnconfigure(0, weight=1)
+
+            # Palpation notes
+            palp_notes = CollapsibleAutoNotes(self.palp_frame, "Palpation Notes", self.palp_notes_var, on_change=self._changed)
+            palp_notes.grid(row=len(palp_items), column=0, sticky="ew", padx=10, pady=(10, 8))
+
+        else:
+            ttk.Label(self.palp_frame, text="(No palpation list configured)").grid(
+                row=0, column=0, sticky="w", padx=10, pady=10
+            )
+
 
         # Ortho rows
         ortho_items = REGION_ORTHO_TESTS.get(code, []) or []
@@ -1247,7 +1337,11 @@ class ObjectivesPage(ttk.Frame):
         self.blocks.append(block)
 
         self._rebuild_block_buttons()
-        self.show_block(len(self.blocks) - 1)
+
+        # show something only if nothing is currently shown
+        if self.active_index == -1 and self.blocks:
+            self.show_block(0)
+
 
     def show_block(self, index: int):
         if index < 0 or index >= len(self.blocks):

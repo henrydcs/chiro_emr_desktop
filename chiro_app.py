@@ -24,6 +24,7 @@ from paths import patients_dir
 #git pull
 
 #End of Day Push
+# cd chiro_emr_desktop
 # git status
 # git add .
 # git commit -m "End of day updates"
