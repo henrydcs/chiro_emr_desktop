@@ -233,29 +233,31 @@ class PlanPage(ttk.Frame):
         title = ttk.Label(self, text="PLAN OF CARE", font=("Segoe UI", 14, "bold"))
         title.grid(row=0, column=0, sticky="w", padx=10, pady=(10, 6))
 
-        # Main panels
+                # Main panels
         top = ttk.Frame(self)
         top.grid(row=1, column=0, sticky="ew", padx=10)
         top.columnconfigure(0, weight=1)
         top.columnconfigure(1, weight=1)
 
-        treat_section = CollapsibleSection(top, "Treatment", start_open=True)
-        treat_section.grid(row=0, column=0, sticky="nsew", padx=(0, 8), pady=6)
+        left = ttk.Frame(top)
+        left.grid(row=0, column=0, sticky="nsew", padx=(0, 8), pady=6)
+        left.columnconfigure(0, weight=1)
+
+        right = ttk.Frame(top)
+        right.grid(row=0, column=1, sticky="nsew", padx=(8, 0), pady=6)
+        right.columnconfigure(0, weight=1)
+
+        # -----------------------------
+        # TREATMENT (collapsible)
+        # -----------------------------
+        treat_section = CollapsibleSection(left, "Treatment", start_open=True)
+        treat_section.grid(row=0, column=0, sticky="ew", padx=0, pady=(0, 8))
         treat_section.columnconfigure(0, weight=1)
 
-        sched_section = CollapsibleSection(top, "Schedule", start_open=True)
-        sched_section.grid(row=0, column=1, sticky="nsew", padx=(8, 0), pady=6)
-        sched_section.columnconfigure(0, weight=1)
+        treat_box = treat_section.content
+        treat_box.columnconfigure(0, weight=1)
 
-        left = treat_section.content
-        right = sched_section.content
-
-        left.columnconfigure(0, weight=1)
-        right.columnconfigure(1, weight=1)
-
-
-        # Care types
-        care_box = ttk.Labelframe(left, text="Care Type(s)")
+        care_box = ttk.Labelframe(treat_box, text="Care Type(s)")
         care_box.grid(row=0, column=0, sticky="ew", padx=8, pady=8)
         care_box.columnconfigure(0, weight=1)
 
@@ -263,45 +265,68 @@ class PlanPage(ttk.Frame):
             cb = ttk.Checkbutton(care_box, text=label, variable=self._care_vars[label])
             cb.grid(row=i, column=0, sticky="w", padx=8, pady=2)
 
+        # -----------------------------
+        # REGIONS TREATED (collapsible)
+        # IMPORTANT: this is a SIBLING of Treatment, not inside it
+        # -----------------------------
         reg_section = CollapsibleSection(left, "Regions Treated", start_open=True)
-        reg_section.grid(row=1, column=0, sticky="ew", padx=8, pady=(0, 8))
+        reg_section.grid(row=1, column=0, sticky="ew", padx=0, pady=(0, 8))
+        reg_section.columnconfigure(0, weight=1)
+
         reg_box = reg_section.content
         reg_box.columnconfigure(0, weight=1)
         reg_box.columnconfigure(1, weight=1)
 
-
-        # two columns for regions
         for i, label in enumerate(self.REGIONS):
             r = i // 2
             c = i % 2
             cb = ttk.Checkbutton(reg_box, text=label, variable=self._region_vars[label])
             cb.grid(row=r, column=c, sticky="w", padx=8, pady=2)
 
-        # Schedule controls
-        ttk.Label(right, text="Visits per week:").grid(row=0, column=0, sticky="w", padx=8, pady=(10, 4))
-        self.freq_cb = ttk.Combobox(right, textvariable=self.freq_var, values=self.FREQ_CHOICES, width=12, state="readonly")
+        # -----------------------------
+        # SCHEDULE (collapsible)
+        # -----------------------------
+        sched_section = CollapsibleSection(right, "Schedule", start_open=True)
+        sched_section.grid(row=0, column=0, sticky="ew", padx=0, pady=(0, 8))
+        sched_section.columnconfigure(0, weight=1)
+
+        sched_box = sched_section.content
+        sched_box.columnconfigure(1, weight=1)
+
+        ttk.Label(sched_box, text="Visits per week:").grid(row=0, column=0, sticky="w", padx=8, pady=(10, 4))
+        self.freq_cb = ttk.Combobox(
+            sched_box, textvariable=self.freq_var, values=self.FREQ_CHOICES, width=12, state="readonly"
+        )
         self.freq_cb.grid(row=0, column=1, sticky="w", padx=8, pady=(10, 4))
-        self.freq_other_entry = ttk.Entry(right, textvariable=self.freq_other_var, width=16)
+        self.freq_other_entry = ttk.Entry(sched_box, textvariable=self.freq_other_var, width=16)
         self.freq_other_entry.grid(row=0, column=2, sticky="w", padx=8, pady=(10, 4))
-        ttk.Label(right, text="(if other)").grid(row=0, column=3, sticky="w", padx=4, pady=(10, 4))
+        ttk.Label(sched_box, text="(if other)").grid(row=0, column=3, sticky="w", padx=4, pady=(10, 4))
 
-        ttk.Label(right, text="Duration (weeks):").grid(row=1, column=0, sticky="w", padx=8, pady=4)
-        self.duration_cb = ttk.Combobox(right, textvariable=self.duration_var, values=self.DURATION_CHOICES, width=12, state="readonly")
+        ttk.Label(sched_box, text="Duration (weeks):").grid(row=1, column=0, sticky="w", padx=8, pady=4)
+        self.duration_cb = ttk.Combobox(
+            sched_box, textvariable=self.duration_var, values=self.DURATION_CHOICES, width=12, state="readonly"
+        )
         self.duration_cb.grid(row=1, column=1, sticky="w", padx=8, pady=4)
-        self.duration_other_entry = ttk.Entry(right, textvariable=self.duration_other_var, width=16)
+        self.duration_other_entry = ttk.Entry(sched_box, textvariable=self.duration_other_var, width=16)
         self.duration_other_entry.grid(row=1, column=2, sticky="w", padx=8, pady=4)
-        ttk.Label(right, text="(if other)").grid(row=1, column=3, sticky="w", padx=4, pady=4)
+        ttk.Label(sched_box, text="(if other)").grid(row=1, column=3, sticky="w", padx=4, pady=4)
 
-        ttk.Label(right, text="Re-evaluation:").grid(row=2, column=0, sticky="w", padx=8, pady=4)
-        self.reeval_cb = ttk.Combobox(right, textvariable=self.reeval_var, values=self.REEVAL_CHOICES, width=12, state="readonly")
+        ttk.Label(sched_box, text="Re-evaluation:").grid(row=2, column=0, sticky="w", padx=8, pady=4)
+        self.reeval_cb = ttk.Combobox(
+            sched_box, textvariable=self.reeval_var, values=self.REEVAL_CHOICES, width=12, state="readonly"
+        )
         self.reeval_cb.grid(row=2, column=1, sticky="w", padx=8, pady=4)
-        self.reeval_other_entry = ttk.Entry(right, textvariable=self.reeval_other_var, width=16)
+        self.reeval_other_entry = ttk.Entry(sched_box, textvariable=self.reeval_other_var, width=16)
         self.reeval_other_entry.grid(row=2, column=2, sticky="w", padx=8, pady=4)
-        ttk.Label(right, text="(if other)").grid(row=2, column=3, sticky="w", padx=4, pady=4)
+        ttk.Label(sched_box, text="(if other)").grid(row=2, column=3, sticky="w", padx=4, pady=4)
 
-        auto_row = ttk.Frame(right)
+        auto_row = ttk.Frame(sched_box)
         auto_row.grid(row=3, column=0, columnspan=4, sticky="w", padx=8, pady=(8, 2))
-        ttk.Checkbutton(auto_row, text="Auto-generate Plan narrative", variable=self.auto_plan_var).pack(side="left")
+        ttk.Checkbutton(
+            auto_row,
+            text="Auto-generate Plan narrative",
+            variable=self.auto_plan_var
+        ).pack(side="left")
 
         # Goals + notes
         mid = ttk.Frame(self)
