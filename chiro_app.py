@@ -15,7 +15,7 @@ from plan_page import PlanPage
 from pathlib import Path
 import tkinter.font as tkfont
 from alerts_popup import AlertsPopup
-from paths import patients_dir
+
 
 #Git Hub to Work Between Computers
 
@@ -35,13 +35,7 @@ from paths import patients_dir
 #If not in ROOT folder, make sure to "cd chiro_emr_desktop" without the quotes
 
 
-# ----------- OPTIONAL: Pillow (Tkinter logo) -----------
-PIL_OK = False
-try:
-    from PIL import Image, ImageTk  # type: ignore
-    PIL_OK = True
-except Exception:
-    PIL_OK = False
+
 
 from pdf_export import REPORTLAB_OK, build_combined_pdf
 from config import (
@@ -68,6 +62,14 @@ from utils import (
 from subjectives import SubjectivesPage
 from objectives import ObjectivesPage
 from ui_pages import TextPage
+
+# ----------- OPTIONAL: Pillow (Tkinter logo) -----------
+PIL_OK = False
+try:
+    from PIL import Image, ImageTk  # type: ignore
+    PIL_OK = True
+except Exception:
+    PIL_OK = False
 
 EXAM_INDEX_FILENAME = "_exam_index.json"
 

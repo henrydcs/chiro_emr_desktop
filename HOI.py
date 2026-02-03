@@ -762,7 +762,7 @@ class HOIPage(ttk.Frame):
         subj = first if first else "The patient"
 
 
-        last = _clean(ctx.get("last", "")) or "the patient"
+        #last = _clean(ctx.get("last", "")) or "the patient"
         clinic = _clean(self._patient_provider().get("clinic", "the clinic")) if callable(self._patient_provider) else "the clinic"
         doi = _clean(ctx.get("doi", "")) or "____/____/________"
         eval_date = "the date of this evaluation"

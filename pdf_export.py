@@ -35,7 +35,7 @@ except ModuleNotFoundError:
 _RE_REEXAM = re.compile(r"^\s*Re-Exam\s+\d+\s*$", re.IGNORECASE)
 _RE_ROF    = re.compile(r"^\s*Review of Findings\s+\d+\s*$", re.IGNORECASE)
 
-from xml.sax.saxutils import escape as xml_escape
+#from xml.sax.saxutils import escape as xml_escape
 from reportlab.platypus import Paragraph, Spacer
 from reportlab.lib.units import inch
 
