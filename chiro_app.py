@@ -15,6 +15,7 @@ from plan_page import PlanPage
 from pathlib import Path
 import tkinter.font as tkfont
 from alerts_popup import AlertsPopup
+from datetime import datetime
 
 
 #Git Hub to Work Between Computers
@@ -93,6 +94,186 @@ def _find_sets(obj, path="root"):
                 return True
 
     return False
+
+
+
+
+import tkinter as tk
+from tkinter import ttk
+from datetime import datetime
+
+
+import tkinter as tk
+from tkinter import ttk
+from datetime import datetime
+
+
+class VisitsDropdown:
+    """
+    Persistent dropdown (toggle open/close) that behaves like a timeline list.
+
+    - +Visits toggles the popup
+    - popup stays open after adding
+    - adding items inserts by datetime (most recent at top)
+    - each item is clickable (placeholder callback)
+    """
+
+    def __init__(self, parent, anchor_widget, on_select=None, get_dt_func=None):
+        self.parent = parent
+        self.anchor_widget = anchor_widget
+
+        # When user clicks a timeline item (later: load that visit/exam)
+        self.on_select = on_select or self._default_on_select
+
+        # For now: datetime.now(). Later: pull date from demographics + manual time.
+        self.get_dt_func = get_dt_func or (lambda: datetime.now())
+
+        # Internal list of items: [{"dt": datetime, "kind": str, "label": str}, ...]
+        self.items = []
+
+        self.popup = None
+        self.container = None
+        self.items_frame = None
+
+    # ---------- UI behavior ----------
+    def is_open(self) -> bool:
+        return self.popup is not None and self.popup.winfo_exists()
+
+    def toggle(self):
+        if self.is_open():
+            self.close()
+        else:
+            self.open()
+
+    def open(self):
+        if self.is_open():
+            return
+
+        self.popup = tk.Toplevel(self.parent)
+        self.popup.overrideredirect(True)
+        self.popup.attributes("-topmost", True)
+
+        # Position under the anchor button
+        self.anchor_widget.update_idletasks()
+        x = self.anchor_widget.winfo_rootx()
+        y = self.anchor_widget.winfo_rooty() + self.anchor_widget.winfo_height()
+        w = max(self.anchor_widget.winfo_width(), 260)
+        self.popup.geometry(f"{w}x10+{x}+{y}")
+
+        self.container = ttk.Frame(self.popup, padding=6, relief="solid", borderwidth=1)
+        self.container.pack(fill="both", expand=True)
+
+        # ----- Add buttons (top of dropdown) -----
+        ttk.Button(self.container, text="Add Chiro Visit", command=lambda: self.add_item("Chiro Visit")).pack(fill="x", pady=(0, 4))
+        ttk.Button(self.container, text="Add Therapy Visit", command=lambda: self.add_item("Therapy Visit")).pack(fill="x", pady=(0, 6))
+
+        ttk.Separator(self.container).pack(fill="x", pady=(0, 6))
+
+        ttk.Button(self.container, text="Add Initial", command=lambda: self.add_item("Initial")).pack(fill="x", pady=(0, 4))
+        ttk.Button(self.container, text="Add Re-Exam", command=lambda: self.add_item("Re-Exam")).pack(fill="x", pady=(0, 4))
+        ttk.Button(self.container, text="Add ROF", command=lambda: self.add_item("ROF")).pack(fill="x", pady=(0, 4))
+        ttk.Button(self.container, text="Add Final", command=lambda: self.add_item("Final")).pack(fill="x", pady=(0, 6))
+
+        ttk.Separator(self.container).pack(fill="x", pady=(0, 6))
+
+        # ----- Timeline list area -----
+        self.items_frame = ttk.Frame(self.container)
+        self.items_frame.pack(fill="both", expand=True)
+
+        self._render_items()
+        self._resize_to_fit()
+
+        # If you want it to close when it loses focus, uncomment:
+        # self.popup.bind("<FocusOut>", lambda e: self.close())
+        self.popup.focus_force()
+
+    def close(self):
+        if self.popup and self.popup.winfo_exists():
+            self.popup.destroy()
+        self.popup = None
+        self.container = None
+        self.items_frame = None
+
+    def _resize_to_fit(self):
+        if not self.is_open():
+            return
+        self.popup.update_idletasks()
+        req_w = self.container.winfo_reqwidth()
+        req_h = self.container.winfo_reqheight()
+
+        anchor_w = self.anchor_widget.winfo_width()
+        w = max(req_w, anchor_w, 260)
+        h = min(max(req_h, 180), 520)
+
+        x = self.anchor_widget.winfo_rootx()
+        y = self.anchor_widget.winfo_rooty() + self.anchor_widget.winfo_height()
+        self.popup.geometry(f"{w}x{h}+{x}+{y}")
+
+    # ---------- Timeline logic (UI-only for now) ----------
+    def add_item(self, kind: str):
+        dt = self.get_dt_func()
+        label = self._format_label(dt, kind)
+        self.items.append({"dt": dt, "kind": kind, "label": label})
+
+        # Sort newest first by dt (date + time)
+        self.items.sort(key=lambda x: x["dt"], reverse=True)
+
+        # Re-render list
+        self._render_items()
+        self._resize_to_fit()
+
+    def _clear_items_frame(self):
+        if not self.items_frame:
+            return
+        for child in self.items_frame.winfo_children():
+            child.destroy()
+
+    def _render_items(self):
+        if not self.items_frame:
+            return
+
+        self._clear_items_frame()
+
+        if not self.items:
+            ttk.Label(self.items_frame, text="(No visits/exams yet)").pack(anchor="w")
+            return
+
+        # Create one button per timeline entry
+        for entry in self.items:
+            lbl = entry["label"]
+
+            def _make_cmd(e=entry):
+                return lambda: self.on_select(e)
+
+            b = ttk.Button(self.items_frame, text=lbl, command=_make_cmd(entry))
+            b.pack(fill="x", pady=2)
+
+    def _default_on_select(self, entry: dict):
+        # Placeholder. Later: load that visit/exam JSON into the Tkinter pages.
+        print(f"[VISITS] selected: {entry['label']} ({entry['dt'].isoformat()})")
+
+    # ---------- Formatting ----------
+    def _format_label(self, dt: datetime, kind: str) -> str:
+        # Example desired:
+        # 02/02/2025 Chiro Visit 3:15pm
+        date_str = dt.strftime("%m/%d/%Y")
+        hour = dt.strftime("%I").lstrip("0") or "0"
+        minute = dt.strftime("%M")
+        ampm = dt.strftime("%p").lower()  # am/pm
+        time_str = f"{hour}:{minute}{ampm}"
+        return f"{date_str} {kind} {time_str}"
+
+
+
+
+
+
+
+
+
+
+
+
 
 def open_with_default_app(path: str):
     try:
@@ -775,6 +956,42 @@ class App(tk.Tk):
             command=self._toggle_demographics
         )
         self.demo_toggle_btn.pack(side="left")
+
+
+
+
+
+        # parent_frame = whatever frame contains your +Final button
+        # Example: parent_frame could be self.exam_btn_row or topbar_right, etc.
+
+        self.btn_visits = ttk.Button(demo_top, text="+Visits")
+        self.btn_visits.pack(side="left", padx=(0, 6))  # tight spacing
+
+        self.visits_dropdown = VisitsDropdown(
+            parent=self,
+            anchor_widget=self.btn_visits,
+            on_select=None,      # later we’ll point this to "load_visit(entry)"
+            get_dt_func=None     # later we’ll pull date from demographics + manual time
+        )
+
+        self.btn_visits.configure(command=self.visits_dropdown.toggle)
+
+        # then your existing +Final button right after...
+        # self.btn_final = ttk.Button(parent_frame, text="+Final", command=...)
+        # self.btn_final.pack(side="left", padx=...)
+
+
+
+
+
+
+
+
+
+
+
+
+
         # --- Add Exam buttons moved to Demographics header row (right side) ---
         self.add_final_btn = ttk.Button(demo_top, text="+ Final", command=self.add_final, style="AddExam.TButton")
         self.add_reexam_btn = ttk.Button(demo_top, text="+ Re-Exam", command=self.add_reexam, style="AddExam.TButton")
