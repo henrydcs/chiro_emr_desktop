@@ -13,6 +13,7 @@ BASE_DIR = os.path.dirname(__file__)
 ASSETS_DIR = os.path.join(BASE_DIR, "assets")
 LOGO_PATH = os.path.join(ASSETS_DIR, "clinic_logo.png")  # PNG
 
+
 CLINIC_NAME = "AUTO ACCIDENT & CHIROPRACTIC CENTER"
 CLINIC_ADDR = "2409 E. Plaza Blvd. National City, CA 91950"
 CLINIC_PHONE_FAX = "Phone: (619) 434-7333 Fax: (619) 434-7399"
@@ -20,7 +21,10 @@ CLINIC_PHONE_FAX = "Phone: (619) 434-7333 Fax: (619) 434-7399"
 # ----------------- CASE STORAGE (PHI-safe, external) -----------------
 ACTIVE_YEAR = 2026
 
-PATIENTS_ROOT = patients_dir()
+PATIENTS_ROOT: Path = patients_dir()
+
+PATIENTS_ID_ROOT: Path = PATIENTS_ROOT / "id_cases"
+PATIENTS_ID_ROOT.mkdir(parents=True, exist_ok=True)
 
 YEAR_CASES_ROOT: Path = PATIENTS_ROOT / f"{ACTIVE_YEAR}cases"
 NEXT_YEAR_CASES_ROOT: Path = PATIENTS_ROOT / f"{ACTIVE_YEAR + 1}cases"
@@ -30,6 +34,7 @@ NEXT_YEAR_CASES_ROOT.mkdir(parents=True, exist_ok=True)
 
 # App settings stored at year root (external data dir)
 SETTINGS_PATH: Path = get_data_dir() / "_app_settings.json"
+
 
 
 AUTOSAVE_DEBOUNCE_MS = 600

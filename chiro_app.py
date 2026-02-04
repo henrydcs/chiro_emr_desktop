@@ -15,7 +15,10 @@ from plan_page import PlanPage
 from pathlib import Path
 import tkinter.font as tkfont
 from alerts_popup import AlertsPopup
-from datetime import datetime
+import uuid
+from config import PATIENTS_ID_ROOT
+
+
 
 
 #Git Hub to Work Between Computers
@@ -98,14 +101,56 @@ def _find_sets(obj, path="root"):
 
 
 
-import tkinter as tk
-from tkinter import ttk
-from datetime import datetime
+# import tkinter as tk
+# from tkinter import ttk
+# from datetime import datetime
 
 
-import tkinter as tk
-from tkinter import ttk
-from datetime import datetime
+# import tkinter as tk
+# from tkinter import ttk
+# from datetime import datetime
+
+PATIENTS_DIR = Path(BASE_DIR) / "patients"
+
+def new_patient_id() -> str:
+    return datetime.now().strftime("%Y%m%d%H%M%S") + "-" + uuid.uuid4().hex[:8]
+
+
+def patient_folder(patient_id: str) -> Path:
+    return PATIENTS_DIR / patient_id
+
+def patient_json_path(patient_id: str) -> Path:
+    return patient_folder(patient_id) / "patient.json"
+
+def save_patient(content: dict):
+    pid = (content.get("patient") or {}).get("patient_id")
+    if not pid:
+        raise ValueError("Missing patient_id; cannot save.")
+    folder = patient_folder(pid)
+    folder.mkdir(parents=True, exist_ok=True)
+
+    path = patient_json_path(pid)
+    path.write_text(json.dumps(content, indent=2), encoding="utf-8")
+
+def load_patient(patient_id: str) -> dict:
+    path = patient_json_path(patient_id)
+    return json.loads(path.read_text(encoding="utf-8"))
+
+# def update_index_for_patient(content: dict):
+#     p = content.get("patient") or {}
+#     pid = p.get("patient_id")
+#     if not pid:
+#         return
+#     index = load_index()
+#     index[pid] = {
+#         "first": (p.get("first") or "").strip(),
+#         "last": (p.get("last") or "").strip(),
+#         "dob": (p.get("dob") or "").strip(),
+#         "phone": (p.get("phone") or "").strip(),
+#     }
+#     save_index(index)
+
+
 
 
 class VisitsDropdown:
@@ -355,7 +400,10 @@ class App(tk.Tk):
         self.last_all_exams_pdf_path = ""
 
         self._mousewheel_target = None
-        self._tk_logo_image = None        
+        self._tk_logo_image = None     
+
+        self.current_patient_id = None
+
 
 
         self._build_ui()       
@@ -378,6 +426,15 @@ class App(tk.Tk):
             self.after(80, self.autoload_last_case_on_startup)
         else:
             self.status_var.set("Ready. (New blank form)")
+    
+    
+    def _ensure_patient_id_in_payload(self, payload: dict) -> str:
+        payload.setdefault("patient", {})
+        if not getattr(self, "current_patient_id", None):
+            self.current_patient_id = new_patient_id()
+        payload["patient"]["patient_id"] = self.current_patient_id
+        return self.current_patient_id
+
 
     def show_alerts_popup(self, path: str):
         if getattr(self, "_alerts_popup_open", False):
@@ -505,10 +562,10 @@ class App(tk.Tk):
         self._apply_exam_color_theme()
 
     def _ensure_patient_for_dynamic_exam(self) -> bool:
-        if self.get_current_patient_root():
-            return True
-        messagebox.showinfo("Add Exam", "Enter Last, First, DOB, and DOI first (so the new exam can be saved under the patient).")
-        return False
+        if not getattr(self, "current_patient_id", None):
+            self.current_patient_id = new_patient_id()
+        return True
+
 
     def add_reexam(self):
         if not self._ensure_patient_for_dynamic_exam():
@@ -1524,13 +1581,18 @@ class App(tk.Tk):
 
     # ---------- Patient folders / paths ----------
 
-    def get_current_patient_root(self) -> str | None:
-        return get_patient_root_dir(
-            self.last_name_var.get(),
-            self.first_name_var.get(),
-            self.dob_var.get(),
-            self.doi_var.get(),
-        )
+    
+    #PATIENTS_DIR = Path("patients")
+
+    def get_current_patient_root(self):
+        pid = getattr(self, "current_patient_id", None)
+        if not pid:
+            return None
+        return str(PATIENTS_ID_ROOT / pid)
+
+
+
+
 
     def compute_exam_path(self, exam_name: str | None = None) -> str | None:
         exam_name = exam_name or self.current_exam.get()
@@ -1692,7 +1754,7 @@ class App(tk.Tk):
         else:
             obj_struct = {"global": {}, "blocks": []}
 
-        return {
+        payload =  {
             "schema_version": 1,
             "saved_at": datetime.now().isoformat(timespec="seconds"),
             "exam": self.current_exam.get(),
@@ -1717,6 +1779,14 @@ class App(tk.Tk):
                 "plan": self.plan_page.get_struct(),
             }
         }
+    
+        # ✅ Ensure stable patient_id
+        payload.setdefault("patient", {})
+        if not getattr(self, "current_patient_id", None):
+            self.current_patient_id = new_patient_id()
+        payload["patient"]["patient_id"] = self.current_patient_id
+
+        return payload
       
     
 
@@ -1741,40 +1811,28 @@ class App(tk.Tk):
 
 
     def save_case_now(self):
-        # 1) Try the normal computed path first (your usual "Save Exam Now")
+        """
+        Save the current exam to the patient_id-based auto path.
+        No Save-As dialog. If we can't compute the path, show an error and stop.
+        """
+
+        # Ensure patient id exists so we can compute a path (no Save As dialog)
+        if not getattr(self, "current_patient_id", None):
+            self.current_patient_id = new_patient_id()
+
         computed = self.compute_exam_path()
-        if computed:
-            try:
-                self.save_case_to_path(computed)
-            except Exception as e:
-                messagebox.showerror("Save Failed", f"Could not save exam.\n\n{e}")
-                return
-
-            messagebox.showinfo(
-                "Saved",
-                f"Saved ({self.current_exam.get()}):\n{computed}"
-            )
-            return
-
-        # 2) If we couldn't compute a path (missing name/date/etc), fall back to Save As...
-        default_name = f"{safe_slug(self.current_exam.get())}_{datetime.now().strftime('%Y%m%d_%H%M%S')}.json"
-        path = filedialog.asksaveasfilename(
-            defaultextension=".json",
-            filetypes=[("JSON files", "*.json")],
-            initialfile=default_name,
-            initialdir=str(YEAR_CASES_ROOT),
-            title="Save Exam As..."
-        )
-        if not path:
+        if not computed:
+            messagebox.showerror("Save Failed", "Could not compute save path.")
             return
 
         try:
-            self.save_case_to_path(path)
+            self.save_case_to_path(computed)
         except Exception as e:
             messagebox.showerror("Save Failed", f"Could not save exam.\n\n{e}")
             return
 
-        messagebox.showinfo("Saved", f"Saved:\n{path}")
+        messagebox.showinfo("Saved", f"Saved ({self.current_exam.get()}):\n{computed}")
+
 
 
     def load_case_manual(self):
@@ -2177,6 +2235,8 @@ class App(tk.Tk):
         self.last_exam_pdf_paths = {e: "" for e in self.exams}
         self.last_all_exams_pdf_path = ""
         self.status_var.set("New case started. Previous cases/files are unchanged.")
+        self.current_patient_id = None
+
 
 
 if __name__ == "__main__":
