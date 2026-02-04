@@ -358,15 +358,26 @@ class App(tk.Tk):
         self._tk_logo_image = None        
 
 
-        self._build_ui()
+        self._build_ui()       
         self._wire_autosave_triggers()
 
         self._apply_demographics_visibility()
 
-        alerts_path = os.path.join(BASE_DIR, "alerts_dashboard.json")
+        alerts_path = os.path.join(BASE_DIR, "alerts_dashboard.json")        
 
         # Pop up every time the app launches
         self.after_idle(lambda: self.show_alerts_popup(alerts_path))
+
+        # Mousewheel scroll routing (Subjectives canvas)
+        self.bind_all("<MouseWheel>", self._on_mousewheel)
+        self.bind_all("<Button-4>", self._on_mousewheel_linux_up)
+        self.bind_all("<Button-5>", self._on_mousewheel_linux_down)
+
+        # Start behavior
+        if not self._start_blank:
+            self.after(80, self.autoload_last_case_on_startup)
+        else:
+            self.status_var.set("Ready. (New blank form)")
 
     def show_alerts_popup(self, path: str):
         if getattr(self, "_alerts_popup_open", False):
@@ -381,16 +392,7 @@ class App(tk.Tk):
         
 
         
-        # Mousewheel scroll routing (Subjectives canvas)
-        self.bind_all("<MouseWheel>", self._on_mousewheel)
-        self.bind_all("<Button-4>", self._on_mousewheel_linux_up)
-        self.bind_all("<Button-5>", self._on_mousewheel_linux_down)
-
-        # Start behavior
-        if not self._start_blank:
-            self.after(80, self.autoload_last_case_on_startup)
-        else:
-            self.status_var.set("Ready. (New blank form)")
+       
 
     def request_live_preview_refresh(self):
         # Debounce: cancel pending refresh and schedule a new one
