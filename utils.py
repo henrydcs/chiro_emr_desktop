@@ -2,6 +2,7 @@
 import os
 import re
 from datetime import datetime
+from pathlib import Path
 
 from config import (
     YEAR_CASES_ROOT,
@@ -9,6 +10,63 @@ from config import (
     PATIENT_SUBDIR_IMAGING, PATIENT_SUBDIR_ATTORNEY, PATIENT_SUBDIR_BILLING, PATIENT_SUBDIR_MESSAGES,
     REGION_LABELS
 )
+
+def ensure_named_patient_folder(root: Path, pid: str, last: str, first: str, dob: str = "") -> Path:
+    """
+    Ensures a patient folder exists. If demographics are available, renames the folder
+    to a name-based format for alphabetized browsing.
+    """
+    root = Path(root)
+    root.mkdir(parents=True, exist_ok=True)
+
+    # Find existing folder (pid-only or already-named)
+    current = find_patient_folder_by_id(root, pid)
+    if current is None:
+        current = root / pid
+        current.mkdir(parents=True, exist_ok=True)
+
+    # If no usable name yet, keep pid folder
+    last = (last or "").strip()
+    first = (first or "").strip()
+    dob = (dob or "").strip()
+    if not (last or first):
+        return current
+
+    # Desired alphabetized folder name
+    desired_name = patient_folder_name(pid, last, first, dob)
+    desired = root / desired_name
+
+    # Already correct
+    if current.resolve() == desired.resolve():
+        return current
+
+    # If a folder with the desired name already exists, use it
+    if desired.exists():
+        return desired
+
+    # Rename
+    try:
+        current.rename(desired)
+        return desired
+    except Exception:
+        # Fallback: if rename fails, keep using current
+        return current
+
+
+
+def find_patient_folder_by_id(root: Path, pid: str) -> Path | None:
+    # exact match (old style)
+    p = root / pid
+    if p.exists():
+        return p
+
+    # new style: LAST_FIRST__...__PID
+    for child in root.iterdir():
+        if child.is_dir() and child.name.endswith(f"__{pid}"):
+            return child
+
+    return None
+
 
 def safe_slug(text: str) -> str:
     t = (text or "").strip().lower()
@@ -67,15 +125,19 @@ def _date_for_folder(mmddyyyy_or_yyyy_mm_dd: str) -> str:
         # fallback, still stable-ish
         return s.replace("/", "-").strip()
 
-def patient_folder_name(last: str, first: str, dob: str, doi: str) -> str:
-    """
-    ONE stable folder name per patient/case:
-    'Last, First, DOB_YYYY-MM-DD, DOI_YYYY-MM-DD'
-    """
-    lf = to_last_first(last, first).strip() or "Patient"
-    dob_key = _date_for_folder(dob)
-    doi_key = _date_for_folder(doi)
-    return f"{lf}, DOB_{dob_key}, DOI_{doi_key}"
+def patient_folder_name(pid: str, last: str, first: str, dob: str = "") -> str:
+    def clean(s: str) -> str:
+        return safe_slug(s).replace("-", "_")
+
+    last_c = clean(last)
+    first_c = clean(first)
+
+    dob_c = (dob or "").strip()
+    dob_part = f"DOB_{clean(dob_c)}" if dob_c else "DOB_unknown"
+
+    # ✅ alphabetizes by last name
+    return f"{last_c}_{first_c}__{dob_part}__{pid}"
+
 
 def get_patient_root_dir(last: str, first: str, dob: str, doi: str) -> str | None:
     ensure_year_root()

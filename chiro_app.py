@@ -59,7 +59,8 @@ from utils import (
     safe_slug,
     normalize_mmddyyyy, today_mmddyyyy,
     get_patient_root_dir, ensure_patient_dirs,
-    to_last_first
+    to_last_first, ensure_named_patient_folder
+
 )
 
 # Pages
@@ -110,7 +111,7 @@ def _find_sets(obj, path="root"):
 # from tkinter import ttk
 # from datetime import datetime
 
-PATIENTS_DIR = Path(BASE_DIR) / "patients"
+PATIENTS_DIR = Path(PATIENTS_ID_ROOT)   # ✅ uses the same root you already configured
 
 def new_patient_id() -> str:
     return datetime.now().strftime("%Y%m%d%H%M%S") + "-" + uuid.uuid4().hex[:8]
@@ -1588,7 +1589,17 @@ class App(tk.Tk):
         pid = getattr(self, "current_patient_id", None)
         if not pid:
             return None
-        return str(PATIENTS_ID_ROOT / pid)
+
+        folder = ensure_named_patient_folder(
+            PATIENTS_ID_ROOT,
+            pid,
+            self.last_name_var.get(),
+            self.first_name_var.get(),
+            self.dob_var.get(),
+        )
+        return str(folder)
+
+
 
 
 
@@ -1879,6 +1890,11 @@ class App(tk.Tk):
 
 
             patient = payload.get("patient", {}) or {}
+            # ✅ Restore stable patient_id from file
+            pid = (patient.get("patient_id") or "").strip()
+            if pid:
+                self.current_patient_id = pid
+
             self.last_name_var.set(patient.get("last_name", ""))
             self.first_name_var.set(patient.get("first_name", ""))
             self.dob_var.set(patient.get("dob", ""))
