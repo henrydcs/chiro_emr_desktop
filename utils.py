@@ -139,28 +139,28 @@ def patient_folder_name(pid: str, last: str, first: str, dob: str = "") -> str:
     return f"{last_c}_{first_c}__{dob_part}__{pid}"
 
 
-def get_patient_root_dir(last: str, first: str, dob: str, doi: str) -> str | None:
-    ensure_year_root()
+# def get_patient_root_dir(last: str, first: str, dob: str, doi: str) -> str | None:
+#     ensure_year_root()
 
-    last = (last or "").strip()
-    first = (first or "").strip()
+#     last = (last or "").strip()
+#     first = (first or "").strip()
 
-    dob_n = normalize_mmddyyyy(dob)
-    doi_n = normalize_mmddyyyy(doi)
+#     dob_n = normalize_mmddyyyy(dob)
+#     doi_n = normalize_mmddyyyy(doi)
 
-    # Require all fields
-    if not (last and first and dob_n and doi_n):
-        return None
+#     # Require all fields
+#     if not (last and first and dob_n and doi_n):
+#         return None
 
-    # Require DOB/DOI to be REAL dates so the folder name won't change later
-    try:
-        datetime.strptime(dob_n, "%m/%d/%Y")
-        datetime.strptime(doi_n, "%m/%d/%Y")
-    except Exception:
-        return None
+#     # Require DOB/DOI to be REAL dates so the folder name won't change later
+#     try:
+#         datetime.strptime(dob_n, "%m/%d/%Y")
+#         datetime.strptime(doi_n, "%m/%d/%Y")
+#     except Exception:
+#         return None
 
-    folder = patient_folder_name(last, first, dob_n, doi_n)
-    return os.path.join(str(YEAR_CASES_ROOT), folder)
+#     folder = patient_folder_name(last, first, dob_n, doi_n)
+#     return os.path.join(str(YEAR_CASES_ROOT), folder)
 
 
 

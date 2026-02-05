@@ -58,7 +58,7 @@ from utils import (
     ensure_year_root,
     safe_slug,
     normalize_mmddyyyy, today_mmddyyyy,
-    get_patient_root_dir, ensure_patient_dirs,
+    ensure_patient_dirs,
     to_last_first, ensure_named_patient_folder
 
 )
