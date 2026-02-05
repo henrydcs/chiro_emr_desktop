@@ -11,11 +11,7 @@ from config import (
     REGION_LABELS
 )
 
-def ensure_named_patient_folder(root: Path, pid: str, last: str, first: str, dob: str = "") -> Path:
-    """
-    Ensures a patient folder exists. If demographics are available, renames the folder
-    to a name-based format for alphabetized browsing.
-    """
+def ensure_named_patient_folder(root: Path, pid: str, last: str, first: str) -> Path:
     root = Path(root)
     root.mkdir(parents=True, exist_ok=True)
 
@@ -25,32 +21,72 @@ def ensure_named_patient_folder(root: Path, pid: str, last: str, first: str, dob
         current = root / pid
         current.mkdir(parents=True, exist_ok=True)
 
-    # If no usable name yet, keep pid folder
     last = (last or "").strip()
     first = (first or "").strip()
-    dob = (dob or "").strip()
+
+    # If no usable name yet, keep pid folder
     if not (last or first):
         return current
 
-    # Desired alphabetized folder name
-    desired_name = patient_folder_name(pid, last, first, dob)
+    desired_name = patient_folder_name(pid, last, first)
     desired = root / desired_name
 
     # Already correct
     if current.resolve() == desired.resolve():
         return current
 
-    # If a folder with the desired name already exists, use it
+    # If desired exists, use it
     if desired.exists():
         return desired
 
-    # Rename
     try:
         current.rename(desired)
         return desired
     except Exception:
-        # Fallback: if rename fails, keep using current
         return current
+
+
+
+# def ensure_named_patient_folder(root: Path, pid: str, last: str, first: str, dob: str = "") -> Path:
+#     """
+#     Ensures a patient folder exists. If demographics are available, renames the folder
+#     to a name-based format for alphabetized browsing.
+#     """
+#     root = Path(root)
+#     root.mkdir(parents=True, exist_ok=True)
+
+#     # Find existing folder (pid-only or already-named)
+#     current = find_patient_folder_by_id(root, pid)
+#     if current is None:
+#         current = root / pid
+#         current.mkdir(parents=True, exist_ok=True)
+
+#     # If no usable name yet, keep pid folder
+#     last = (last or "").strip()
+#     first = (first or "").strip()
+#     dob = (dob or "").strip()
+#     if not (last or first):
+#         return current
+
+#     # Desired alphabetized folder name
+#     desired_name = patient_folder_name(pid, last, first, dob)
+#     desired = root / desired_name
+
+#     # Already correct
+#     if current.resolve() == desired.resolve():
+#         return current
+
+#     # If a folder with the desired name already exists, use it
+#     if desired.exists():
+#         return desired
+
+#     # Rename
+#     try:
+#         current.rename(desired)
+#         return desired
+#     except Exception:
+#         # Fallback: if rename fails, keep using current
+#         return current
 
 
 
@@ -124,19 +160,29 @@ def _date_for_folder(mmddyyyy_or_yyyy_mm_dd: str) -> str:
     except Exception:
         # fallback, still stable-ish
         return s.replace("/", "-").strip()
-
-def patient_folder_name(pid: str, last: str, first: str, dob: str = "") -> str:
+    
+def patient_folder_name(pid: str, last: str, first: str) -> str:
     def clean(s: str) -> str:
         return safe_slug(s).replace("-", "_")
 
-    last_c = clean(last)
-    first_c = clean(first)
+    last_c = clean(last) or "unknown"
+    first_c = clean(first) or "unknown"
 
-    dob_c = (dob or "").strip()
-    dob_part = f"DOB_{clean(dob_c)}" if dob_c else "DOB_unknown"
+    return f"{last_c}_{first_c}__{pid}"
 
-    # ✅ alphabetizes by last name
-    return f"{last_c}_{first_c}__{dob_part}__{pid}"
+
+# def patient_folder_name(pid: str, last: str, first: str, dob: str = "") -> str:
+#     def clean(s: str) -> str:
+#         return safe_slug(s).replace("-", "_")
+
+#     last_c = clean(last)
+#     first_c = clean(first)
+
+#     dob_c = (dob or "").strip()
+#     dob_part = f"DOB_{clean(dob_c)}" if dob_c else "DOB_unknown"
+
+#     # ✅ alphabetizes by last name
+#     return f"{last_c}_{first_c}__{dob_part}__{pid}"
 
 
 # def get_patient_root_dir(last: str, first: str, dob: str, doi: str) -> str | None:

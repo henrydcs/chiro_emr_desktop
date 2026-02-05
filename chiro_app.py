@@ -1594,8 +1594,7 @@ class App(tk.Tk):
             PATIENTS_ID_ROOT,
             pid,
             self.last_name_var.get(),
-            self.first_name_var.get(),
-            self.dob_var.get(),
+            self.first_name_var.get(),            
         )
         return str(folder)
 
