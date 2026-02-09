@@ -81,17 +81,28 @@ DX_LIST: list[tuple[str, str]] = [
     ("Sacroiliac joint dysfunction (clinical correlation)", "M53.3"),
 
     # Shoulder / UE pain (keeping generic to avoid laterality pitfalls)
-    ("Shoulder pain", "M25.519"),
-    ("Elbow pain", "M25.529"),
-    ("Wrist pain", "M25.539"),
-    ("Hand pain", "M79.643"),
+    ("Right shoulder sprain", "S43.401A"),
+    ("Left shoulder sprain", "S43.402A"),    
+    ("Right elbow sprain", "S53.401A"),
+    ("Left elbow sprain", "S53.402A"),
+    ("Right wrist sprain", "S63.501A"),
+    ("Left wrist sprain", "S63.502A"),
+    ("Right hand sprain", "S63.601A"),
+    ("Left hand sprain", "S63.602A"),
     ("Finger pain", "M79.646"),
 
     # Hip / LE pain (generic)
-    ("Hip pain", "M25.559"),
-    ("Knee pain", "M25.569"),
-    ("Ankle pain", "M25.579"),
-    ("Foot pain", "M79.673"),
+    ("Right hip sprain", "S73.101A"),
+    ("Left hip sprain", "S73.102A"),
+    ("Right knee sprain", "S83.91XA"),
+    ("Left knee sprain", "S83.92XA"),
+    ("Right ankle sprain", "S93.401A"),
+    ("Left ankle sprain", "S93.402A"),
+    ("Right foot sprain", "S93.601A"),
+    ("Left foot sprain", "S93.602A"),
+
+    
+
 
     # Common soft tissue
     ("Myofascial pain syndrome (clinical correlation)", "M79.18"),
