@@ -48,7 +48,7 @@ UI_PAGES = [
     "Objectives",
     "Diagnosis",
     "Plan",
-    "Document Vault",    
+    "Doc Vault",    
 ]
 
 # ----------------- EXAMS -----------------

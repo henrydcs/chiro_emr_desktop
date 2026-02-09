@@ -17,7 +17,7 @@ VAULT_FOLDERS = [
     "imaging",
     "messages",
     "patient_info",
-    "rofs",
+    "pdfs",
 ]
 
 def open_with_default_app(path: str):

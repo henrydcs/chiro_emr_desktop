@@ -51,34 +51,40 @@ DX_LIST: list[tuple[str, str]] = [
     ("Post-traumatic headache, intractable", "G44.301"),
     ("Cervicogenic headache (clinical correlation)", "R51.9"),
     ("Dizziness / vertigo (clinical correlation)", "R42"),
+    ("----------------------------------", "-----------------------------------"),
 
     # Cervical
-    ("Cervical sprain/strain (whiplash)", "S13.4XXA"),
-    ("Neck pain (cervicalgia)", "M54.2"),
-    ("Cervical radiculopathy (clinical correlation)", "M54.12"),
-    ("Cervical disc displacement / herniation (clinical correlation)", "M50.20"),
-    ("Cervical disc degeneration", "M50.30"),
-    ("Cervical spinal stenosis (clinical correlation)", "M48.02"),
-    ("Cervical spondylosis", "M47.812"),
+    ("Cervical disc displacement", "M50.20"),
+    ("Cervical sprain/strain (whiplash)", "S13.4XXA"),  
+    ("Radiculopathy, Cervical Region", "M54.12"),
     ("Cervical muscle spasm", "M62.838"),
+    ("Cervical disc degeneration", "M50.30"),
+    ("Cervical spinal stenosis", "M48.02"),
+    ("Cervical spondylosis", "M47.812"),    
+    ("Neck pain (cervicalgia)", "M54.2"),
+    ("-----------------------------------", "-------------------------------"),
 
     # Thoracic
+    ("Thoracic disc displacement", "M51.24"),
     ("Thoracic sprain/strain", "S23.3XXA"),
-    ("Thoracic spine pain", "M54.6"),
-    ("Thoracic radiculopathy (clinical correlation)", "M54.14"),
-    ("Thoracic spondylosis", "M47.814"),
     ("Thoracic muscle spasm", "M62.830"),
+    ("Thoracic radiculopathy", "M54.14"),
+    ("Thoracic spine pain", "M54.6"),    
+    ("Thoracic spondylosis", "M47.814"),
+    ("----------------------------------", "--------------------------"),
+    
 
     # Lumbar / SI
+    ("Lumbar disc displacement", "M51.26"),
     ("Lumbar sprain/strain", "S33.5XXA"),
-    ("Low back pain", "M54.50"),
-    ("Lumbar radiculopathy (clinical correlation)", "M54.16"),
-    ("Lumbar disc displacement / herniation (clinical correlation)", "M51.26"),
-    ("Lumbar disc degeneration", "M51.36"),
-    ("Lumbar spinal stenosis (clinical correlation)", "M48.061"),
-    ("Lumbar spondylosis", "M47.816"),
+    ("Lumbar radiculopathy", "M54.16"),
     ("Lumbar muscle spasm", "M62.830"),
-    ("Sacroiliac joint dysfunction (clinical correlation)", "M53.3"),
+    ("Sacroiliac joint dysfunction", "M53.3"),
+    ("Low back pain", "M54.50"),        
+    ("Lumbar disc degeneration", "M51.36"),
+    ("Lumbar spinal stenosis", "M48.061"),
+    ("Lumbar spondylosis", "M47.816"),    
+    ("--------------------------------", "---------------------------"), 
 
     # Shoulder / UE pain (keeping generic to avoid laterality pitfalls)
     ("Right shoulder sprain", "S43.401A"),
@@ -90,6 +96,7 @@ DX_LIST: list[tuple[str, str]] = [
     ("Right hand sprain", "S63.601A"),
     ("Left hand sprain", "S63.602A"),
     ("Finger pain", "M79.646"),
+    ("--------------------------------", "---------------------------"), 
 
     # Hip / LE pain (generic)
     ("Right hip sprain", "S73.101A"),
@@ -100,20 +107,21 @@ DX_LIST: list[tuple[str, str]] = [
     ("Left ankle sprain", "S93.402A"),
     ("Right foot sprain", "S93.601A"),
     ("Left foot sprain", "S93.602A"),
-
-    
-
-
-    # Common soft tissue
-    ("Myofascial pain syndrome (clinical correlation)", "M79.18"),
-    ("Contusion (clinical correlation)", "T14.8XXA"),
-    ("Other (free text)", ""),
+    ("--------------------------------", "---------------------------"),   
 
     # Incident / mechanism (useful in PI documentation)
     ("Driver injured in unspecified motor-vehicle accident, traffic (initial encounter)", "V89.2XXA"),
     ("Passenger injured in unspecified motor-vehicle accident, traffic (initial encounter)", "V89.2XXA"),
     ("Fall on same level from slipping/tripping (initial encounter)", "W01.0XXA"),
     ("Dog bite (initial encounter)", "W54.0XXA"),
+    ("--------------------------------", "---------------------------"), 
+
+    # Common soft tissue
+    ("Myofascial pain syndrome (clinical correlation)", "M79.18"),
+    ("Contusion (clinical correlation)", "T14.8XXA"),
+    ("Other (free text)", ""),
+
+    
 ]
 
 
@@ -193,7 +201,7 @@ class DxBlock(ttk.Frame):
             textvariable=self.dx_display_var,
             values=DX_DISPLAY_VALUES,
             state="readonly",
-            width=62,
+            width=44,
         )
         self.dx_cb.pack(side="left", padx=(6, 0), fill="x", expand=True)
 
@@ -202,7 +210,7 @@ class DxBlock(ttk.Frame):
         row2.pack(fill="x", pady=(6, 0))
 
         ttk.Label(row2, text="Edit:").pack(side="left")
-        self.edit_entry = ttk.Entry(row2, textvariable=self.edit_var, width=46)
+        self.edit_entry = ttk.Entry(row2, textvariable=self.edit_var, width=30)
         self.edit_entry.pack(side="left", padx=(6, 8), fill="x", expand=True)
 
         self.up_btn = ttk.Button(row2, text="↑", width=3, command=lambda: self._call(self._on_move_up))
@@ -215,7 +223,7 @@ class DxBlock(ttk.Frame):
         self.dx_display_var.trace_add("write", lambda *_: self._call(self._on_change))
         self.edit_var.trace_add("write", lambda *_: self._call(self._on_change))
 
-        self.configure(padding=8)
+        self.configure(padding=4)
 
     def _call(self, fn):
         if callable(fn):
@@ -278,7 +286,7 @@ class DiagnosisPage(ttk.Frame):
     - Auto-build Diagnosis Text (editable) unless user starts typing into it
     """
 
-    def __init__(self, parent, on_change_callback, max_blocks: int = 9):
+    def __init__(self, parent, on_change_callback, max_blocks: int = 21):
         super().__init__(parent)
         self.on_change_callback = on_change_callback
         self.max_blocks = max_blocks
@@ -302,6 +310,53 @@ class DiagnosisPage(ttk.Frame):
 
         self._build_ui()
         self.add_block()  # start with #1
+        
+    def _on_blocks_inner_configure(self, _evt=None):
+        # Update the scrollable region to encompass the inner frame
+        try:
+            self.blocks_canvas.configure(scrollregion=self.blocks_canvas.bbox("all"))
+        except Exception:
+            pass
+
+    def _on_blocks_canvas_configure(self, event):
+        # Make the inner frame match the canvas width (prevents weird clipping)
+        try:
+            self.blocks_canvas.itemconfig(self.blocks_window, width=event.width)
+        except Exception:
+            pass
+
+    def _bind_blocks_mousewheel(self, bind: bool):
+        # Windows / Mac
+        if bind:
+            self.blocks_canvas.bind_all("<MouseWheel>", self._on_blocks_mousewheel)
+            # Linux
+            self.blocks_canvas.bind_all("<Button-4>", self._on_blocks_mousewheel_linux_up)
+            self.blocks_canvas.bind_all("<Button-5>", self._on_blocks_mousewheel_linux_down)
+        else:
+            self.blocks_canvas.unbind_all("<MouseWheel>")
+            self.blocks_canvas.unbind_all("<Button-4>")
+            self.blocks_canvas.unbind_all("<Button-5>")
+
+    def _on_blocks_mousewheel(self, event):
+        # Windows wheel: event.delta is typically ±120 per notch
+        try:
+            delta = int(-1 * (event.delta / 120))
+            self.blocks_canvas.yview_scroll(delta, "units")
+        except Exception:
+            pass
+
+    def _on_blocks_mousewheel_linux_up(self, _event):
+        try:
+            self.blocks_canvas.yview_scroll(-1, "units")
+        except Exception:
+            pass
+
+    def _on_blocks_mousewheel_linux_down(self, _event):
+        try:
+            self.blocks_canvas.yview_scroll(+1, "units")
+        except Exception:
+            pass
+
 
         # apply startup collapsed state
         self._apply_collapse_states(startup=True)
@@ -401,18 +456,43 @@ class DiagnosisPage(ttk.Frame):
         ttk.Separator(self).pack(fill="x", padx=padx, pady=(6, 10))
 
         # -------------------------
-        # Blocks grid frame (collapsible)
+        # Blocks grid frame (collapsible)  ✅ NOW SCROLLABLE
         # -------------------------
         self.blocks_frame = ttk.Frame(self)
-        self.blocks_frame.pack(fill="x", padx=padx, pady=(0, 10))
+        self.blocks_frame.pack(fill="both", expand=True, padx=padx, pady=(0, 10))
 
-        self.grid_area = ttk.Frame(self.blocks_frame)
-        self.grid_area.pack(fill="x")
+        # Canvas + Scrollbar container
+        blocks_container = ttk.Frame(self.blocks_frame)
+        blocks_container.pack(fill="both", expand=True)
 
-        for r in range(3):
-            self.grid_area.rowconfigure(r, weight=1)
-        for c in range(3):
-            self.grid_area.columnconfigure(c, weight=1)
+        self.blocks_canvas = tk.Canvas(blocks_container, highlightthickness=0)
+        self.blocks_vsb = ttk.Scrollbar(blocks_container, orient="vertical", command=self.blocks_canvas.yview)
+        self.blocks_canvas.configure(yscrollcommand=self.blocks_vsb.set)
+
+        self.blocks_canvas.pack(side="left", fill="both", expand=True)
+        self.blocks_vsb.pack(side="right", fill="y")
+
+        # Inner frame inside the canvas (this is where your grid goes)
+        self.blocks_inner = ttk.Frame(self.blocks_canvas)
+        self.blocks_window = self.blocks_canvas.create_window((0, 0), window=self.blocks_inner, anchor="nw")
+
+        # ✅ your existing grid area lives inside blocks_inner
+        self.grid_area = ttk.Frame(self.blocks_inner)
+        self.grid_area.pack(fill="both", expand=True)
+
+        # Only need to configure columns for 2-across layout
+        self.grid_area.columnconfigure(0, weight=1)
+        self.grid_area.columnconfigure(1, weight=1)
+
+
+        # Keep scrollregion and width in sync
+        self.blocks_inner.bind("<Configure>", self._on_blocks_inner_configure)
+        self.blocks_canvas.bind("<Configure>", self._on_blocks_canvas_configure)
+
+        # Mousewheel scrolling only when hovering over the diagnosis blocks area
+        self.blocks_canvas.bind("<Enter>", lambda e: self._bind_blocks_mousewheel(True))
+        self.blocks_canvas.bind("<Leave>", lambda e: self._bind_blocks_mousewheel(False))
+
 
         # -------------------------
         # -------------------------
@@ -617,16 +697,19 @@ class DiagnosisPage(ttk.Frame):
         self._on_blocks_changed()
 
     def _layout_blocks(self):
-        # clear current grid placements
         for child in self.grid_area.winfo_children():
             child.grid_forget()
 
-        # lay out in 3 down x 3 across
         for i, blk in enumerate(self.blocks):
             blk.set_number(i + 1)
-            r = i % 3     # 0,1,2 down
-            c = i // 3    # 0,1,2 across
+            r = i // 2
+            c = i % 2
             blk.grid(row=r, column=c, sticky="nsew", padx=6, pady=6)
+
+        self.grid_area.update_idletasks()
+        self._on_blocks_inner_configure()
+
+
 
     # ---------- text sync ----------
     def _on_blocks_changed(self):

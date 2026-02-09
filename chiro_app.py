@@ -1207,7 +1207,7 @@ class App(tk.Tk):
             "Objectives": self.objectives_page,
             "Diagnosis": self.diagnosis_page,
             "Plan": self.plan_page,
-            "Document Vault": self.doc_vault_page,
+            "Doc Vault": self.doc_vault_page,
         }
 
         for page in self.pages.values():
