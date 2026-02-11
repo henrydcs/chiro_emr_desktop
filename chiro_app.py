@@ -151,6 +151,19 @@ def load_patient(patient_id: str) -> dict:
 #     }
 #     save_index(index)
 
+ALERTS_FILENAME = "alerts_dashboard.json"
+
+def _ensure_json_file(path: str, default_obj=None):
+    default_obj = {} if default_obj is None else default_obj
+    try:
+        os.makedirs(os.path.dirname(path), exist_ok=True)
+        if not os.path.exists(path):
+            with open(path, "w", encoding="utf-8") as f:
+                json.dump(default_obj, f, indent=2)
+    except Exception:
+        pass
+
+
 
 
 
@@ -363,6 +376,8 @@ class App(tk.Tk):
 
         self._alerts_popup_open = False
 
+        self._alerts_popup_path = None
+        self._alerts_popup_win = None
 
         self._live_preview_job = None  
 
@@ -412,10 +427,10 @@ class App(tk.Tk):
 
         self._apply_demographics_visibility()
 
-        alerts_path = os.path.join(BASE_DIR, "alerts_dashboard.json")        
+        # If no patient is loaded yet, this will use the global file;
+        # once a patient loads, we'll open that patient's file (below).
+        self.after_idle(self.show_current_patient_alerts_popup)
 
-        # Pop up every time the app launches
-        self.after_idle(lambda: self.show_alerts_popup(alerts_path))
 
         # Mousewheel scroll routing (Subjectives canvas)
         self.bind_all("<MouseWheel>", self._on_mousewheel)
@@ -428,6 +443,24 @@ class App(tk.Tk):
         else:
             self.status_var.set("Ready. (New blank form)")
     
+    def _alerts_path_for_current_patient(self) -> str:
+        """
+        Patient-specific alerts JSON path.
+        Falls back to a global file if no patient yet.
+        """
+        patient_root = self.get_current_patient_root()
+        if patient_root:
+            return os.path.join(patient_root, ALERTS_FILENAME)
+        return os.path.join(BASE_DIR, ALERTS_FILENAME)
+
+    def show_current_patient_alerts_popup(self):
+        """
+        Open alerts popup using the current patient's alerts file.
+        """
+        path = self._alerts_path_for_current_patient()
+        _ensure_json_file(path, default_obj={})
+        self.show_alerts_popup(path)
+
     
     def _ensure_patient_id_in_payload(self, payload: dict) -> str:
         payload.setdefault("patient", {})
@@ -438,14 +471,40 @@ class App(tk.Tk):
 
 
     def show_alerts_popup(self, path: str):
+        # If popup is already open but for a DIFFERENT patient/path, close it
         if getattr(self, "_alerts_popup_open", False):
-            return
+            if getattr(self, "_alerts_popup_path", None) != path:
+                try:
+                    if self._alerts_popup_win and self._alerts_popup_win.winfo_exists():
+                        self._alerts_popup_win.destroy()
+                except Exception:
+                    pass
+                self._alerts_popup_open = False
+            else:
+                return  # already open for the correct path
+
         self._alerts_popup_open = True
+        self._alerts_popup_path = path
 
-        pop = AlertsPopup(self, json_path=path)
+        last = (self.last_name_var.get() or "").strip()
+        first = (self.first_name_var.get() or "").strip()
+        dob = (self.dob_var.get() or "").strip()
 
-        # When popup closes, allow it to open again
-        pop.bind("<Destroy>", lambda e: setattr(self, "_alerts_popup_open", False))
+        name = ", ".join([x for x in [last, first] if x]) or "(No patient loaded)"
+        patient_label = f"{name} | DOB: {dob or 'blank'}"
+
+        pop = AlertsPopup(self, json_path=path, patient_label=patient_label)
+
+
+        self._alerts_popup_win = pop
+
+        def _on_close(_e=None):
+            self._alerts_popup_open = False
+            self._alerts_popup_path = None
+            self._alerts_popup_win = None
+
+        pop.bind("<Destroy>", _on_close)
+
 
         
 
@@ -1946,6 +2005,10 @@ class App(tk.Tk):
             self._rebuild_exam_nav_buttons()
 
             self._apply_exam_color_theme()
+
+            # After loading patient_id + names, show that patient's alerts file
+            self.after_idle(self.show_current_patient_alerts_popup)
+
         finally:
             self._loading = False
                    

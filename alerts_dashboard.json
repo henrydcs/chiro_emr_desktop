@@ -1,20 +1,9 @@
 {
   "alerts": {
-    "red_flags": [
-      "DFDFD",
-      "dsds",
-      "sd",
-      "sd",
-      "s",
-      "d",
-      "s",
-      "ss"
-    ],
-    "rapport": [
-      "FDFDF"
-    ],
+    "red_flags": [],
+    "rapport": [],
     "conversation_prompts": [
-      "DFDF"
+      "This is for Ab Cd"
     ]
   }
 }

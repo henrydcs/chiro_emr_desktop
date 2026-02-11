@@ -30,14 +30,29 @@ class AlertsPopup(tk.Toplevel):
     - Bottom: Conversation prompts / follow-ups
     """
 
-    def __init__(self, master: tk.Tk, json_path: str, title: str = "Alerts / Conversation Notes"):
+    def __init__(self, master: tk.Tk, json_path: str, title: str = "Alerts / Conversation Notes", patient_label: str = ""):
         super().__init__(master)
         self.master = master
         self.json_path = json_path
 
-        self.title(title)
-        self.geometry("900x520")
+        self.patient_label = (patient_label or "").strip()
+
+        # Put patient in the window title too
+        if self.patient_label:
+            self.title(f"{title} — {self.patient_label}")
+        else:
+            self.title(title)
+
+        
+        sw = self.winfo_screenwidth()
+        sh = self.winfo_screenheight()
+
+        w = min(1100, int(sw * 0.70))
+        h = min(750,  int(sh * 0.70))
+
+        self.geometry(f"{w}x{h}")
         self.minsize(760, 420)
+
 
         # Make it feel like a modal dialog
         self.transient(master)
@@ -87,37 +102,55 @@ class AlertsPopup(tk.Toplevel):
         except Exception as e:
             messagebox.showerror("Save failed", f"Could not save alerts JSON:\n{e}")
 
-    # ----------------- UI -----------------
     def _build_ui(self) -> None:
         root = ttk.Frame(self, padding=10)
         root.pack(fill="both", expand=True)
 
-        root.columnconfigure(0, weight=1)
-        root.columnconfigure(1, weight=1)
-        root.rowconfigure(0, weight=1)
-        root.rowconfigure(1, weight=1)
+        # Patient header
+        if getattr(self, "patient_label", ""):
+            hdr = ttk.Label(root, text=self.patient_label, font=("Segoe UI", 11, "bold"))
+            hdr.grid(row=0, column=0, columnspan=2, sticky="w", pady=(0, 8))
+            ttk.Separator(root).grid(row=1, column=0, columnspan=2, sticky="ew", pady=(0, 10))
+            start_row = 2
+        else:
+            start_row = 0
+
+        # ✅ responsive columns (choose one)
+        # root.columnconfigure(0, weight=1)
+        # root.columnconfigure(1, weight=1)
+
+        root.columnconfigure(0, weight=1)  # red flags narrower
+        root.columnconfigure(1, weight=2)  # rapport wider
+
+        # ✅ responsive rows
+        root.rowconfigure(start_row + 0, weight=1)
+        root.rowconfigure(start_row + 1, weight=1)
+
+        # (REMOVE these — they break start_row responsiveness)
+        # root.rowconfigure(0, weight=1)
+        # root.rowconfigure(1, weight=1)
 
         # LEFT: Red flags
         lf = ttk.LabelFrame(root, text="Red flags / watch-outs")
-        lf.grid(row=0, column=0, sticky="nsew", padx=(0, 6), pady=(0, 6))
+        lf.grid(row=start_row + 0, column=0, sticky="nsew", padx=(0, 6), pady=(0, 6))
         lf.rowconfigure(0, weight=1)
         lf.columnconfigure(0, weight=1)
 
         self.red_text = tk.Text(lf, wrap="word", height=10)
         self.red_text.grid(row=0, column=0, sticky="nsew", padx=6, pady=6)
 
-        # RIGHT: Rapport / hobbies
+        # RIGHT: Rapport
         rf = ttk.LabelFrame(root, text="Rapport notes (hobbies, family, work, preferences)")
-        rf.grid(row=0, column=1, sticky="nsew", padx=(6, 0), pady=(0, 6))
+        rf.grid(row=start_row + 0, column=1, sticky="nsew", padx=(6, 0), pady=(0, 6))
         rf.rowconfigure(0, weight=1)
         rf.columnconfigure(0, weight=1)
 
         self.rapport_text = tk.Text(rf, wrap="word", height=10)
         self.rapport_text.grid(row=0, column=0, sticky="nsew", padx=6, pady=6)
 
-        # BOTTOM: Conversation prompts
+        # BOTTOM: Prompts
         bf = ttk.LabelFrame(root, text="Conversation prompts / follow-ups")
-        bf.grid(row=1, column=0, columnspan=2, sticky="nsew")
+        bf.grid(row=start_row + 1, column=0, columnspan=2, sticky="nsew")
         bf.rowconfigure(0, weight=1)
         bf.columnconfigure(0, weight=1)
 
@@ -126,13 +159,13 @@ class AlertsPopup(tk.Toplevel):
 
         # Buttons
         btns = ttk.Frame(root)
-        btns.grid(row=2, column=0, columnspan=2, sticky="e", pady=(10, 0))
+        btns.grid(row=start_row + 2, column=0, columnspan=2, sticky="e", pady=(10, 0))
 
         ttk.Button(btns, text="Save", command=self.on_save).pack(side="right", padx=(6, 0))
         ttk.Button(btns, text="Close", command=self.on_close).pack(side="right")
 
-        # Optional: autosave when focus leaves the window
         self.bind("<FocusOut>", lambda e: self._save_json())
+
 
     def _load_into_widgets(self) -> None:
         alerts = self.data.get("alerts", DEFAULT_ALERTS)
