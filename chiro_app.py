@@ -444,6 +444,10 @@ class App(tk.Tk):
             self.after(80, self.autoload_last_case_on_startup)
         else:
             self.status_var.set("Ready. (New blank form)")
+            
+    def _open_alerts_popup(self):
+        self.show_current_patient_alerts_popup()
+
     
     def _alerts_path_for_current_patient(self) -> str:
         """
@@ -505,14 +509,9 @@ class App(tk.Tk):
             self._alerts_popup_path = None
             self._alerts_popup_win = None
 
-        pop.bind("<Destroy>", _on_close)
-
-
-        
-
-        
+        pop.bind("<Destroy>", _on_close)             
+         
        
-
     def request_live_preview_refresh(self):
         # Debounce: cancel pending refresh and schedule a new one
         if getattr(self, "_live_preview_job", None) is not None:
@@ -1049,6 +1048,13 @@ class App(tk.Tk):
             command=self._toggle_header
         )
         self.header_toggle_btn.pack(side="left")
+        self.alerts_btn = ttk.Button(
+            toggle_row,
+            text="Alerts",
+            command=self._open_alerts_popup
+        )
+        self.alerts_btn.pack(side="left", padx=5)
+
 
         # The actual clinic header frame (this will be hidden/shown)
         self.clinic_frame = ttk.Frame(self.header_container)

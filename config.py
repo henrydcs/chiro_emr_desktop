@@ -63,21 +63,27 @@ EXAM_COLORS = {
 
 # ----------------- UI OPTIONS -----------------
 PAIN_DESCRIPTORS = [
-    "Achy", "Sharp", "Dull", "Burning", "Throbbing",
+    "Achy", "Sharp", "Tension", "Dull", "Burning", "Throbbing",
     "Stabbing", "Shooting", "Tight", "Pressure", "Cramping"
 ]
 
-RADIC_SYMPTOMS = ["None", "Numbness", "Tingling", "Weakness"]
+RADIC_SYMPTOMS = ["None", "Numbness", "Tingling", "Weakness", "Sypmtoms", "Discomfort", "Pain"]
 
 RADIC_LOCATIONS = [
     "(select)",
-    "Right hand", "Left hand",
-    "Right arm", "Left arm",
-    "Right forearm", "Left forearm",
-    "Right fingers", "Left fingers",
-    "Right leg", "Left leg",
-    "Right foot", "Left foot",
-    "Right toes", "Left toes",
+    "Left shoulder", "Right shoulder",    
+    "Left arm", "Right arm",
+    "Left forearm", "Right forearm",
+    "Left hand", "Right hand", 
+    "Left fingers", "Right fingers", "---------------",
+    "Left buttocks", "Right buttocks",
+    "Left hip", "Right hip",
+    "Left thigh", "Right thigh",
+    "Left knee", "Right knee",
+    "Left leg", "Right leg", "-----------------",
+    "Left ankle", "Right ankle",
+    "Left foot", "Right foot", 
+    "Left toes", "Right toes", 
 ]
 
 REGION_OPTIONS = [
