@@ -8,6 +8,9 @@ from xml.sax.saxutils import escape as xml_escape
 from HOIpdf import build_hoi_flowables
 from plan_pdf import build_plan_flowables
 
+from reportlab.platypus import Table, TableStyle
+from reportlab.lib import colors
+
 
 from config import (
     LOGO_PATH, CLINIC_NAME, CLINIC_ADDR, CLINIC_PHONE_FAX,
@@ -1620,6 +1623,11 @@ def build_combined_pdf(path: str, payloads: list):
 
         story.append(Spacer(1, 0.18 * inch))
         story.append(Paragraph("Provider Signature: ________________________________", styles["Normal"]))
+        
+        provider = ((payload.get("patient") or {}).get("provider") or "").strip()
+        if provider:
+            indent = "&nbsp;" * 34
+            story.append(Paragraph(indent + provider, styles["Normal"]))
 
         if idx < len(payloads) - 1:
             story.append(PageBreak())

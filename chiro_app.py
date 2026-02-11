@@ -1990,7 +1990,11 @@ class App(tk.Tk):
 
             self.exam_date_var.set(normalize_mmddyyyy(patient.get("exam_date", "")) or today_mmddyyyy())
             self.claim_var.set(patient.get("claim", ""))
-            self.provider_var.set(patient.get("provider", ""))
+            
+            prov = (patient.get("provider") or "").strip()
+            self.provider_var.set(prov if prov else "Dr. Henry Nelson, DC")
+
+            #self.provider_var.set(patient.get("provider", "Dr. Henry Nelson, DC"))
 
             soap = payload.get("soap", {}) or {}
 
