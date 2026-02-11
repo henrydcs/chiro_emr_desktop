@@ -17,6 +17,12 @@ exports/
 uploads/
 db/
 
+*.pdf
+*.sqlite
+*.sqlite3
+*.db
+
+
 # ==========================
 # Python
 # ==========================
