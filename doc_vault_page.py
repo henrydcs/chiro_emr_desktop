@@ -20,6 +20,25 @@ VAULT_FOLDERS = [
     "pdfs",
 ]
 
+def upsert_vault_file(patient_root: str, folder_key: str, src_path: str, dest_filename: str) -> str:
+    """
+    Copy a file into the patient's vault folder with a deterministic name.
+    If the file exists, overwrite it (replace).
+    Returns the destination path.
+    """
+    vault_root = os.path.join(patient_root, "vault")
+    dest_dir = os.path.join(vault_root, folder_key)
+    os.makedirs(dest_dir, exist_ok=True)
+
+    dest_path = os.path.join(dest_dir, dest_filename)
+    tmp = dest_path + ".tmp"
+
+    shutil.copy2(src_path, tmp)
+    os.replace(tmp, dest_path)  # atomic replace
+
+    return dest_path
+
+
 def open_with_default_app(path: str):
     try:
         if sys.platform.startswith("win"):
@@ -238,6 +257,15 @@ class DocVaultPage(ttk.Frame):
         self.get_patient_root_fn = get_patient_root_fn  # returns patient_root or None
 
         self._build_ui()
+
+    def refresh_current_folder(self):
+        try:
+            self.ensure_vault_dirs()
+            if hasattr(self, "folder_panel") and self.folder_panel:
+                self.folder_panel.refresh()
+        except Exception:
+            pass
+
 
     def _vault_root(self) -> str | None:
         pr = self.get_patient_root_fn()

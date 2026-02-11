@@ -17,6 +17,8 @@ import tkinter.font as tkfont
 from alerts_popup import AlertsPopup
 import uuid
 from config import PATIENTS_ID_ROOT
+from doc_vault_page import upsert_vault_file
+
 
 
 
@@ -866,6 +868,28 @@ class App(tk.Tk):
 
         payload = self.make_payload() or {}
         build_combined_pdf(path, [payload])
+
+        # ✅ Auto-save/replace into Doc Vault -> pdfs/
+        try:
+            patient_root = self.get_current_patient_root()
+            if patient_root:
+                exam = self.current_exam.get()
+                # stable vault filename per exam:
+                vault_name = f"{safe_slug(exam)}.pdf"
+                vault_path = upsert_vault_file(patient_root, "pdfs", path, vault_name)
+
+                # If user is on Doc Vault page and viewing pdfs, refresh list
+                if getattr(self.current_page, "get", lambda: "")() == "Doc Vault":
+                    try:
+                        if getattr(self.doc_vault_page.folder_panel, "folder_key", None) == "pdfs":
+                            self.doc_vault_page.refresh_current_folder()
+                    except Exception:
+                        pass
+
+                self.status_var.set(f"PDF saved + updated in Vault: {os.path.basename(vault_path)}")
+        except Exception as e:
+            print("Vault upsert failed:", e)
+
 
         self.last_exam_pdf_paths[exam] = path
         self.write_settings({
@@ -2164,6 +2188,28 @@ class App(tk.Tk):
 
         payload = self.make_payload() or {}
         build_combined_pdf(path, [payload])
+
+        # ✅ Auto-save/replace into Doc Vault -> pdfs/
+        try:
+            patient_root = self.get_current_patient_root()
+            if patient_root:
+                exam = self.current_exam.get()
+                # stable vault filename per exam:
+                vault_name = f"{safe_slug(exam)}.pdf"
+                vault_path = upsert_vault_file(patient_root, "pdfs", path, vault_name)
+
+                # If user is on Doc Vault page and viewing pdfs, refresh list
+                if getattr(self.current_page, "get", lambda: "")() == "Doc Vault":
+                    try:
+                        if getattr(self.doc_vault_page.folder_panel, "folder_key", None) == "pdfs":
+                            self.doc_vault_page.refresh_current_folder()
+                    except Exception:
+                        pass
+
+                self.status_var.set(f"PDF saved + updated in Vault: {os.path.basename(vault_path)}")
+        except Exception as e:
+            print("Vault upsert failed:", e)
+
 
         self.last_exam_pdf_paths[self.current_exam.get()] = path
         self.write_settings({
