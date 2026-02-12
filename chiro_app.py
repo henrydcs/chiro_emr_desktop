@@ -1280,6 +1280,14 @@ class App(tk.Tk):
             if p == "Subjectives" and "Family/Social History" not in nav_pages:
                 nav_pages.append("Family/Social History")
 
+        # ✅ Add Working Docs page next to Doc Vault
+        if "Working Docs" not in nav_pages:
+            if "Doc Vault" in nav_pages:
+                i = nav_pages.index("Doc Vault")
+                nav_pages.insert(i, "Working Docs")   # right before Doc Vault
+            else:
+                nav_pages.append("Working Docs")
+
         self.page_buttons: dict[str, ttk.Button] = {}
         for page in nav_pages:
             b = ttk.Button(soap_nav, text=page, command=lambda p=page: self.show_page(p))
@@ -1335,6 +1343,9 @@ class App(tk.Tk):
             get_patient_root_fn=self.get_current_patient_root
         )
 
+        self.working_docs_page = ttk.Frame(self.content)
+
+
         # Only pages you want in the LEFT nav go here:
         self.pages = {
             "HOI History": self.hoi_page,
@@ -1343,6 +1354,7 @@ class App(tk.Tk):
             "Objectives": self.objectives_page,
             "Diagnosis": self.diagnosis_page,
             "Plan": self.plan_page,
+            "Working Docs": self.working_docs_page,
             "Doc Vault": self.doc_vault_page,
         }
 
