@@ -75,7 +75,13 @@ def pdf_exam_label(exam_name: str) -> str:
         return "Re-Exam"
     if _RE_ROF.match(s):
         return "Review of Findings"
+    if s.lower().startswith("final"):
+        return "Final Exam"
+    # ✅ NEW: Chiropractic Treatment Note (no numbering)
+    if s.lower().startswith("chiro visit"):
+        return "Chiropractic Treatment Note"
     return s
+
 
 
 def _join_with_and(items: list[str]) -> str:
@@ -1430,7 +1436,8 @@ def build_combined_pdf(path: str, payloads: list):
 
         story.append(ExamStart(exam_name, patient, exam_date))
         print_name = pdf_exam_label(exam_name)
-        story.append(Paragraph(f"<b>Chiropractic PI – {xml_escape(print_name)}</b>", styles["Title"]))
+        story.append(Paragraph(f"<b>{xml_escape(print_name)}</b>", styles["Title"]))
+
 
         story.append(Spacer(1, 0.15 * inch))
 

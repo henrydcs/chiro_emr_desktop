@@ -672,6 +672,20 @@ class App(tk.Tk):
         name = f"Final {n}"
         self._add_dynamic_exam(name, copy_current=True)
 
+    def add_chiro_visit(self):
+        if not self._ensure_patient_for_dynamic_exam():
+            return
+
+        if not messagebox.askyesno(
+            "Create Chiropractic Treatment Note",
+            "Create a NEW Chiropractic Treatment Note?\n\n(This cannot be undone.)"
+        ):
+            return
+
+        n = _next_number(self.exams, "Chiro Visit")
+        name = f"Chiro Visit {n}"
+        self._add_dynamic_exam(name, copy_current=True)
+
 
     def _add_dynamic_exam(self, exam_name: str, copy_current: bool = False):
 
@@ -1142,6 +1156,8 @@ class App(tk.Tk):
 
 
         # --- Add Exam buttons moved to Demographics header row (right side) ---
+        self.btn_chiro = ttk.Button(demo_top, text="+ Chiro Visit", command=self.add_chiro_visit, style="AddExam.TButton" )
+        self.btn_chiro.pack(side="left", padx=5)
         self.add_final_btn = ttk.Button(demo_top, text="+ Final", command=self.add_final, style="AddExam.TButton")
         self.add_reexam_btn = ttk.Button(demo_top, text="+ Re-Exam", command=self.add_reexam, style="AddExam.TButton")
         self.add_rof_btn = ttk.Button(demo_top, text="+ ROF", command=self.add_rof, style="AddExam.TButton")
