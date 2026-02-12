@@ -72,11 +72,11 @@ def _hoi_manual_text_for_exam(exam_name: str, hoi_struct: dict) -> str:
 def pdf_exam_label(exam_name: str) -> str:
     s = (exam_name or "").strip()
     if _RE_REEXAM.match(s):
-        return "Re-Exam"
+        return "Re-Evaluation"
     if _RE_ROF.match(s):
         return "Review of Findings"
     if s.lower().startswith("final"):
-        return "Final Exam"
+        return "Final Evaluation"
     # ✅ NEW: Chiropractic Treatment Note (no numbering)
     if s.lower().startswith("chiro visit"):
         return "Chiropractic Treatment Note"

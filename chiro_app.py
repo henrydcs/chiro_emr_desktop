@@ -1157,7 +1157,7 @@ class App(tk.Tk):
 
         # --- Add Exam buttons moved to Demographics header row (right side) ---
         self.btn_chiro = ttk.Button(demo_top, text="+ Chiro Visit", command=self.add_chiro_visit, style="AddExam.TButton" )
-        self.btn_chiro.pack(side="left", padx=5)
+        self.btn_chiro.pack(in_=demo_top, side="right", padx=(4, 0))
         self.add_final_btn = ttk.Button(demo_top, text="+ Final", command=self.add_final, style="AddExam.TButton")
         self.add_reexam_btn = ttk.Button(demo_top, text="+ Re-Exam", command=self.add_reexam, style="AddExam.TButton")
         self.add_rof_btn = ttk.Button(demo_top, text="+ ROF", command=self.add_rof, style="AddExam.TButton")
