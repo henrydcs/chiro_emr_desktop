@@ -225,8 +225,8 @@ class VisitsDropdown:
         self.container.pack(fill="both", expand=True)
 
         # ----- Add buttons (top of dropdown) -----
-        ttk.Button(self.container, text="Add Chiro Visit", command=lambda: self.add_item("Chiro Visit")).pack(fill="x", pady=(0, 4))
-        ttk.Button(self.container, text="Add Therapy Visit", command=lambda: self.add_item("Therapy Visit")).pack(fill="x", pady=(0, 6))
+        #ttk.Button(self.container, text="Add Chiro Visit", command=lambda: self.add_item("Chiro Visit")).pack(fill="x", pady=(0, 4))
+        #ttk.Button(self.container, text="Add Therapy Visit", command=lambda: self.add_item("Therapy Visit")).pack(fill="x", pady=(0, 6))
 
         ttk.Separator(self.container).pack(fill="x", pady=(0, 6))
 
@@ -686,6 +686,21 @@ class App(tk.Tk):
         name = f"Chiro Visit {n}"
         self._add_dynamic_exam(name, copy_current=True)
 
+    def add_initial(self):
+        if not self._ensure_patient_for_dynamic_exam():
+            return
+
+        if not messagebox.askyesno(
+            "Create Initial Exam",
+            "Create a NEW Initial exam?\n\n(This cannot be undone.)"
+        ):
+            return
+
+        n = _next_number(self.exams, "Initial")
+        name = f"Initial {n}"
+        self._add_dynamic_exam(name, copy_current=True)
+
+
 
     def _add_dynamic_exam(self, exam_name: str, copy_current: bool = False):
 
@@ -1127,17 +1142,29 @@ class App(tk.Tk):
         # parent_frame = whatever frame contains your +Final button
         # Example: parent_frame could be self.exam_btn_row or topbar_right, etc.
 
-        self.btn_visits = ttk.Button(demo_top, text="+Visits")
-        self.btn_visits.pack(side="left", padx=(0, 6))  # tight spacing
 
-        self.visits_dropdown = VisitsDropdown(
-            parent=self,
-            anchor_widget=self.btn_visits,
-            on_select=None,      # later we’ll point this to "load_visit(entry)"
-            get_dt_func=None     # later we’ll pull date from demographics + manual time
-        )
 
-        self.btn_visits.configure(command=self.visits_dropdown.toggle)
+
+
+
+
+        # self.btn_visits = ttk.Button(demo_top, text="+Visits")
+        # self.btn_visits.pack(side="left", padx=(0, 6))  # tight spacing
+
+        # self.visits_dropdown = VisitsDropdown(
+        #     parent=self,
+        #     anchor_widget=self.btn_visits,
+        #     on_select=None,      # later we’ll point this to "load_visit(entry)"
+        #     get_dt_func=None     # later we’ll pull date from demographics + manual time
+        # )
+
+        # self.btn_visits.configure(command=self.visits_dropdown.toggle)
+
+
+
+
+
+
 
         # then your existing +Final button right after...
         # self.btn_final = ttk.Button(parent_frame, text="+Final", command=...)
@@ -1159,11 +1186,15 @@ class App(tk.Tk):
         self.btn_chiro = ttk.Button(demo_top, text="+ Chiro Visit", command=self.add_chiro_visit, style="AddExam.TButton" )
         self.btn_chiro.pack(in_=demo_top, side="right", padx=(4, 0))
         self.add_final_btn = ttk.Button(demo_top, text="+ Final", command=self.add_final, style="AddExam.TButton")
-        self.add_reexam_btn = ttk.Button(demo_top, text="+ Re-Exam", command=self.add_reexam, style="AddExam.TButton")
+        self.add_final_btn.pack(in_=demo_top, side="right", padx=(4, 0))
         self.add_rof_btn = ttk.Button(demo_top, text="+ ROF", command=self.add_rof, style="AddExam.TButton")
         self.add_rof_btn.pack(in_=demo_top, side="right", padx=(4, 0))
+        self.add_reexam_btn = ttk.Button(demo_top, text="+ Re-Exam", command=self.add_reexam, style="AddExam.TButton")       
         self.add_reexam_btn.pack(in_=demo_top, side="right", padx=(4, 0))
-        self.add_final_btn.pack(in_=demo_top, side="right", padx=(4, 0))
+        self.add_initial_btn = ttk.Button(demo_top, text="+ Initial", command=self.add_initial, style="AddExam.TButton")
+        self.add_initial_btn.pack(in_=demo_top, side="right", padx=(4, 0))
+
+
 
 
         # One-line summary row (shown only when collapsed)
