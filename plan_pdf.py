@@ -1,6 +1,7 @@
 # plan_pdf.py
 from __future__ import annotations
 from reportlab.lib.units import inch
+from reportlab.lib.styles import ParagraphStyle
 
 from xml.sax.saxutils import escape as xml_escape
 
@@ -57,40 +58,52 @@ def build_plan_flowables(plan_struct: dict, styles) -> list:
     story.append(Spacer(1, 6))
 
         
-    # Summary grid (quick scan)
-    grid_data = [
-        ["Care Type(s):", ", ".join(care) if care else ""],
-        ["Regions:", ", ".join(regions) if regions else ""],
-        ["Frequency:", f"{freq} / week" if freq else ""],
-        ["Duration:", f"{dur} weeks" if dur else ""],
-        ["Re-evaluation:", reeval],
-        ["Goals:", ", ".join(goals) if goals else ""],
+    # Summary grid (quick scan) - wrapped safely
+    label_w = 1.35 * inch
+    value_w = 5.75 * inch  # adjust if your frame is tighter
+
+    label_style = ParagraphStyle(
+        "PlanLabel",
+        parent=B,
+        fontName="Helvetica-Bold",
+        fontSize=9,
+        leading=11,
+    )
+
+    value_style = ParagraphStyle(
+        "PlanValue",
+        parent=B,
+        fontName="Helvetica",
+        fontSize=9,
+        leading=11,
+    )
+
+    def P(txt: str, style):
+        return Paragraph(xml_escape(txt or ""), style)
+
+    grid_rows = [
+        ("Care Type(s):", ", ".join(care) if care else ""),
+        ("Regions:", ", ".join(regions) if regions else ""),
+        ("Frequency:", f"{freq} / week" if freq else ""),
+        ("Duration:", f"{dur} weeks" if dur else ""),
+        ("Re-evaluation:", reeval or ""),
+        ("Goals:", ", ".join(goals) if goals else ""),
     ]
 
-    label_w = 1.35 * inch
-    value_w = 5.75 * inch
-
-    t = Table(grid_data, colWidths=[label_w, value_w])
-
     # remove completely empty rows (label+blank)
-    grid_data = [row for row in grid_data if _clean(row[1])]
-    
+    grid_rows = [(k, v) for (k, v) in grid_rows if _clean(v)]
 
-    if grid_data:
-        # Let the table size naturally so it aligns flush with the left margin
-        t = Table(grid_data)
+    if grid_rows:
+        grid_data = [[P(k, label_style), P(v, value_style)] for (k, v) in grid_rows]
+
+        t = Table(grid_data, colWidths=[label_w, value_w])
         t.hAlign = "LEFT"
         t.setStyle(
             TableStyle(
                 [
                     ("VALIGN", (0, 0), (-1, -1), "TOP"),
-                    ("FONTNAME", (0, 0), (0, -1), "Helvetica-Bold"),
-                    ("FONTSIZE", (0, 0), (-1, -1), 9),
-
-                    # Make the table start exactly where the title starts
                     ("LEFTPADDING", (0, 0), (-1, -1), 0),
                     ("RIGHTPADDING", (0, 0), (-1, -1), 0),
-
                     ("BOTTOMPADDING", (0, 0), (-1, -1), 3),
                     ("TOPPADDING", (0, 0), (-1, -1), 1),
                     ("LINEBELOW", (0, 0), (-1, -1), 0.25, colors.lightgrey),
@@ -99,6 +112,7 @@ def build_plan_flowables(plan_struct: dict, styles) -> list:
         )
         story.append(t)
         story.append(Spacer(1, 8))
+
 
     # Narrative
     if plan_text:
