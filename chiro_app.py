@@ -18,6 +18,8 @@ from alerts_popup import AlertsPopup
 import uuid
 from config import PATIENTS_ID_ROOT
 from doc_vault_page import upsert_vault_file
+from tk_docs_page import TkDocsPage
+
 
 
 
@@ -169,6 +171,7 @@ def _ensure_json_file(path: str, default_obj=None):
 
 
 
+
 class VisitsDropdown:
     """
     Persistent dropdown (toggle open/close) that behaves like a timeline list.
@@ -230,10 +233,10 @@ class VisitsDropdown:
 
         ttk.Separator(self.container).pack(fill="x", pady=(0, 6))
 
-        ttk.Button(self.container, text="Add Initial", command=lambda: self.add_item("Initial")).pack(fill="x", pady=(0, 4))
-        ttk.Button(self.container, text="Add Re-Exam", command=lambda: self.add_item("Re-Exam")).pack(fill="x", pady=(0, 4))
-        ttk.Button(self.container, text="Add ROF", command=lambda: self.add_item("ROF")).pack(fill="x", pady=(0, 4))
-        ttk.Button(self.container, text="Add Final", command=lambda: self.add_item("Final")).pack(fill="x", pady=(0, 6))
+        # ttk.Button(self.container, text="Add Initial", command=lambda: self.add_item("Initial")).pack(fill="x", pady=(0, 4))
+        # ttk.Button(self.container, text="Add Re-Exam", command=lambda: self.add_item("Re-Exam")).pack(fill="x", pady=(0, 4))
+        # ttk.Button(self.container, text="Add ROF", command=lambda: self.add_item("ROF")).pack(fill="x", pady=(0, 4))
+        # ttk.Button(self.container, text="Add Final", command=lambda: self.add_item("Final")).pack(fill="x", pady=(0, 6))
 
         ttk.Separator(self.container).pack(fill="x", pady=(0, 6))
 
@@ -376,6 +379,13 @@ class App(tk.Tk):
         super().__init__()
         ensure_year_root()    
 
+        style = ttk.Style()
+
+        style.configure(
+            "ActiveExam.TButton",
+            font=("Segoe UI", 10, "bold")
+        )
+
         self._alerts_popup_open = False
 
         self._alerts_popup_path = None
@@ -422,6 +432,13 @@ class App(tk.Tk):
 
         self.current_patient_id = None
 
+        self.current_doc_label_var = tk.StringVar(value="")
+
+        self.exam_date_var.trace_add("write", lambda *_: self._set_current_doc_label())
+
+
+
+
 
 
         self._build_ui()       
@@ -444,7 +461,114 @@ class App(tk.Tk):
             self.after(80, self.autoload_last_case_on_startup)
         else:
             self.status_var.set("Ready. (New blank form)")
+
+    # # --- Docs buttons: create PDF/doc for CURRENT exam (do not create new exams) ---
+
+    # def add_initial_doc(self):
+    #     self._docs_make_pdf_for_current_exam()
+
+    # def add_reexam_doc(self):
+    #     self._docs_make_pdf_for_current_exam()
+
+    # def add_rof_doc(self):
+    #     self._docs_make_pdf_for_current_exam()
+
+    # def add_final_doc(self):
+    #     self._docs_make_pdf_for_current_exam()
+
+    # def add_chiro_doc(self):
+    #     self._docs_make_pdf_for_current_exam()
+
+
+    # def _docs_make_pdf_for_current_exam(self):
+    #     """
+    #     Called by TkDocsPage '+ ...' buttons.
+    #     Uses your working PDF overwrite pipeline, so it always matches the current exam/date.
+    #     """
+    #     try:
+    #         self.export_current_exam_to_pdf_overwrite()
+    #     except Exception as e:
+    #         messagebox.showerror("Docs", f"Could not create/update PDF.\n\n{e}")
+
+    def propagate_demographics_to_all_exams(self):
+        patient_root = self.get_current_patient_root()
+        if not patient_root:
+            return
+
+        exams_dir = os.path.join(patient_root, PATIENT_SUBDIR_EXAMS)
+        if not os.path.isdir(exams_dir):
+            return
+
+        shared = {
+            "patient_id": self.current_patient_id,
+            "last_name": (self.last_name_var.get() or "").strip(),
+            "first_name": (self.first_name_var.get() or "").strip(),
+            "dob": (self.dob_var.get() or "").strip(),
+            "doi": (self.doi_var.get() or "").strip(),
+            "claim": (self.claim_var.get() or "").strip(),
+            "provider": (self.provider_var.get() or "").strip(),
+            "display_name": to_last_first(self.last_name_var.get(), self.first_name_var.get()),
+        }
+
+        for fn in os.listdir(exams_dir):
+            if not fn.lower().endswith(".json"):
+                continue
+            path = os.path.join(exams_dir, fn)
+
+            try:
+                with open(path, "r", encoding="utf-8") as f:
+                    payload = json.load(f) or {}
+            except Exception:
+                continue
+
+            payload.setdefault("patient", {})
+            p = payload["patient"] if isinstance(payload["patient"], dict) else {}
+            payload["patient"] = p
+
+            # keep each exam's own visit date
+            exam_date = (p.get("exam_date") or "").strip()
+
+            p.update(shared)
+
+            if exam_date:
+                p["exam_date"] = exam_date
+
+            tmp = path + ".tmp"
+            with open(tmp, "w", encoding="utf-8") as f:
+                json.dump(payload, f, indent=2)
+            os.replace(tmp, path)
+  
+
+    def _date_for_exam_button(self, exam_name: str) -> str:
+        """
+        Return the exam's saved exam_date (from its JSON) if it exists,
+        otherwise fall back to the current demographics exam_date.
+        """
+        # Fallback first
+        fallback = (self.exam_date_var.get() or "").strip()
+
+        path = self.compute_exam_path(exam_name)
+        if not path or not os.path.exists(path):
+            return fallback
+
+        try:
+            with open(path, "r", encoding="utf-8") as f:
+                payload = json.load(f) or {}
+            patient = payload.get("patient", {}) or {}
+            d = (patient.get("exam_date") or "").strip()
+            return normalize_mmddyyyy(d) or fallback
+        except Exception:
+            return fallback
+
             
+    def _set_current_doc_label(self, date_str: str | None = None, exam_name: str | None = None):
+        if not date_str:
+            date_str = (self.exam_date_var.get() or "").strip()
+        if not exam_name:
+            exam_name = (self.current_exam.get() or "").strip()
+        self.current_doc_label_var.set(f"{date_str}   {exam_name}")
+
+    
     def _open_alerts_popup(self):
         self.show_current_patient_alerts_popup()
 
@@ -609,18 +733,25 @@ class App(tk.Tk):
             if exam.startswith("Review of Findings"):
                 label = exam.replace("Review of Findings", "ROF", 1)
 
-            btn = ttk.Button(
-                self.exam_nav,
-                text=label,
-                command=lambda e=exam: self.switch_exam(e)
-            )
+            parent = getattr(self, "working_docs_list", None)
+            if parent is None:
+                return
 
-            btn.pack(side="left", padx=4)
+            date_str = self._date_for_exam_button(exam)
+            btn_text = f"{date_str}   {label}"
+            btn = ttk.Button(parent, text=btn_text, command=lambda e=exam: self.switch_exam(e))
+            btn.pack(fill="x", pady=4)
             self.exam_buttons[exam] = btn
 
 
         self._refresh_exam_button_styles()
         self._apply_exam_color_theme()
+        # if hasattr(self, "tk_docs_page"):
+        #     try:
+        #         self.tk_docs_page.refresh()
+        #     except Exception:
+        #         pass
+
 
     def _ensure_patient_for_dynamic_exam(self) -> bool:
         if not getattr(self, "current_patient_id", None):
@@ -732,6 +863,7 @@ class App(tk.Tk):
 
         # Switch to it (no file exists yet -> clear exam content)
         self.current_exam.set(exam_name)
+        self._set_current_doc_label()
         self._refresh_exam_button_styles()
         self._apply_exam_color_theme()
 
@@ -903,7 +1035,30 @@ class App(tk.Tk):
             if patient_root:
                 exam = self.current_exam.get()
                 # stable vault filename per exam:
-                vault_name = f"{safe_slug(exam)}.pdf"
+                #vault_name = f"{safe_slug(exam)}.pdf"
+                exam = self.current_exam.get()
+
+                # use demographics visit date (normalized), fallback to today
+                date_str = normalize_mmddyyyy(self.exam_date_var.get()) or today_mmddyyyy()
+
+                # deterministic name: "02_12_2026__re_exam_1.pdf"
+                exam_slug = safe_slug(exam)
+                date_slug = safe_slug(date_str)
+                vault_name = f"{date_slug}__{exam_slug}.pdf"
+
+                # (optional but recommended) delete any older variants for this exam in the vault
+                vault_dir = os.path.join(patient_root, "vault", "pdfs")
+                try:
+                    if os.path.isdir(vault_dir):
+                        for fn in os.listdir(vault_dir):
+                            if fn.lower().endswith(f"__{exam_slug}.pdf"):
+                                try:
+                                    os.remove(os.path.join(vault_dir, fn))
+                                except Exception:
+                                    pass
+                except Exception:
+                    pass
+
                 vault_path = upsert_vault_file(patient_root, "pdfs", path, vault_name)
 
                 # If user is on Doc Vault page and viewing pdfs, refresh list
@@ -1169,33 +1324,7 @@ class App(tk.Tk):
         # then your existing +Final button right after...
         # self.btn_final = ttk.Button(parent_frame, text="+Final", command=...)
         # self.btn_final.pack(side="left", padx=...)
-
-
-
-
-
-
-
-
-
-
-
-
-
-        # --- Add Exam buttons moved to Demographics header row (right side) ---
-        self.btn_chiro = ttk.Button(demo_top, text="+ Chiro Visit", command=self.add_chiro_visit, style="AddExam.TButton" )
-        self.btn_chiro.pack(in_=demo_top, side="right", padx=(4, 0))
-        self.add_final_btn = ttk.Button(demo_top, text="+ Final", command=self.add_final, style="AddExam.TButton")
-        self.add_final_btn.pack(in_=demo_top, side="right", padx=(4, 0))
-        self.add_rof_btn = ttk.Button(demo_top, text="+ ROF", command=self.add_rof, style="AddExam.TButton")
-        self.add_rof_btn.pack(in_=demo_top, side="right", padx=(4, 0))
-        self.add_reexam_btn = ttk.Button(demo_top, text="+ Re-Exam", command=self.add_reexam, style="AddExam.TButton")       
-        self.add_reexam_btn.pack(in_=demo_top, side="right", padx=(4, 0))
-        self.add_initial_btn = ttk.Button(demo_top, text="+ Initial", command=self.add_initial, style="AddExam.TButton")
-        self.add_initial_btn.pack(in_=demo_top, side="right", padx=(4, 0))
-
-
-
+        
 
         # One-line summary row (shown only when collapsed)
         self.demo_summary_row = ttk.Frame(demo_wrap)
@@ -1216,6 +1345,14 @@ class App(tk.Tk):
 
         ttk.Label(self.exam_nav, text="Exam:").pack(side="left", padx=(0, 8))
         self.exam_buttons: dict[str, ttk.Button] = {}
+
+        self.current_doc_label = ttk.Label(
+            self.exam_nav,
+            textvariable=self.current_doc_label_var,
+            font=("Segoe UI", 10, "bold")
+        )
+        self.current_doc_label.pack(side="left", padx=(0, 8))
+
 
         # Add buttons row tools (right side)style="AddExam.TButton"
         # self.add_final_btn  = ttk.Button(self.exam_nav, text="+ Final", command=self.add_final, style="AddExam.TButton")
@@ -1280,13 +1417,14 @@ class App(tk.Tk):
             if p == "Subjectives" and "Family/Social History" not in nav_pages:
                 nav_pages.append("Family/Social History")
 
-        # ✅ Add Working Docs page next to Doc Vault
-        if "Working Docs" not in nav_pages:
+        if "Docs" not in nav_pages:
             if "Doc Vault" in nav_pages:
-                i = nav_pages.index("Doc Vault")
-                nav_pages.insert(i, "Working Docs")   # right before Doc Vault
+                idx = nav_pages.index("Doc Vault")
+                nav_pages.insert(idx, "Docs")
             else:
-                nav_pages.append("Working Docs")
+                nav_pages.append("Docs")
+
+
 
         self.page_buttons: dict[str, ttk.Button] = {}
         for page in nav_pages:
@@ -1296,6 +1434,28 @@ class App(tk.Tk):
 
         # --- Content container (now inside left pane) ---
         self.content = ttk.Frame(left_root)
+        # --- Working Docs page (Tkraise) ---
+        # self.working_docs_page = ttk.Frame(self.content)
+
+        # Top row inside Working Docs for the + buttons
+        # self.working_docs_addbar = ttk.Frame(self.working_docs_page)
+        # self.working_docs_addbar.pack(fill="x", padx=10, pady=(10, 6))
+
+        # # --- Add Exam buttons live in Working Docs addbar ---
+        # self.add_initial_btn = ttk.Button(self.working_docs_addbar, text="+ Initial", command=self.add_initial, style="AddExam.TButton")
+        # self.add_reexam_btn  = ttk.Button(self.working_docs_addbar, text="+ Re-Exam", command=self.add_reexam, style="AddExam.TButton")
+        # self.add_rof_btn     = ttk.Button(self.working_docs_addbar, text="+ ROF", command=self.add_rof, style="AddExam.TButton")
+        # self.add_final_btn   = ttk.Button(self.working_docs_addbar, text="+ Final", command=self.add_final, style="AddExam.TButton")
+        # self.btn_chiro       = ttk.Button(self.working_docs_addbar, text="+ Chiro Visit", command=self.add_chiro_visit, style="AddExam.TButton")
+
+        # for b in (self.add_initial_btn, self.add_reexam_btn, self.add_rof_btn, self.add_final_btn, self.btn_chiro):
+        #     b.pack(side="left", padx=(0, 6))
+
+
+        # List area for the exam buttons
+        # self.working_docs_list = ttk.Frame(self.working_docs_page)
+        # self.working_docs_list.pack(fill="both", expand=True, padx=10, pady=(0, 10))
+
         self.content.pack(fill="both", expand=True, pady=(10, 0))
         self.content.grid_rowconfigure(0, weight=1)
         self.content.grid_columnconfigure(0, weight=1)
@@ -1343,7 +1503,24 @@ class App(tk.Tk):
             get_patient_root_fn=self.get_current_patient_root
         )
 
-        self.working_docs_page = ttk.Frame(self.content)
+        # --- Tk Docs timeline page ---
+        self.tk_docs_page = TkDocsPage(
+            self.content,
+            get_exam_names_fn=lambda: self.exams,
+            get_exam_path_fn=lambda exam: self.compute_exam_path(exam),
+            get_fallback_date_fn=lambda: self.exam_date_var.get(),
+            on_open_exam=lambda exam: self.switch_exam(exam),
+            #on_hover_exam=lambda exam, date_str: self._set_current_doc_label(date_str, exam),
+            on_add_initial=self.add_initial,
+            on_add_reexam=self.add_reexam,
+            on_add_rof=self.add_rof,
+            on_add_final=self.add_final,
+            on_add_chiro=self.add_chiro_visit,
+
+
+            set_scroll_target_fn=self._set_mousewheel_target,
+            get_current_exam_fn=lambda: self.current_exam.get(),
+        )
 
 
         # Only pages you want in the LEFT nav go here:
@@ -1354,12 +1531,22 @@ class App(tk.Tk):
             "Objectives": self.objectives_page,
             "Diagnosis": self.diagnosis_page,
             "Plan": self.plan_page,
-            "Working Docs": self.working_docs_page,
+            "Docs": self.tk_docs_page,
             "Doc Vault": self.doc_vault_page,
         }
 
         for page in self.pages.values():
             page.grid(row=0, column=0, sticky="nsew")
+
+        self.tk_docs_page.refresh()
+
+        # Now that Working Docs widgets exist, build the exam buttons into it
+        self._rebuild_exam_nav_buttons()
+        self._set_current_doc_label()
+
+
+        
+
 
         # Default page now (since HOI History is gone)
         self.show_page("Subjectives")
@@ -1607,8 +1794,12 @@ class App(tk.Tk):
         self._autosave(force=True)
 
         self.current_exam.set(exam_name)
+
+        self._set_current_doc_label()
         self._apply_exam_color_theme()
         self._refresh_exam_button_styles()
+        
+
 
         path = self.compute_exam_path(exam_name)
         if path and os.path.exists(path):
@@ -1771,29 +1962,32 @@ class App(tk.Tk):
 
         settings = self.read_settings()
 
-        # Load patient-specific dynamic exams (if patient data exists already)
-        self._rebuild_exam_nav_buttons()
-
-        last_exam = (settings.get("last_exam") or "").strip()
-        if last_exam and last_exam.lower() in {e.lower() for e in self.exams}:
-            self.current_exam.set(last_exam)
-            self._refresh_exam_button_styles()
-
-
         last_path = settings.get("last_case_path")
         if last_path and os.path.exists(last_path):
             try:
                 self.load_case_from_path(last_path)
                 self.status_var.set(f"Loaded last file: {os.path.basename(last_path)}")
+
+                # ✅ NOW that patient_id exists, rebuild dynamic exams + refresh Docs timeline
+                self._rebuild_exam_nav_buttons()
+                try:
+                    self.tk_docs_page.refresh()
+                except Exception:
+                    pass
+
             except Exception as e:
                 self.status_var.set(f"Could not load last file: {e}")
         else:
             self.status_var.set("Ready. (No last file found)")
 
+        # keep this AFTER load/rebuild
+        last_exam = (settings.get("last_exam") or "").strip()
+        if last_exam and last_exam.lower() in {e.lower() for e in self.exams}:
+            self.current_exam.set(last_exam)
+            self._refresh_exam_button_styles()
+
         pdf_map = settings.get("last_exam_pdfs", {})
         if isinstance(pdf_map, dict):
-
-            # Safety: ensure dynamic exams list exists
             if not hasattr(self, "exams") or not self.exams:
                 self.exams = list(BASE_EXAMS)
 
@@ -1801,8 +1995,8 @@ class App(tk.Tk):
                 self.last_exam_pdf_paths[exam] = pdf_map.get(exam, "") or ""
 
         self.last_all_exams_pdf_path = settings.get("last_all_exams_pdf", "") or ""
-
         self._apply_exam_color_theme()
+
 
     def _wire_autosave_triggers(self):
         for v in (
@@ -1963,9 +2157,13 @@ class App(tk.Tk):
         self.current_case_path = str(path)
         self.write_settings({
             "last_case_path": str(path),
-            "last_exam": self.current_exam.get()
+            "last_exam": self.current_exam.get()       
         })
 
+        try:
+            self.propagate_demographics_to_all_exams()
+        except Exception:
+            pass
 
 
     def save_case_now(self):
@@ -2098,6 +2296,16 @@ class App(tk.Tk):
             self._rebuild_exam_nav_buttons()
 
             self._apply_exam_color_theme()
+
+            self._set_current_doc_label()
+
+            # ✅ refresh Docs timeline so it shows ALL saved exams immediately
+            try:
+                self.tk_docs_page.refresh()
+            except Exception:
+                pass
+
+
 
             # After loading patient_id + names, show that patient's alerts file
             self.after_idle(self.show_current_patient_alerts_popup)
@@ -2264,7 +2472,30 @@ class App(tk.Tk):
             if patient_root:
                 exam = self.current_exam.get()
                 # stable vault filename per exam:
-                vault_name = f"{safe_slug(exam)}.pdf"
+                #vault_name = f"{safe_slug(exam)}.pdf"
+                exam = self.current_exam.get()
+
+                # use demographics visit date (normalized), fallback to today
+                date_str = normalize_mmddyyyy(self.exam_date_var.get()) or today_mmddyyyy()
+
+                # deterministic name: "02_12_2026__re_exam_1.pdf"
+                exam_slug = safe_slug(exam)
+                date_slug = safe_slug(date_str)
+                vault_name = f"{date_slug}__{exam_slug}.pdf"
+
+                # (optional but recommended) delete any older variants for this exam in the vault
+                vault_dir = os.path.join(patient_root, "vault", "pdfs")
+                try:
+                    if os.path.isdir(vault_dir):
+                        for fn in os.listdir(vault_dir):
+                            if fn.lower().endswith(f"__{exam_slug}.pdf"):
+                                try:
+                                    os.remove(os.path.join(vault_dir, fn))
+                                except Exception:
+                                    pass
+                except Exception:
+                    pass
+
                 vault_path = upsert_vault_file(patient_root, "pdfs", path, vault_name)
 
                 # If user is on Doc Vault page and viewing pdfs, refresh list
