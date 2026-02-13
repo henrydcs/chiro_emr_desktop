@@ -1,5 +1,6 @@
 # plan_pdf.py
 from __future__ import annotations
+from reportlab.lib.units import inch
 
 from xml.sax.saxutils import escape as xml_escape
 
@@ -55,6 +56,7 @@ def build_plan_flowables(plan_struct: dict, styles) -> list:
     story.append(Paragraph("<b>PLAN OF CARE</b>", H))
     story.append(Spacer(1, 6))
 
+        
     # Summary grid (quick scan)
     grid_data = [
         ["Care Type(s):", ", ".join(care) if care else ""],
@@ -65,8 +67,14 @@ def build_plan_flowables(plan_struct: dict, styles) -> list:
         ["Goals:", ", ".join(goals) if goals else ""],
     ]
 
+    label_w = 1.35 * inch
+    value_w = 5.75 * inch
+
+    t = Table(grid_data, colWidths=[label_w, value_w])
+
     # remove completely empty rows (label+blank)
     grid_data = [row for row in grid_data if _clean(row[1])]
+    
 
     if grid_data:
         # Let the table size naturally so it aligns flush with the left margin

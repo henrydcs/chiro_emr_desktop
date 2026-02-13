@@ -76,10 +76,11 @@ class PlanPage(ttk.Frame):
 
     CARE_TYPES = [
         "Chiropractic manipulation",
-        "Manual therapy",
+        "Manual therapy (MRT)",
+        "Vibratory Massage",
         "Therapeutic exercise",
         "Neuromuscular re-education",
-        "Modalities (e-stim / ultrasound / heat/ice)",
+        "Modalities (e-stim / heat and/or ice, spinal traction therapy)",
         "Home exercise program (HEP)",
         "Referral / co-management",
     ]
