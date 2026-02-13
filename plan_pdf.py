@@ -102,7 +102,7 @@ def build_plan_flowables(plan_struct: dict, styles) -> list:
     if notes:
         story.append(Spacer(1, 8))
         safe = xml_escape(notes).replace("\n", "<br/>")
-        story.append(Paragraph("<b>Custom Notes:</b>", B))
+        story.append(Paragraph("<b>Notes:</b>", B))
         story.append(Spacer(1, 4))
         story.append(Paragraph(safe, B))
         story.append(Spacer(1, 8))

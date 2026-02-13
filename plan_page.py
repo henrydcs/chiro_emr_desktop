@@ -342,7 +342,7 @@ class PlanPage(ttk.Frame):
             cb = ttk.Checkbutton(goals_box, text=label, variable=self._goal_vars[label])
             cb.grid(row=i, column=0, sticky="w", padx=8, pady=2)
 
-        notes_box = ttk.Labelframe(mid, text="Custom Notes (optional)")
+        notes_box = ttk.Labelframe(mid, text="Notes")
         notes_box.grid(row=0, column=1, sticky="nsew", padx=(8, 0), pady=6)
         notes_box.columnconfigure(0, weight=1)
 
