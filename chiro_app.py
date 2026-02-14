@@ -1759,7 +1759,7 @@ class App(tk.Tk):
 
     def _clear_sections_silent(self, sel: dict):
         # HOI
-        if sel.get("hoi"):
+        if sel.get("hoi"):            
             try:
                 self.hoi_page.from_dict({})
             except Exception:
@@ -1784,10 +1784,7 @@ class App(tk.Tk):
             try:
                 self.objectives_page.from_dict({"global": {}, "blocks": []})
             except Exception:
-                try:
-                    self.objectives_page.set_value("")
-                except Exception:
-                    pass
+                pass
 
         # Diagnosis
         if sel.get("diagnosis"):
@@ -2294,7 +2291,7 @@ class App(tk.Tk):
             if isinstance(obj_struct, dict):
                 self.objectives_page.from_dict(obj_struct)
             else:
-                self.objectives_page.set_value(soap.get("objectives", ""))
+                self.objectives_page.from_dict({"global": {}, "blocks": []})
 
             dx_struct = soap.get("diagnosis_struct")
             if isinstance(dx_struct, dict):
