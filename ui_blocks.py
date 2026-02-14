@@ -49,9 +49,11 @@ class DescriptorBlock:
     - Changing dropdowns/checkmarks re-generates ONLY if the current narrative looks auto-generated.
     """
 
-    def __init__(self, parent, block_index: int, on_change_callback):
+    def __init__(self, parent, block_index: int, on_change_callback, on_mode_change=None):
         self.block_index = block_index
         self.on_change_callback = on_change_callback
+        self.on_mode_change = on_mode_change
+        
 
         # --- internal flags ---
         self._loading_block = False
@@ -121,6 +123,13 @@ class DescriptorBlock:
                 switch, text="Patient Points To", value="points",
                 variable=self.view_var, command=self._apply_view
             ).pack(side="left")
+            ttk.Radiobutton(
+                switch, text="Therapy Only", value="therapy",
+                variable=self.view_var, command=self._apply_view
+            ).pack(side="left", padx=(12, 0))
+
+
+
 
             # -------------------------------
             # Three section frames
@@ -269,12 +278,20 @@ class DescriptorBlock:
             self.narrative_frame.grid()
         elif mode == "points":
             self.points_frame.grid()
+        elif mode == "therapy":
+            # Show nothing inside the block; therapy UI is global on SubjectivesPage
+            pass
 
-        # Optional: update layout immediately
+        # Notify SubjectivesPage to show/hide therapy panel
+        if callable(getattr(self, "on_mode_change", None)):
+            self.on_mode_change(self.block_index, mode)
+
+
         try:
             self.frame.update_idletasks()
         except Exception:
-            pass        
+            pass
+
 
     
     def _bold_phrases(self, phrases: list[str]):

@@ -1285,6 +1285,55 @@ def _diagnosis_text_from_struct(dx_struct: dict) -> str:
     return "\n".join(lines).strip()
 
 
+# =======================================================
+# Subjectives: Therapy Only (checkbox paragraph)
+# =======================================================
+THERAPY_BODY_PARTS = [
+    "Neck", "Upper Back", "Mid-Back", "Low Back", "Pelvic Area",
+    "Left Hip", "Right Hip", "Left Buttock", "Right Buttock",
+    "Left Thigh", "Right Thigh", "Left Knee", "Right Knee",
+    "Left Ankle", "Right Ankle", "Left Foot", "Right Foot",
+    "Left Toes", "Right Toes",
+    "Left Shoulder", "Right Shoulder",
+    "Left Arm", "Right Arm",
+    "Left Elbow", "Right Elbow",
+    "Left Forearm", "Right Forearm",
+    "Left Wrist", "Right Wrist",
+    "Left Hand", "Right Hand",
+    "Left Fingers", "Right Fingers",
+]
+
+def therapy_paragraph_from_subjectives(subj: dict) -> tuple[str, list[str]]:
+    """
+    Returns: (text, tokens)
+    Uses subj["therapy_main"] if present and still checked.
+    Falls back to fixed list order if missing.
+    """
+    subj = subj or {}
+    therapy_state = subj.get("therapy_only") or {}
+    if not isinstance(therapy_state, dict):
+        return "", []
+
+    selected = [name for name in THERAPY_BODY_PARTS if bool(therapy_state.get(name, False))]
+    if not selected:
+        return "", []
+
+    main = (subj.get("therapy_main") or "").strip()
+    if main not in selected:
+        main = selected[0]
+
+    others = [x for x in selected if x != main]
+
+    s1 = (
+        "The patient states that today the worst symptoms are located in the following area: "
+        f"{main} region."
+    )
+    if not others:
+        return s1, selected
+
+    s2 = f"The patient also feels symptoms in the {_join_with_and(others)}."
+    return (s1 + " " + s2), selected
+
 
 
 # =======================================================
@@ -1485,6 +1534,21 @@ def build_combined_pdf(path: str, payloads: list):
         story.append(Paragraph("<b>Subjectives</b>", styles["Heading2"]))
         story.append(Spacer(1, 0.08 * inch))
 
+        # ✅ NEW: Therapy paragraph prints FIRST (independent of dropdown/blocks)
+        subj = (soap.get("subjectives") or {})
+        therapy_text, therapy_tokens = therapy_paragraph_from_subjectives(subj)
+
+        printed_any_subjectives = False
+
+        if (therapy_text or "").strip():
+            printed_any_subjectives = True
+            # ✅ bold the selected body parts inside the therapy paragraph
+            body_markup = semibold_markup(therapy_text, therapy_tokens or [])
+            story.append(Paragraph(body_markup, styles["SubjectiveBody"]))
+            story.append(Spacer(1, 0.10 * inch))
+
+            printed_any_subjectives = True
+
         if narratives:
             for item in narratives:
                 title = item["title"]
@@ -1501,10 +1565,14 @@ def build_combined_pdf(path: str, payloads: list):
                 story.append(Spacer(1, 0.04 * inch))
                 story.append(body)
                 story.append(Spacer(1, 0.10 * inch))
-        else:
+            printed_any_subjectives = True
+
+        # ✅ Only print dash if NOTHING exists (no therapy + no narratives)
+        if not printed_any_subjectives:
             story.append(Paragraph("—", styles["BodyText"]))
 
         story.append(Spacer(1, 0.12 * inch))
+
 
         # ✅ Functional Status / ADLs — printed after Subjectives
         adl_para = None
