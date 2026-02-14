@@ -451,7 +451,7 @@ class App(tk.Tk):
 
         # If no patient is loaded yet, this will use the global file;
         # once a patient loads, we'll open that patient's file (below).
-        self.after_idle(self.show_current_patient_alerts_popup)
+        #self.after_idle(self.show_current_patient_alerts_popup)
 
 
         # Mousewheel scroll routing (Subjectives canvas)
@@ -578,13 +578,21 @@ class App(tk.Tk):
     
     def _alerts_path_for_current_patient(self) -> str:
         """
-        Patient-specific alerts JSON path.
-        Falls back to a global file if no patient yet.
+        Always patient-specific. If no patient yet, create a new patient_id and folder.
         """
+        if not getattr(self, "current_patient_id", None):
+            self.current_patient_id = new_patient_id()
+
+        # This will create/rename the folder as names change (still same patient_id)
         patient_root = self.get_current_patient_root()
-        if patient_root:
-            return os.path.join(patient_root, ALERTS_FILENAME)
-        return os.path.join(BASE_DIR, ALERTS_FILENAME)
+        if not patient_root:
+            # as a last resort, force a folder at least by id
+            # (only if your get_current_patient_root can ever return None with a pid)
+            folder = ensure_named_patient_folder(PATIENTS_ID_ROOT, self.current_patient_id, "", "")
+            patient_root = str(folder)
+
+        return os.path.join(patient_root, ALERTS_FILENAME)
+
 
     def show_current_patient_alerts_popup(self):
         """
@@ -614,7 +622,15 @@ class App(tk.Tk):
                     pass
                 self._alerts_popup_open = False
             else:
-                return  # already open for the correct path
+                # Already open for this patient -> bring to front (no double-click feeling)
+                try:
+                    if self._alerts_popup_win and self._alerts_popup_win.winfo_exists():
+                        self._alerts_popup_win.deiconify()
+                        self._alerts_popup_win.lift()
+                        self._alerts_popup_win.focus_force()
+                except Exception:
+                    pass
+                return
 
         self._alerts_popup_open = True
         self._alerts_popup_path = path
@@ -632,6 +648,12 @@ class App(tk.Tk):
         self._alerts_popup_win = pop
 
         def _on_close(_e=None):
+
+            try:
+                if self._alerts_popup_win and self._alerts_popup_win.winfo_exists():
+                    self._alerts_popup_win.destroy()
+            except Exception:
+                pass
             self._alerts_popup_open = False
             self._alerts_popup_path = None
             self._alerts_popup_win = None
@@ -2663,6 +2685,10 @@ class App(tk.Tk):
         self.last_all_exams_pdf_path = ""
         self.status_var.set("New case started. Previous cases/files are unchanged.")
         self.current_patient_id = None
+        self.current_patient_id = new_patient_id()
+        self.after_idle(self.show_current_patient_alerts_popup)
+
+
 
 
 
