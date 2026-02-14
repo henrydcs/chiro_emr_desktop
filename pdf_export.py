@@ -1534,22 +1534,27 @@ def build_combined_pdf(path: str, payloads: list):
 
 
         # Objectives
-        story.append(Paragraph("<b>Objectives</b>", styles["Heading2"]))
-        story.append(Spacer(1, 0.10 * inch))
+        # story.append(Paragraph("<b>Objectives</b>", styles["Heading2"]))
+        # story.append(Spacer(1, 0.10 * inch))
 
+        # Objectives
         obj_flow = build_objectives_flowables(objectives_struct, styles, doc_width)
 
-        if obj_flow:
-            story.extend(obj_flow)
-        else:
-            safe_obj = (objectives_text or "").strip()
-            if safe_obj:
+        safe_obj = (objectives_text or "").strip()
+
+        # ✅ If nothing is selected/entered, do NOT print the Objectives title at all
+        if obj_flow or safe_obj:
+            story.append(Paragraph("<b>Objectives</b>", styles["Heading2"]))
+            story.append(Spacer(1, 0.10 * inch))
+
+            if obj_flow:
+                story.extend(obj_flow)
+            else:
                 safe_obj = xml_escape(safe_obj).replace("\n\n", "<br/><br/>").replace("\n", "<br/>")
                 story.append(Paragraph(safe_obj, styles["BodyText"]))
-            else:
-                story.append(Paragraph("—", styles["BodyText"]))
 
-        story.append(Spacer(1, 0.10 * inch))
+            story.append(Spacer(1, 0.10 * inch))
+
 
         def _dx_text_from_soap(soap: dict) -> str:
             soap = soap or {}

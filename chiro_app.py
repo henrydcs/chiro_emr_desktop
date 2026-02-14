@@ -38,6 +38,9 @@ from tk_docs_page import TkDocsPage
 # git commit -m "End of day updates"
 # git push
 
+# git log --oneline --decorate -5  
+
+
 #And remember to make sure to be in the REPO FOLDER (OFFICE COMPUTER or HOME COMPUTER):
 #...\EMRchiropractic\chiro_emr_desktop OR EMR_Code\chiro_emr_desktop
 #If not in ROOT folder, make sure to "cd chiro_emr_desktop" without the quotes
