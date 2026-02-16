@@ -150,7 +150,7 @@ class DescriptorBlock:
 
             # Let the host stretch narrative when visible
             host.grid_columnconfigure(0, weight=1)
-            host.grid_rowconfigure(2, weight=1)
+            host.grid_rowconfigure(2, weight=0)
 
             # ==========================================================
             # (A) Put your EXISTING descriptor widgets into descriptor_frame
@@ -259,6 +259,20 @@ class DescriptorBlock:
         finally:
             self._loading_block = False
 
+    def _set_frame_fill(self, fill: bool):
+        """
+        When fill=False, the block won't consume all vertical space
+        in the SubjectivesPage stack cell.
+        """
+        try:
+            info = self.frame.grid_info()
+            # keep same row/col, just change sticky
+            self.frame.grid_configure(sticky=("nsew" if fill else "new"))
+        except Exception:
+            pass
+
+    
+    
     def _apply_view(self):
         v = getattr(self, "view_var", None)
         if v is None:
@@ -266,32 +280,36 @@ class DescriptorBlock:
 
         mode = v.get()
 
-        # Hide all
+        # Hide everything
         self.descriptor_frame.grid_remove()
         self.narrative_frame.grid_remove()
         self.points_frame.grid_remove()
 
-        # Show selected
+        # Collapse stretch by default
+        self.frame.grid_rowconfigure(2, weight=0)
+
+        # ✅ DEFAULT: the block should fill normally
+        self._set_frame_fill(True)
+
         if mode == "descriptor":
             self.descriptor_frame.grid()
+
         elif mode == "narrative":
             self.narrative_frame.grid()
+            self.frame.grid_rowconfigure(2, weight=1)  # Only narrative expands
+
         elif mode == "points":
             self.points_frame.grid()
-        elif mode == "therapy":
-            # Show nothing inside the block; therapy UI is global on SubjectivesPage
-            pass
 
-        # Notify SubjectivesPage to show/hide therapy panel
+        elif mode == "therapy":
+            # ✅ CRITICAL: block should NOT consume full vertical space
+            self._set_frame_fill(False)
+            # nothing shown inside this block
+
         if callable(getattr(self, "on_mode_change", None)):
             self.on_mode_change(self.block_index, mode)
 
-
-        try:
-            self.frame.update_idletasks()
-        except Exception:
-            pass
-
+        self.frame.update_idletasks()
 
     
     def _bold_phrases(self, phrases: list[str]):

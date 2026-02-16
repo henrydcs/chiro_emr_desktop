@@ -61,7 +61,19 @@ class SubjectivesPage(ttk.Frame):
 
         self._build_ui()
         self._add_block()  # start with block 1
+        self._sync_therapy_visibility()
 
+
+    def _wire_block_therapy_hooks(self, block):
+        # Make therapy visibility update immediately whenever the radio changes
+        if getattr(block, "_therapy_hooked", False):
+            return
+        block._therapy_hooked = True
+
+        vv = getattr(block, "view_var", None)
+        if vv is not None:
+            vv.trace_add("write", lambda *_: self._sync_therapy_visibility())   
+    
     
     def _on_therapy_var_change(self, name: str):
         if getattr(self, "_therapy_loading", False):
@@ -130,8 +142,8 @@ class SubjectivesPage(ttk.Frame):
     def _show_therapy(self):
         if getattr(self, "_therapy_visible", False):
             return
-        # Put Therapy Only BELOW the block UI (so the radio buttons stay on top)
-        self._therapy_container.pack(fill="x", padx=10, pady=(0, 10), after=self.content)
+        # show under nav, above content
+        self._therapy_container.pack(fill="x", after=self.nav)
         self._therapy_visible = True
 
     def _hide_therapy(self):
@@ -141,26 +153,30 @@ class SubjectivesPage(ttk.Frame):
         self._therapy_visible = False
 
 
+
+
+
     def _sync_therapy_visibility(self):
         if not self.blocks:
             self._hide_therapy()
             return
 
         b = self.blocks[self.current_block_index]
-        mode = getattr(b, "view_var", None).get() if getattr(b, "view_var", None) else "descriptor"
+        vv = getattr(b, "view_var", None)
+        mode = (vv.get() if vv else "") or ""
+        mode = mode.strip().lower()
 
-        if (mode or "").strip().lower() == "therapy":
+        # ✅ works whether value is "therapy", "therapy only", "therapy_only", etc.
+        if "therapy" in mode:
             self._show_therapy()
         else:
             self._hide_therapy()
-    
+
+
     def _on_block_mode_change(self, block_index: int, mode: str):
-        # Only react if the change came from the currently shown block
-        current_block_num = self.current_block_index + 1  # because your DescriptorBlock stores 1-based
-        if block_index != current_block_num:
-            return
-        
-        self._sync_therapy_visibility()    
+        # No "current block" logic anymore. Any block can turn therapy on/off.
+        self._sync_therapy_visibility()
+
 
     def _therapy_selected_ordered(self) -> list[str]:
         out = []
@@ -237,13 +253,15 @@ class SubjectivesPage(ttk.Frame):
         # Row of block navigation buttons
         self.nav = ttk.Frame(self)
         self.nav.pack(fill="x", padx=10, pady=(0, 10))
-
+        
         # --- Therapy Only section (GLOBAL, independent of blocks) ---
         self._therapy_container = ttk.Frame(self)
-        #self._therapy_container.pack(fill="x", padx=10, pady=(0, 10))
+        # start hidden (we'll pack it only when needed)
+        self._therapy_visible = False
 
-        self._therapy_blank = ttk.Frame(self._therapy_container)
         self._therapy_frame = ttk.LabelFrame(self._therapy_container, text="Therapy Only")
+        self._therapy_frame.pack(fill="x", padx=10, pady=(0, 10))
+
         hdr = ttk.Frame(self._therapy_frame)
         hdr.grid(row=0, column=0, columnspan=3, sticky="ew", padx=6, pady=(6, 4))
         hdr.grid_columnconfigure(0, weight=1)
@@ -251,17 +269,11 @@ class SubjectivesPage(ttk.Frame):
         ttk.Label(hdr, text="Select affected areas (first checked = main concern):").grid(row=0, column=0, sticky="w")
         ttk.Button(hdr, text="Reset Therapy", command=self._therapy_reset).grid(row=0, column=1, sticky="e")
 
-
-        for f in (self._therapy_blank, self._therapy_frame):
-            f.grid(row=0, column=0, sticky="ew")
-        self._therapy_container.grid_columnconfigure(0, weight=1)
-
-        cols = 3
+        cols = 5
         start_row = 1
 
         for name, var in self.therapy_vars.items():
             var.trace_add("write", lambda *_ , n=name: self._on_therapy_var_change(n))
-
 
         for i, name in enumerate(THERAPY_BODY_PARTS):
             r = start_row + (i // cols)
@@ -272,17 +284,12 @@ class SubjectivesPage(ttk.Frame):
                 variable=self.therapy_vars[name],
             ).grid(row=r, column=c, sticky="w", padx=8, pady=2)
 
-
         for c in range(cols):
             self._therapy_frame.grid_columnconfigure(c, weight=1)
 
         # Start hidden
         self._therapy_visible = False
-
-
-        # Start hidden until Therapy Only is selected
-        self._therapy_blank.tkraise()
-
+       
 
         # Container where blocks live (stacked with grid, like your main app pages)
         self.content = ttk.Frame(self)
@@ -366,7 +373,8 @@ class SubjectivesPage(ttk.Frame):
             self.on_change_callback,
             on_mode_change=self._on_block_mode_change
         )
-
+        self._wire_block_therapy_hooks(block) 
+        
 
         block.frame.grid(row=0, column=0, sticky="nsew")  # stack all blocks in same cell
 
@@ -454,9 +462,17 @@ class SubjectivesPage(ttk.Frame):
 
         # rebuild from saved
         for i, bd in enumerate(blocks, start=1):
-            block = DescriptorBlock(self.content, i, self.on_change_callback)
+            block = DescriptorBlock(
+                self.content,
+                i,
+                self.on_change_callback,
+                on_mode_change=self._on_block_mode_change,   # keep if you want, but not required now
+            )
             block.frame.grid(row=0, column=0, sticky="nsew")
             block.from_dict(bd or {})
+
+            self._wire_block_therapy_hooks(block)  # ✅ MUST be inside loop
+
             self.blocks.append(block)
 
             idx_0 = i - 1
@@ -466,10 +482,13 @@ class SubjectivesPage(ttk.Frame):
 
             block.region_var.trace_add("write", lambda *_: self._refresh_nav_buttons())
 
+
         if not self.blocks:
             self._add_block()
         else:
             self.show_block(0)
+            
+
 
         therapy_state = (data or {}).get("therapy_only") or {}
 
@@ -494,14 +513,9 @@ class SubjectivesPage(ttk.Frame):
         finally:
             self._therapy_loading = False
 
-        # show/hide therapy UI
-        if any_on:
-            self._therapy_frame.tkraise()
-        else:
-            self._therapy_blank.tkraise()
-
-
+       
         
 
         self._refresh_nav_buttons()
+        self._sync_therapy_visibility()   # ✅ force correct show/hide on load
         self.on_change_callback()

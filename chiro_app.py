@@ -1368,7 +1368,7 @@ class App(tk.Tk):
         self.exam_nav = tk.Frame(left_root)
         self.exam_nav.pack(fill="x", padx=padx, pady=(6, 0))
 
-        ttk.Label(self.exam_nav, text="Exam:").pack(side="left", padx=(0, 8))
+        ttk.Label(self.exam_nav, text="Exam:")#.pack(expand=True, anchor="center", padx=(0, 8))
         self.exam_buttons: dict[str, ttk.Button] = {}
 
         self.current_doc_label = ttk.Label(
@@ -1376,7 +1376,7 @@ class App(tk.Tk):
             textvariable=self.current_doc_label_var,
             font=("Segoe UI", 10, "bold")
         )
-        self.current_doc_label.pack(side="left", padx=(0, 8))
+        self.current_doc_label.pack(expand=True, anchor="center")
 
 
         # Add buttons row tools (right side)style="AddExam.TButton"
@@ -2684,9 +2684,6 @@ class App(tk.Tk):
         self.current_patient_id = None
         self.current_patient_id = new_patient_id()
         self.after_idle(self.show_current_patient_alerts_popup)
-
-
-
 
 
 if __name__ == "__main__":
