@@ -797,6 +797,7 @@ class App(tk.Tk):
         n = _next_number(self.exams, "Re-Exam")
         name = f"Re-Exam {n}"
         self._add_dynamic_exam(name, copy_current=True)   # copy forward
+        self.after(0, lambda: self.switch_exam(name, force=True))
 
 
     def add_rof(self):
@@ -812,6 +813,7 @@ class App(tk.Tk):
         n = _next_number(self.exams, "Review of Findings")
         name = f"Review of Findings {n}"
         self._add_dynamic_exam(name, copy_current=True)   # copy forward
+        self.after(0, lambda: self.switch_exam(name, force=True))
 
     
     def add_final(self):
@@ -827,6 +829,8 @@ class App(tk.Tk):
         n = _next_number(self.exams, "Final")
         name = f"Final {n}"
         self._add_dynamic_exam(name, copy_current=True)
+        self.after(0, lambda: self.switch_exam(name, force=True))
+
 
     def add_chiro_visit(self):
         if not self._ensure_patient_for_dynamic_exam():
@@ -842,6 +846,9 @@ class App(tk.Tk):
         name = f"Chiro Visit {n}"
         self._add_dynamic_exam(name, copy_current=True)
 
+        self.after(0, lambda: self.switch_exam(name, force=True))
+
+
     def add_initial(self):
         if not self._ensure_patient_for_dynamic_exam():
             return
@@ -855,6 +862,7 @@ class App(tk.Tk):
         n = _next_number(self.exams, "Initial")
         name = f"Initial {n}"
         self._add_dynamic_exam(name, copy_current=True)
+        self.after(0, lambda: self.switch_exam(name, force=True))
 
 
 
@@ -1809,9 +1817,13 @@ class App(tk.Tk):
 
 
 
-    def switch_exam(self, exam_name: str):
-        if exam_name == self.current_exam.get():
+    def switch_exam(self, exam_name: str, force: bool = False):
+
+        if (not force) and (exam_name == self.current_exam.get()):
             return
+
+        #if exam_name == self.current_exam.get():
+            #return
 
         self._autosave(force=True)
 
