@@ -1467,8 +1467,27 @@ def build_combined_pdf(path: str, payloads: list):
 
         # everything else after
         return (9, 0)
+    
+    def _visit_date_key(p: dict) -> tuple:
+        """
+        Ascending date (oldest -> newest).
+        Falls back to '' if missing so those sort first.
+        """
+        patient = (p or {}).get("patient") or {}
+        d = normalize_mmddyyyy(patient.get("exam_date", ""))  # returns MM/DD/YYYY or ""
+        # Convert MM/DD/YYYY -> YYYY-MM-DD for proper lexical sort
+        if d and re.match(r"^\d{2}/\d{2}/\d{4}$", d):
+            mm, dd, yyyy = d.split("/")
+            iso = f"{yyyy}-{mm}-{dd}"
+        else:
+            iso = ""
+        return (iso,)
 
-    payloads = sorted(payloads or [], key=lambda p: _exam_sort_key((p or {}).get("exam", "")))
+    def _combined_sort_key(p: dict) -> tuple:
+        ex = (p or {}).get("exam", "")
+        return _visit_date_key(p) + _exam_sort_key(ex)
+
+    payloads = sorted(payloads or [], key=_combined_sort_key)
 
 
     doc = SimpleDocTemplate(
