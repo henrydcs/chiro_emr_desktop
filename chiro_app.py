@@ -899,6 +899,11 @@ class App(tk.Tk):
         self._set_current_doc_label()
         self._refresh_exam_button_styles()
         self._apply_exam_color_theme()
+        # ✅ NEW: set today's visit date for a newly created exam (first time)
+        self.exam_date_var.set(today_mmddyyyy())
+        self._set_current_doc_label()
+        
+
 
         if copy_current:
             # Save the CURRENT on-screen content under the NEW exam name/path
@@ -906,6 +911,8 @@ class App(tk.Tk):
             if new_path:
                 try:
                     self.save_case_to_path(new_path)
+                    # ✅ NEW: rebuild so the new button pulls its date from JSON instead of fallback
+                    #self._rebuild_exam_nav_buttons()
                     self.status_var.set(f"{exam_name} created (copied from previous exam).")
                 except Exception as e:
                     self.status_var.set(f"{exam_name} created, but copy-save failed: {e}")
@@ -913,6 +920,8 @@ class App(tk.Tk):
             self.clear_exam_content_only()
             self.current_case_path = None
             self.status_var.set(f"{exam_name} created (new blank exam).")
+            # ✅ NEW: rebuild buttons so new button shows today's date immediately
+            #self._rebuild_exam_nav_buttons()
 
 
 
