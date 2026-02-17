@@ -52,7 +52,7 @@ UI_PAGES = [
 ]
 
 # ----------------- EXAMS -----------------
-EXAMS = ["Initial", "Re-Exam 1", "Review of Findings 1", "Final Exam"]
+EXAMS = ["Initial", "Re-Exam", "Review of Findings", "Final Exam"]
 
 EXAM_COLORS = {
     "Initial": {"bg": "#E3F2FD", "accent": "#1E88E5"},

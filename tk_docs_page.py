@@ -315,7 +315,17 @@ class TkDocsPage(ttk.Frame):
     def refresh(self):
         self._clear()
 
-        exam_names = list(self.get_exam_names_fn() or [])
+        exam_names = []
+        for n in (self.get_exam_names_fn() or []):
+            # ✅ hide legacy always-on Initial
+            if (n or "").strip().lower() == "initial":
+                continue
+
+            p = self.get_exam_path_fn(n)
+            if p and os.path.exists(p):
+                exam_names.append(n)
+
+
         if not exam_names:
             ttk.Label(self.inner, text="(No documents yet)").pack(anchor="w", pady=6)
             return
