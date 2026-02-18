@@ -693,6 +693,84 @@ def _build_posture_paragraph(posture: dict, styles):
     return Paragraph(safe, styles["BodyText"])
 
 
+def _build_sublux_paragraph(sx: dict, styles):
+    """
+    Returns ONLY the subluxation summary paragraph (no Notes: line).
+    Notes are handled separately by _notes_paragraph() to match other sections.
+    """
+    if not isinstance(sx, dict):
+        return None
+
+    regions = sx.get("regions") or {}
+    if not isinstance(regions, dict):
+        regions = {}
+
+    levels = sx.get("levels") or {}
+    if not isinstance(levels, dict):
+        levels = {}
+
+    # Region sentence
+    region_names = {"CS": "Cervical Spine", "TS": "Thoracic Spine", "LS": "Lumbar Spine"}
+    selected_regions = [region_names[k] for k, v in regions.items() if bool(v) and k in region_names]
+
+    # Sort levels: C#, then T#, then L#
+    def sort_key(lv: str):
+        lv = (lv or "").strip().upper()
+        if not lv:
+            return (9, 999)
+        order = {"C": 0, "T": 1, "L": 2}
+        try:
+            num = int(lv[1:])
+        except Exception:
+            num = 999
+        return (order.get(lv[0], 9), num)
+
+    level_parts = []
+    for lv in sorted(levels.keys(), key=sort_key):
+        st = levels.get(lv) or {}
+        if not isinstance(st, dict):
+            st = {}
+
+        listing = (st.get("listing") or "").strip()
+        motion = st.get("motion") or []
+        if not isinstance(motion, list):
+            motion = []
+
+        # ✅ ALWAYS include the level if it exists in the dict
+        piece = lv
+
+        if listing and listing != "(none)":
+            piece += f" {listing}"
+
+        motion_clean = [str(x).strip() for x in motion if str(x).strip()]
+        if motion_clean:
+            piece += " MR: " + ", ".join(motion_clean)
+
+        level_parts.append(piece)
+
+    # If no content at all, return None
+    if not selected_regions and not level_parts:
+        return None
+
+    lines = []
+    if selected_regions:
+        lines.append(
+            "Restricted joint motion was noted in the " +
+            _join_with_and(selected_regions) +
+            "."
+        )
+
+    if level_parts:
+        lines.append(
+            "Specific levels: " +
+            _join_with_and(level_parts) +
+            "."
+        )
+
+    safe = xml_escape("\n".join(lines)).replace("\n", "<br/>")
+    return Paragraph(safe, styles["BodyText"])
+
+
 def _build_grip_paragraph(grip: dict, styles):
     grip = grip or {}
     left = _clean_val(grip.get("left"))
@@ -798,8 +876,12 @@ def build_objectives_flowables(objectives_struct: dict, styles, doc_width: float
     global_struct = objectives_struct.get("global") or {}
     if isinstance(global_struct, dict):
         vitals = global_struct.get("vitals") or {}
-        posture = global_struct.get("posture") or {}
+        posture = global_struct.get("posture") or {}        
         grip = global_struct.get("grip") or {}
+        sublux = global_struct.get("sublux") or {}
+        sublux_para = _build_sublux_paragraph(sublux, styles)
+        sublux_notes = _notes_paragraph(_clean_val(sublux.get("notes")), styles)
+
 
         adl_para = None
         if include_adl:
@@ -815,7 +897,8 @@ def build_objectives_flowables(objectives_struct: dict, styles, doc_width: float
         pos_notes = _notes_paragraph(_clean_val(posture.get("notes")), styles)
         grip_notes = _notes_paragraph(_clean_val(grip.get("notes")), styles)
 
-        if vit_tbl or pos_para or grip_para or adl_para or vit_notes or pos_notes or grip_notes:
+        if vit_tbl or pos_para or grip_para or adl_para or vit_notes or pos_notes or grip_notes or sublux_para or sublux_notes:
+
             printed_any = True
             out.append(Paragraph("<b>VITALS / INSPECTION</b>", styles["Heading3"]))
             out.append(Spacer(1, 0.08 * inch))
@@ -839,6 +922,18 @@ def build_objectives_flowables(objectives_struct: dict, styles, doc_width: float
                     out.append(Spacer(1, 0.10 * inch))
                     out.append(pos_notes)
                 out.append(Spacer(1, 0.12 * inch))
+
+            if sublux_para or sublux_notes:
+                out.append(Paragraph("<b>Subluxations</b>", styles["Heading4"]))  # ✅ same size/style as others
+                out.append(Spacer(1, 0.05 * inch))
+                if sublux_para:
+                    out.append(sublux_para)
+                if sublux_notes:
+                    out.append(Spacer(1, 0.10 * inch))
+                    out.append(sublux_notes)
+                out.append(Spacer(1, 0.12 * inch))
+
+
 
             if grip_para or grip_notes:
                 out.append(Paragraph("<b>Grip Strength (Jamar)</b>", styles["Heading4"]))

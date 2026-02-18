@@ -613,13 +613,13 @@ class VitalsInspectionPanel(ttk.Frame):
         super().__init__(parent)
         self.on_change = on_change
 
-        def open(self, which: str | None = None):
-            """Ensure the panel is expanded and optionally choose a sub-tab."""
-            self._open.set(True)
-            if which in ("Vitals", "Posture", "Grip", "ADLs"):
-                self.active.set(which)
-            self._apply_open_state()
-            self._show_active()
+        # def open(self, which: str | None = None):
+        #     """Ensure the panel is expanded and optionally choose a sub-tab."""
+        #     self._open.set(True)
+        #     if which in ("Vitals", "Posture", "Subluxations", "Grip", "ADLs"):
+        #         self.active.set(which)
+        #     self._apply_open_state()
+        #     self._show_active()
 
         self._open = tk.BooleanVar(value=False)
         self.active = tk.StringVar(value="Vitals")  # Vitals|Posture|Grip
@@ -639,6 +639,25 @@ class VitalsInspectionPanel(ttk.Frame):
         self.forward_head_cs_var = tk.StringVar(value="(none)")
         self.lordosis_ls_var = tk.StringVar(value="(none)")
 
+        # --- Subluxations (GLOBAL) ---
+        self.sublux_data: dict[str, dict] = {}      # e.g. {"C3": {"listing": "PR", "motion": {...}, "notes": ""}}
+        self.sublux_active_level = tk.StringVar(value="")  # currently selected level like "C3"
+        self.sublux_listing_var = tk.StringVar(value="(none)")
+        self.sublux_motion_vars = {
+            "Flexion": tk.BooleanVar(value=False),
+            "Extension": tk.BooleanVar(value=False),
+            "Lateral Flexion": tk.BooleanVar(value=False),
+            "Rotation": tk.BooleanVar(value=False),
+        }
+        # Quick region toggles
+        self.sublux_region_vars = {
+            "CS": tk.BooleanVar(value=False),
+            "TS": tk.BooleanVar(value=False),
+            "LS": tk.BooleanVar(value=False),
+        }
+
+        
+
         # Grip (one line)
         self.grip_left_var = tk.StringVar(value="")
         self.grip_right_var = tk.StringVar(value="")
@@ -653,6 +672,7 @@ class VitalsInspectionPanel(ttk.Frame):
         # Notes (separate)
         self.vitals_notes_var = tk.StringVar(value="")
         self.posture_notes_var = tk.StringVar(value="")
+        self.sublux_notes_var = tk.StringVar(value="")
         self.grip_notes_var = tk.StringVar(value="")
 
         self._build_ui()
@@ -664,9 +684,16 @@ class VitalsInspectionPanel(ttk.Frame):
             self.shoulder_levels_var, self.kyphosis_ts_var, self.forward_head_cs_var, self.lordosis_ls_var,
             self.grip_left_var, self.grip_right_var, self.grip_compare_var,
             self.vitals_notes_var, self.posture_notes_var, self.grip_notes_var,
-            self.adl_notes_var,  # ✅ NEW
+            self.adl_notes_var, self.sublux_notes_var, self.sublux_listing_var, self.sublux_active_level,
         ]
         for v in vars_to_trace:
+            v.trace_add("write", lambda *_: self._changed())
+
+        # ✅ Sublux motion restriction checkboxes (BooleanVars)
+        for v in self.sublux_motion_vars.values():
+            v.trace_add("write", lambda *_: self._changed())
+
+        for v in self.sublux_region_vars.values():
             v.trace_add("write", lambda *_: self._changed())
 
         self.adl_sev_var.trace_add("write", lambda *_: self._changed())  # ✅ NEW
@@ -692,10 +719,11 @@ class VitalsInspectionPanel(ttk.Frame):
 
         self.vitals_frame = ttk.Frame(self.container)
         self.posture_frame = ttk.Frame(self.container)
+        self.sublux_frame = ttk.Frame(self.container)
         self.grip_frame = ttk.Frame(self.container)
         self.adl_frame = ttk.Frame(self.container)  # ✅ NEW
 
-        for f in (self.vitals_frame, self.posture_frame, self.grip_frame, self.adl_frame):
+        for f in (self.vitals_frame, self.posture_frame, self.sublux_frame, self.grip_frame, self.adl_frame):
             f.grid(row=0, column=0, sticky="nsew")
 
         self.container.update_idletasks()
@@ -705,6 +733,7 @@ class VitalsInspectionPanel(ttk.Frame):
 
         self._build_vitals_panel()
         self._build_posture_panel()
+        self._build_sublux_panel()
         self._build_grip_panel()
         self._build_adl_panel()  # ✅ NEW
 
@@ -723,6 +752,7 @@ class VitalsInspectionPanel(ttk.Frame):
         if self._open.get():
             ttk.Radiobutton(self.radios_frame, text="Vitals", value="Vitals", variable=self.active).pack(side="left", padx=(0, 8))
             ttk.Radiobutton(self.radios_frame, text="Posture", value="Posture", variable=self.active).pack(side="left", padx=(0, 8))
+            ttk.Radiobutton(self.radios_frame, text="Subluxations", value="Subluxations", variable=self.active).pack(side="left", padx=(0, 8))
             ttk.Radiobutton(self.radios_frame, text="Grip", value="Grip", variable=self.active).pack(side="left", padx=(0, 8))
             ttk.Radiobutton(self.radios_frame, text="ADLs", value="ADLs", variable=self.active).pack(side="left")
 
@@ -736,9 +766,11 @@ class VitalsInspectionPanel(ttk.Frame):
             return
         which = self.active.get()
         if which == "Vitals":
-            self.vitals_frame.tkraise()
+            self.vitals_frame.tkraise()        
         elif which == "Posture":
             self.posture_frame.tkraise()
+        elif which == "Subluxations":
+            self.sublux_frame.tkraise()
         elif which == "Grip":
             self.grip_frame.tkraise()
         else:
@@ -787,6 +819,124 @@ class VitalsInspectionPanel(ttk.Frame):
             .grid(row=0, column=7, sticky="w", padx=(0, 0), pady=2)
 
         f.grid_columnconfigure(99, weight=1)
+    
+    def _build_sublux_row(self, parent):
+        row = ttk.Frame(parent)
+        row.grid(row=0, column=0, sticky="ew")
+
+        # ---------- spine level buttons ----------
+        spine = ttk.Frame(row)
+        spine.grid(row=0, column=0, sticky="w")
+
+        self.sublux_buttons = {}
+
+        quick = ttk.Frame(spine)
+        quick.grid(row=0, column=0, sticky="w", pady=(0, 4))
+
+        def _toggle_region(code: str):
+            var = self.sublux_region_vars[code]
+            var.set(not var.get())
+            self._update_sublux_preview_only()
+            self._changed()
+
+        ttk.Label(quick, text="Quick:", font=("Segoe UI", 9, "bold")).pack(side="left", padx=(0, 6))
+
+        for code in ("CS", "TS", "LS"):
+            ttk.Button(
+                quick,
+                text=code,
+                width=4,
+                command=lambda c=code: _toggle_region(c)
+            ).pack(side="left", padx=2)
+
+        def create_region(label, levels, start_row):
+            ttk.Label(spine, text=label, font=("Segoe UI", 9, "bold")).grid(
+                row=start_row, column=0, sticky="w", pady=(6, 2)
+            )
+
+            r = start_row + 1
+            c = 0
+
+            for level in levels:
+                btn = ttk.Button(
+                    spine,
+                    text=level,
+                    width=4,
+                    command=lambda L=level: self._toggle_sublux_level(L)
+                )
+                btn.grid(row=r, column=c, padx=2, pady=2)
+
+                self.sublux_buttons[level] = btn
+
+                c += 1
+                if c > 6:
+                    c = 0
+                    r += 1
+
+            return r + 1
+
+        r = 0
+        r = create_region("Cervical", ["C1","C2","C3","C4","C5","C6","C7"], r)
+        r = create_region("Thoracic", [f"T{i}" for i in range(1,13)], r)
+        r = create_region("Lumbar", ["L1","L2","L3","L4","L5"], r)
+
+        # ---------- right side controls ----------
+        right = ttk.Frame(row)
+        right.grid(row=0, column=1, sticky="nw", padx=(20,0))
+
+        ttk.Label(right, text="Listing").grid(row=0, column=0, sticky="w")
+
+        listings = [
+            "(none)",
+            "PR","PL","AS","PI",
+            "PRS","PRSI","PLI","PLS",
+            "ERS","FRS"
+        ]
+
+        self.sublux_listing_cb = ttk.Combobox(
+            right,
+            values=listings,
+            textvariable=self.sublux_listing_var,
+            width=10,
+            state="readonly"
+        )
+        self.sublux_listing_cb.grid(row=1, column=0, sticky="w")
+
+        self.sublux_listing_cb.bind(
+            "<<ComboboxSelected>>",
+            lambda e: self._update_sublux()
+        )
+
+        ttk.Label(right, text="Motion Restriction").grid(
+            row=2, column=0, sticky="w", pady=(10,0)
+        )
+
+        mr_frame = ttk.Frame(right)
+        mr_frame.grid(row=3, column=0, sticky="w")
+
+        for i, name in enumerate(self.sublux_motion_vars):
+            ttk.Checkbutton(
+                mr_frame,
+                text=name,
+                variable=self.sublux_motion_vars[name],
+                command=self._update_sublux
+            ).grid(row=i, column=0, sticky="w")
+
+        ttk.Label(right, text="Preview").grid(
+            row=4, column=0, sticky="w", pady=(10,0)
+        )
+
+        self.sublux_preview = ttk.Label(
+            right,
+            text="",
+            foreground="gray",
+            wraplength=300,
+            justify="left"
+        )
+
+        self.sublux_preview.grid(row=5, column=0, sticky="w")
+
+
 
     def _build_grip_row(self, f):
         ttk.Label(f, text="Left:").grid(row=0, column=0, sticky="e", padx=(0, 4), pady=2)
@@ -816,6 +966,12 @@ class VitalsInspectionPanel(ttk.Frame):
         f = self.posture_frame
         self._build_posture_row(f)
         notes = CollapsibleAutoNotes(f, "Posture Notes", self.posture_notes_var, on_change=self._changed)
+        notes.grid(row=1, column=0, columnspan=100, sticky="ew", pady=(8, 0))
+
+    def _build_sublux_panel(self):
+        f = self.sublux_frame
+        self._build_sublux_row(f)
+        notes = CollapsibleAutoNotes(f, "Subluxation Notes", self.sublux_notes_var, on_change=self._changed)
         notes.grid(row=1, column=0, columnspan=100, sticky="ew", pady=(8, 0))
 
     def _build_grip_panel(self):
@@ -866,6 +1022,115 @@ class VitalsInspectionPanel(ttk.Frame):
         notes = CollapsibleAutoNotes(f, "ADL Notes", self.adl_notes_var, on_change=self._changed)
         notes.grid(row=3, column=0, columnspan=100, sticky="ew", pady=(8, 0))
 
+    def _toggle_sublux_level(self, level: str):
+        level = (level or "").strip()
+        if not level:
+            return
+
+        active = (self.sublux_active_level.get() or "").strip()
+
+        # If clicking the currently-active level => REMOVE it completely
+        if active == level:
+            try:
+                if level in self.sublux_data:
+                    del self.sublux_data[level]
+            except Exception:
+                pass
+
+            # Clear UI state
+            self.sublux_active_level.set("")
+            self.sublux_listing_var.set("(none)")
+            for m in self.sublux_motion_vars:
+                self.sublux_motion_vars[m].set(False)
+
+            # Refresh preview + notify change
+            self._update_sublux_preview_only()
+            self._changed()
+            return
+
+        # Otherwise just select it (normal behavior)
+        self._select_sublux_level(level)
+
+
+    def _select_sublux_level(self, level):
+        self.sublux_active_level.set(level)
+
+        if level not in self.sublux_data:
+            self.sublux_data[level] = {
+                "listing": "(none)",
+                "motion": []
+            }
+
+        data = self.sublux_data[level]
+
+        self.sublux_listing_var.set(data["listing"])
+
+        for m in self.sublux_motion_vars:
+            self.sublux_motion_vars[m].set(m in data["motion"])
+
+        self._update_sublux()
+
+
+    def _update_sublux_preview_only(self):
+        # region phrase
+        region_names = {
+            "CS": "Cervical Spine",
+            "TS": "Thoracic Spine",
+            "LS": "Lumbar Spine",
+        }
+        regions = [region_names[k] for k, v in self.sublux_region_vars.items() if v.get()]
+
+        # level phrase
+        def sort_key(lv):
+            order = {"C": 0, "T": 1, "L": 2}
+            return (order.get(lv[0], 9), int(lv[1:]))
+
+        level_parts = []
+        for lv in sorted(self.sublux_data.keys(), key=sort_key):
+            st = self.sublux_data.get(lv) or {}
+            listing = st.get("listing", "(none)")
+            motion = st.get("motion", []) or []
+
+            piece = lv
+            if listing and listing != "(none)":
+                piece += f" {listing}"
+            if motion:
+                piece += f" MR: {', '.join(motion)}"
+            level_parts.append(piece)
+
+        parts = []
+        if regions:
+            parts.append("Subluxations noted in the " + ", ".join(regions) + ".")
+        if level_parts:
+            parts.append("Specific levels: " + "; ".join(level_parts) + ".")
+
+        self.sublux_preview.config(text=" ".join(parts).strip())
+        
+
+    def _update_sublux(self):
+        level = self.sublux_active_level.get()
+        if not level:
+            self._update_sublux_preview_only()
+            self._changed()
+            return
+
+        listing = self.sublux_listing_var.get()
+
+        motion = [
+            k for k, v in self.sublux_motion_vars.items()
+            if v.get()
+        ]
+
+        self.sublux_data[level] = {
+            "listing": listing,
+            "motion": motion
+        }
+
+        # ONLY use the master preview builder
+        self._update_sublux_preview_only()
+
+        self._changed()        
+
 
     def _changed(self):
         if callable(self.on_change):
@@ -889,12 +1154,19 @@ class VitalsInspectionPanel(ttk.Frame):
             self.lordosis_ls_var.get() != "(none)",
             (self.posture_notes_var.get() or "").strip(),
         ])
+
+        sublux_any = bool((self.sublux_notes_var.get() or "").strip()) or any(
+            (v.get("listing") not in ("", "(none)") or (v.get("motion") or []))
+            for v in (self.sublux_data or {}).values()
+        )
+
+
         grip_any = any([
             self.grip_left_var.get().strip(),
             self.grip_right_var.get().strip(),
             self.grip_compare_var.get() != "(none)",
             (self.grip_notes_var.get() or "").strip(),
-        ])
+        ])        
 
         adl_any = (
             int(self.adl_sev_var.get()) != -1 or
@@ -903,7 +1175,7 @@ class VitalsInspectionPanel(ttk.Frame):
         )
 
 
-        return vitals_any or posture_any or grip_any or adl_any
+        return vitals_any or posture_any or sublux_any or grip_any or adl_any
 
     def to_dict(self) -> dict:
         return {
@@ -926,6 +1198,12 @@ class VitalsInspectionPanel(ttk.Frame):
                 "forward_head_cs": self.forward_head_cs_var.get(),
                 "lordosis_ls": self.lordosis_ls_var.get(),
                 "notes": self.posture_notes_var.get(),
+            },
+            "sublux": {
+            "notes": self.sublux_notes_var.get(),
+            "regions": {k: bool(v.get()) for k, v in self.sublux_region_vars.items()},
+            "levels": self.sublux_data,
+            "active_level": self.sublux_active_level.get(),  
             },
             "grip": {
                 "left": self.grip_left_var.get(),
@@ -962,6 +1240,38 @@ class VitalsInspectionPanel(ttk.Frame):
         self.forward_head_cs_var.set(p.get("forward_head_cs", "(none)"))
         self.lordosis_ls_var.set(p.get("lordosis_ls", "(none)"))
         self.posture_notes_var.set(p.get("notes", ""))
+
+        sx = data.get("sublux") or {}
+
+        # notes
+        self.sublux_notes_var.set(sx.get("notes", ""))
+
+        # restore regions (CS/TS/LS)
+        regions = sx.get("regions", {}) or {}
+        for k, var in self.sublux_region_vars.items():
+            var.set(bool(regions.get(k, False)))
+
+        # restore per-level selections (C1..L5 etc)
+        self.sublux_data = sx.get("levels", {}) or {}
+
+        # OPTIONAL (recommended): restore which level was last selected in the UI
+        active = (sx.get("active_level") or "").strip()
+        self.sublux_active_level.set(active)
+
+        if active:
+            self._select_sublux_level(active)   # loads listing/motion + refresh preview
+        else:
+            # neutral UI state
+            self.sublux_listing_var.set("(none)")
+            for m in self.sublux_motion_vars:
+                self.sublux_motion_vars[m].set(False)
+            try:
+                self.sublux_preview.config(text="")
+            except Exception:
+                pass
+
+
+
 
         g = data.get("grip") or {}
         self.grip_left_var.set(g.get("left", ""))
@@ -1009,6 +1319,7 @@ class VitalsInspectionPanel(ttk.Frame):
 
         self.vitals_notes_var.set("")
         self.posture_notes_var.set("")
+        self.sublux_notes_var.set("") 
         self.grip_notes_var.set("")
 
         self.adl_sev_var.set(-1)
@@ -1016,13 +1327,32 @@ class VitalsInspectionPanel(ttk.Frame):
             self.adl_sev_cb.set("(select)")
         for v in self.adl_checks.values():
             v.set(False)
-        self.adl_notes_var.set("")
+        self.adl_notes_var.set("")        
 
+        # ✅ Sublux reset (PUT IT HERE)
+        for v in self.sublux_region_vars.values():
+            v.set(False)
+
+        self.sublux_data = {}
+
+        self.sublux_active_level.set("")
+
+        self.sublux_listing_var.set("(none)")
+
+        for m in self.sublux_motion_vars.values():
+            m.set(False)
+
+        try:
+            self._update_sublux_preview_only()
+        except Exception:
+            pass
+
+        # Panel state
         self._open.set(False)
         self.active.set("Vitals")
+
         self._apply_open_state()
         self._changed()
-
 
 
 
@@ -1048,7 +1378,7 @@ class ObjectivesBlock(ttk.Frame):
 
         self.active_section = tk.StringVar(value="Palpation")  # Palpation|Orthopedic|ROM
 
-        # Notes (one per section)
+        # Notes (one per section)        
         self.palp_notes_var = tk.StringVar(value="")
         self.ortho_notes_var = tk.StringVar(value="")
         self.rom_notes_var = tk.StringVar(value="")
@@ -1069,6 +1399,7 @@ class ObjectivesBlock(ttk.Frame):
         self.notes_container.grid_rowconfigure(0, weight=1)
         self.notes_container.grid_columnconfigure(0, weight=1)
 
+        
         self.palp_notes_widget = CollapsibleAutoNotes(
             self.notes_container, "Palpation Notes", self.palp_notes_var, on_change=self._changed
         )
@@ -1116,7 +1447,7 @@ class ObjectivesBlock(ttk.Frame):
                 variable=self.active_section
             ).pack(side="left", padx=6)
 
-        tab_button("Vitals / Inspection")  # ✅ NEW first
+        tab_button("Vitals / Inspection")  # ✅ NEW first        
         tab_button("Palpation")
         tab_button("Orthopedic")
         tab_button("ROM")
@@ -1130,7 +1461,7 @@ class ObjectivesBlock(ttk.Frame):
         self.section_container.pack(fill="both", expand=True, padx=10, pady=(0, 10))
         self.section_container.grid_rowconfigure(0, weight=1)
         self.section_container.grid_columnconfigure(0, weight=1)
-
+        
         self.palp_frame = ttk.LabelFrame(self.section_container, text="Palpation")
         self.ortho_frame = ttk.LabelFrame(self.section_container, text="Orthopedic Exam")
         self.rom_frame = ttk.LabelFrame(self.section_container, text="Range of Motion")
@@ -1226,6 +1557,7 @@ class ObjectivesBlock(ttk.Frame):
         if callable(self.on_show_blocks):
             self.on_show_blocks()
 
+        
         if which == "Palpation":
             self.palp_frame.tkraise()
             self.palp_notes_widget.tkraise()
@@ -1235,6 +1567,10 @@ class ObjectivesBlock(ttk.Frame):
         elif which == "ROM":
             self.rom_frame.tkraise()
             self.rom_notes_widget.tkraise()
+        else:
+            # fallback
+            self.palp_frame.tkraise()
+            self.palp_notes_widget.tkraise()
 
 
 
@@ -1275,7 +1611,7 @@ class ObjectivesBlock(ttk.Frame):
         if code == "(none)" or not label:
             return False
 
-        notes_any = any([
+        notes_any = any([            
             (self.palp_notes_var.get() or "").strip(),
             (self.ortho_notes_var.get() or "").strip(),
             (self.rom_notes_var.get() or "").strip(),
@@ -1294,7 +1630,7 @@ class ObjectivesBlock(ttk.Frame):
             "active_section": self.active_section.get(),
             "palpation": {k: v.get_state() for k, v in self.palp_rows.items()},
             "ortho": {k: v.get_state() for k, v in self.ortho_rows.items()},
-            "rom": {k: v.get_state() for k, v in self.rom_rows.items()},
+            "rom": {k: v.get_state() for k, v in self.rom_rows.items()},            
             "palpation_notes": self.palp_notes_var.get(),
             "ortho_notes": self.ortho_notes_var.get(),
             "rom_notes": self.rom_notes_var.get(),
@@ -1320,6 +1656,7 @@ class ObjectivesBlock(ttk.Frame):
             if isinstance(rom.get(name), dict):
                 row.set_state(rom[name])
 
+        
         self.palp_notes_var.set(data.get("palpation_notes", ""))
         self.ortho_notes_var.set(data.get("ortho_notes", ""))
         self.rom_notes_var.set(data.get("rom_notes", ""))
@@ -1332,7 +1669,7 @@ class ObjectivesBlock(ttk.Frame):
 
     def reset(self):
         self.region_var.set("(none)")
-        self.active_section.set("Palpation")
+        self.active_section.set("Palpation")        
         self.palp_notes_var.set("")
         self.ortho_notes_var.set("")
         self.rom_notes_var.set("")
