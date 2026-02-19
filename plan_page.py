@@ -163,6 +163,17 @@ class PlanPage(ttk.Frame):
                 self.plan_text.delete("1.0", "end")
             except Exception:
                 pass
+            
+            # --- Clear Services Provided Today ---
+            self.therapy_data.clear()
+            self.cmt_data.clear()
+            self.current_cmt_code.set("")
+            self.last_cmt_code = ""
+            try:
+                self.update_services_summary_labels()
+            except Exception:
+                pass
+
 
             # keep UI states correct
             self._sync_other_entries()
@@ -204,6 +215,15 @@ class PlanPage(ttk.Frame):
         self._care_vars = {label: tk.BooleanVar(value=False) for label in self.CARE_TYPES}
         self._region_vars = {label: tk.BooleanVar(value=False) for label in self.REGIONS}
         self._goal_vars = {label: tk.BooleanVar(value=False) for label in self.GOALS}
+
+                # -----------------------------
+        # Services Provided Today (CMT + Therapy)
+        # -----------------------------
+        self.therapy_data = {}  # dict[str, dict[str, tuple[bool,str]]]
+        self.cmt_data = {}      # dict[str, tuple[bool, list[bool]]]
+        self.current_cmt_code = tk.StringVar(value="")
+        self.last_cmt_code = ""  # used to detect code changes + clear details
+
 
         # UI
         self._build_ui()
@@ -248,7 +268,7 @@ class PlanPage(ttk.Frame):
         right.grid(row=0, column=1, sticky="nsew", padx=(8, 0), pady=6)
         right.columnconfigure(0, weight=1)
 
-        # -----------------------------
+                # -----------------------------
         # TREATMENT (collapsible)
         # -----------------------------
         treat_section = CollapsibleSection(left, "Treatment", start_open=True)
@@ -267,22 +287,37 @@ class PlanPage(ttk.Frame):
             cb.grid(row=i, column=0, sticky="w", padx=8, pady=2)
 
         # -----------------------------
-        # REGIONS TREATED (collapsible)
-        # IMPORTANT: this is a SIBLING of Treatment, not inside it
+        # REGIONS TREATED (collapsible)  <-- SIBLING of Treatment
         # -----------------------------
         reg_section = CollapsibleSection(left, "Regions Treated", start_open=True)
         reg_section.grid(row=1, column=0, sticky="ew", padx=0, pady=(0, 8))
         reg_section.columnconfigure(0, weight=1)
 
         reg_box = reg_section.content
-        reg_box.columnconfigure(0, weight=1)
-        reg_box.columnconfigure(1, weight=1)
+        reg_box.columnconfigure(0, weight=1)  # regions
+        reg_box.columnconfigure(1, weight=1)  # services column (right side)
+
+        # LEFT: regions checkboxes in 2 columns
+        regions_frame = ttk.Frame(reg_box)
+        regions_frame.grid(row=0, column=0, sticky="nsew", padx=(8, 4), pady=8)
+        regions_frame.columnconfigure(0, weight=1)
+        regions_frame.columnconfigure(1, weight=1)
 
         for i, label in enumerate(self.REGIONS):
             r = i // 2
             c = i % 2
-            cb = ttk.Checkbutton(reg_box, text=label, variable=self._region_vars[label])
+            cb = ttk.Checkbutton(regions_frame, text=label, variable=self._region_vars[label])
             cb.grid(row=r, column=c, sticky="w", padx=8, pady=2)
+
+        # RIGHT: Services Provided Today (button + scrollable centered summary)
+        services_frame = ttk.Frame(reg_box)
+        services_frame.grid(row=0, column=1, sticky="nsew", padx=(4, 8), pady=8)
+        services_frame.columnconfigure(0, weight=1)
+        services_frame.rowconfigure(1, weight=1)
+
+        self._build_services_ui(services_frame)
+
+
 
         # -----------------------------
         # SCHEDULE (collapsible)
@@ -332,7 +367,7 @@ class PlanPage(ttk.Frame):
         # Goals + notes
         mid = ttk.Frame(self)
         mid.grid(row=2, column=0, sticky="ew", padx=10)
-        mid.columnconfigure(0, weight=1)
+        mid.columnconfigure(1, weight=4)
         mid.columnconfigure(1, weight=1)
 
         goals_box = ttk.Labelframe(mid, text="Goals")
@@ -591,6 +626,346 @@ class PlanPage(ttk.Frame):
         if len(items) == 2:
             return f"{items[0]} and {items[1]}"
         return ", ".join(items[:-1]) + f", and {items[-1]}"
+    
+    # =========================================================
+    # Services Provided Today (embedded in PlanPage)
+    # =========================================================
+
+    def _build_services_ui(self, parent: ttk.Frame):
+        """
+        Right-side UI next to Regions Treated:
+          - Button opens popup
+          - Scrollable summary area (centered labels)
+        """
+        btn = ttk.Button(parent, text="Services Provided Today", command=self.open_services_main_popup)
+        btn.grid(row=0, column=0, sticky="ew", pady=(0, 8))
+        parent.columnconfigure(0, weight=1)
+
+        # Scrollable summary container
+        container = ttk.Frame(parent)
+        container.grid(row=1, column=0, sticky="nsew")
+        container.columnconfigure(0, weight=1)
+        container.rowconfigure(0, weight=1)
+
+        self._services_canvas = tk.Canvas(container, highlightthickness=0)
+        sb = ttk.Scrollbar(container, orient="vertical", command=self._services_canvas.yview)
+        self._services_canvas.configure(yscrollcommand=sb.set)
+
+        self._services_canvas.grid(row=0, column=0, sticky="nsew")
+        sb.grid(row=0, column=1, sticky="ns")
+
+        self._services_inner = ttk.Frame(self._services_canvas)
+        self._services_window = self._services_canvas.create_window((0, 0), window=self._services_inner, anchor="nw")
+
+        def _on_inner_configure(_e=None):
+            self._services_canvas.configure(scrollregion=self._services_canvas.bbox("all"))
+
+        def _on_canvas_configure(e):
+            # keep inner frame width equal to canvas width so labels center nicely
+            self._services_canvas.itemconfigure(self._services_window, width=e.width)
+
+        self._services_inner.bind("<Configure>", _on_inner_configure)
+        self._services_canvas.bind("<Configure>", _on_canvas_configure)
+
+        # This is where summary labels go
+        self._services_label_frame = ttk.Frame(self._services_inner)
+        self._services_label_frame.pack(fill="both", expand=True)
+
+        # initial paint
+        self.update_services_summary_labels()
+
+    def update_services_summary_labels(self):
+        # Clear existing labels
+        try:
+            for w in self._services_label_frame.winfo_children():
+                w.destroy()
+        except Exception:
+            return
+
+        # 1) CMT Summary
+        if self.cmt_data and (self.current_cmt_code.get() or "").strip():
+            code_num = (self.current_cmt_code.get().split(":")[0] or "").strip()
+
+            area_map = {
+                "Cervical": "CS", "Thoracic": "TS", "Lumbar": "LS",
+                "Sacral": "S", "Pelvic": "P",
+                "Right Shoulder": "R Shld", "Left Shoulder": "L Shld",
+                "Right Elbow": "R Elb", "Left Elbow": "L Elb",
+                "Right Wrist": "R Wst", "Left Wrist": "L Wst",
+                "Right Hip": "R Hip", "Left Hip": "L Hip",
+            }
+
+            adjusted_areas = []
+            techs_used = set()
+
+            for area, data in self.cmt_data.items():
+                # data = (adjusted_bool, [tech_bool...])
+                if data and data[0]:
+                    adjusted_areas.append(area_map.get(area, area))
+                    for i, tech in enumerate(["Activator", "Diversified", "Thompson Drop Technique"]):
+                        try:
+                            if data[1][i]:
+                                techs_used.add(tech)
+                        except Exception:
+                            pass
+
+            area_str = f": {', '.join(adjusted_areas)}" if adjusted_areas else ""
+            tech_str = f"\n{', '.join(sorted(techs_used))}" if techs_used else ""
+            cmt_text = f"• {code_num}{area_str}{tech_str}"
+
+            ttk.Label(
+                self._services_label_frame,
+                text=cmt_text,
+                font=("Segoe UI", 9),
+                justify="center",
+            ).pack(anchor="center", pady=(0, 8))
+
+        # 2) Therapy Summaries
+        for therapy, data in (self.therapy_data or {}).items():
+            parts = (therapy or "").split(": ")
+            code_num = parts[0].strip() if parts else ""
+            modality_name = parts[1].strip() if len(parts) > 1 else ""
+
+            parts_summary = []
+            for part, values in (data or {}).items():
+                try:
+                    checked = bool(values[0])
+                    minutes = (values[1] or "").strip()
+                except Exception:
+                    checked, minutes = False, ""
+
+                if checked:
+                    short_part = (part or "").replace(" Spine", "S").replace("Right ", "R ").replace("Left ", "L ")
+                    short_part = short_part.replace("CervicalS", "CS").replace("ThoracicS", "TS").replace("LumbarS", "LS")
+                    if minutes:
+                        parts_summary.append(f"{short_part} ({minutes}m)")
+                    else:
+                        parts_summary.append(f"{short_part}")
+
+            if parts_summary:
+                ther_text = f"• {code_num}: {modality_name}\n{', '.join(parts_summary)}"
+                ttk.Label(
+                    self._services_label_frame,
+                    text=ther_text,
+                    font=("Segoe UI", 9),
+                    justify="center",
+                ).pack(anchor="center", pady=(0, 8))
+
+    # -------------------------
+    # MAIN POPUP
+    # -------------------------
+    def open_services_main_popup(self):
+        root = self.winfo_toplevel()
+        popup = tk.Toplevel(root)
+        popup.title("Services Provided Today")
+        popup.geometry("500x550")
+        popup.grab_set()
+
+        frame = ttk.Frame(popup, padding=20)
+        frame.pack(fill="both", expand=True)
+
+        ttk.Label(frame, text="Chiropractic CMT (Pick One):", font=("Segoe UI", 10, "bold")).pack(anchor="w", pady=(0, 5))
+
+        cmt_options = [
+            "98940: Spinal, 1-2 regions",
+            "98941: Spinal, 3-4 regions",
+            "98942: Spinal, 5 regions",
+            "98943: Extraspinal",
+        ]
+
+        cmt_combo = ttk.Combobox(frame, textvariable=self.current_cmt_code, values=cmt_options, state="readonly", width=50)
+        cmt_combo.pack(pady=(0, 20))
+        cmt_combo.bind("<<ComboboxSelected>>", lambda e: self.handle_cmt_interaction(popup))
+
+        ttk.Label(frame, text="Therapy Modalities (Click once to Setup):", font=("Segoe UI", 10, "bold")).pack(anchor="w", pady=(0, 5))
+
+        list_frame = ttk.Frame(frame)
+        list_frame.pack(fill="x", pady=5)
+
+        scrollbar = ttk.Scrollbar(list_frame, orient="vertical")
+        self._therapy_listbox = tk.Listbox(
+            list_frame,
+            selectmode="multiple",
+            height=8,
+            exportselection=0,
+            yscrollcommand=scrollbar.set,
+        )
+        scrollbar.config(command=self._therapy_listbox.yview)
+
+        self._therapy_options = [
+            "97012: Mechanical Traction",
+            "97014: Electric Stimulation",
+            "97110: Therapeutic Exercise",
+            "97140: Manual Therapy",
+            "97035: Ultrasound",
+            "97010: Hot/Cold Pack",
+            "97112: Neuromuscular Re-ed",
+        ]
+
+        self._therapy_listbox.delete(0, "end")
+        for item in self._therapy_options:
+            self._therapy_listbox.insert("end", item)
+            if item in (self.therapy_data or {}):
+                self._therapy_listbox.selection_set(self._therapy_options.index(item))
+
+        self._therapy_listbox.pack(side="left", fill="x", expand=True)
+        scrollbar.pack(side="right", fill="y")
+        self._therapy_listbox.bind("<ButtonRelease-1>", self.handle_therapy_click)
+
+        def on_close():
+            self.update_services_summary_labels()
+            popup.destroy()
+
+        ttk.Button(frame, text="Save and Exit", command=on_close).pack(side="bottom", pady=10)
+
+    # -------------------------
+    # CMT LOGIC
+    # -------------------------
+    def handle_cmt_interaction(self, parent_win):
+        new_selection = (self.current_cmt_code.get() or "").strip()
+        if new_selection != (self.last_cmt_code or ""):
+            self.cmt_data.clear()
+            self.last_cmt_code = new_selection
+        self.open_cmt_details_popup(parent_win)
+
+    def open_cmt_details_popup(self, parent_win):
+        selection = (self.current_cmt_code.get() or "").strip()
+        if not selection:
+            return
+
+        c_win = tk.Toplevel(parent_win)
+        c_win.title(f"Details: {selection.split(':')[0]}")
+        c_win.geometry("450x500")
+        c_win.grab_set()
+
+        if "98943" in selection:
+            areas = ["Right Shoulder", "Left Shoulder", "Right Elbow", "Left Elbow", "Right Wrist", "Left Wrist", "Right Hip", "Left Hip"]
+        else:
+            areas = ["Cervical", "Thoracic", "Lumbar", "Sacral", "Pelvic"]
+
+        container = ttk.Frame(c_win)
+        container.pack(fill="both", expand=True)
+
+        canvas = tk.Canvas(container, highlightthickness=0)
+        sb = ttk.Scrollbar(container, orient="vertical", command=canvas.yview)
+        canvas.configure(yscrollcommand=sb.set)
+
+        scroll_frame = ttk.Frame(canvas)
+        win_id = canvas.create_window((0, 0), window=scroll_frame, anchor="nw")
+
+        canvas.pack(side="left", fill="both", expand=True)
+        sb.pack(side="right", fill="y")
+
+        def _on_scrollframe_configure(_e=None):
+            canvas.configure(scrollregion=canvas.bbox("all"))
+
+        def _on_canvas_configure(e):
+            canvas.itemconfigure(win_id, width=e.width)
+
+        scroll_frame.bind("<Configure>", _on_scrollframe_configure)
+        canvas.bind("<Configure>", _on_canvas_configure)
+
+        active_cmt_ui_vars = {}
+
+        for area in areas:
+            saved_adj, saved_techs = self.cmt_data.get(area, (False, [False, False, False]))
+            adj_var = tk.BooleanVar(value=bool(saved_adj))
+            tech_vars = [tk.BooleanVar(value=bool(t)) for t in (saved_techs or [False, False, False])]
+
+            af = ttk.LabelFrame(scroll_frame, text=area, padding=5)
+            af.pack(fill="x", pady=5, padx=5)
+
+            ttk.Checkbutton(af, text=f"Adjusted {area}", variable=adj_var).pack(anchor="w")
+
+            tf = ttk.Frame(af)
+            tf.pack(padx=20)
+
+            for i, name in enumerate(["Activator", "Diversified", "Thompson"]):
+                ttk.Checkbutton(tf, text=name, variable=tech_vars[i]).pack(side="left", padx=2)
+
+            active_cmt_ui_vars[area] = (adj_var, tech_vars)
+
+        def save_cmt():
+            for a, vars_ in active_cmt_ui_vars.items():
+                self.cmt_data[a] = (vars_[0].get(), [t.get() for t in vars_[1]])
+            self.update_services_summary_labels()
+            c_win.destroy()
+
+        def delete_cmt():
+            self.cmt_data.clear()
+            self.last_cmt_code = ""
+            self.current_cmt_code.set("")
+            self.update_services_summary_labels()
+            c_win.destroy()
+
+        btn_f = ttk.Frame(c_win)
+        btn_f.pack(pady=10)
+
+        ttk.Button(btn_f, text="Save Adjustments", command=save_cmt).pack(side="left", padx=5)
+        ttk.Button(btn_f, text="Delete Sections", command=delete_cmt).pack(side="left", padx=5)
+
+    # -------------------------
+    # THERAPY LOGIC
+    # -------------------------
+    def handle_therapy_click(self, event):
+        lb = event.widget
+        idx = lb.nearest(event.y)
+        therapy_name = lb.get(idx)
+        lb.selection_set(idx)
+        self.open_therapy_details_popup(event.widget.winfo_toplevel(), therapy_name, idx)
+
+    def open_therapy_details_popup(self, parent_win, therapy_name, list_idx):
+        t_win = tk.Toplevel(parent_win)
+        t_win.title(f"Setup: {therapy_name}")
+        t_win.geometry("500x500")
+        t_win.grab_set()
+
+        body_parts = [
+            "Cervical Spine", "Thoracic Spine", "Lumbar Spine",
+            "Right Shoulder", "Left Shoulder",
+            "Right Knee", "Left Knee",
+        ]
+
+        active_therapy_vars = {}
+
+        for part in body_parts:
+            saved_checked, saved_time = self.therapy_data.get(therapy_name, {}).get(part, (False, ""))
+            b_var = tk.BooleanVar(value=bool(saved_checked))
+            s_var = tk.StringVar(value=str(saved_time) if saved_time is not None else "")
+
+            def auto_erase(bv=b_var, sv=s_var):
+                if not bv.get():
+                    sv.set("")
+
+            row = ttk.Frame(t_win, padding=2)
+            row.pack(fill="x", padx=20)
+
+            ttk.Checkbutton(row, text=part, variable=b_var, width=20, command=auto_erase).pack(side="left")
+            ttk.Entry(row, textvariable=s_var, width=5).pack(side="right")
+
+            active_therapy_vars[part] = (b_var, s_var)
+
+        def save_therapy():
+            self.therapy_data[therapy_name] = {p: (v[0].get(), v[1].get()) for p, v in active_therapy_vars.items()}
+            self.update_services_summary_labels()
+            t_win.destroy()
+
+        def delete_therapy():
+            if therapy_name in self.therapy_data:
+                del self.therapy_data[therapy_name]
+            try:
+                self._therapy_listbox.selection_clear(list_idx)
+            except Exception:
+                pass
+            self.update_services_summary_labels()
+            t_win.destroy()
+
+        btn_frame = ttk.Frame(t_win)
+        btn_frame.pack(pady=20)
+
+        ttk.Button(btn_frame, text="Save This Therapy", command=save_therapy).pack(side="left", padx=5)
+        ttk.Button(btn_frame, text="Delete Sections", command=delete_therapy).pack(side="left", padx=5)
+
 
     # ---------------- Public struct API (save/load) ----------------
     def get_struct(self) -> dict:
@@ -604,6 +979,13 @@ class PlanPage(ttk.Frame):
             "custom_notes": self.custom_notes.get("1.0", "end").strip(),
             "auto_enabled": bool(self.auto_plan_var.get()),
             "plan_text": self.plan_text.get("1.0", "end").strip(),
+            "services": {
+                "cmt_code": (self.current_cmt_code.get() or ""),
+                "last_cmt_code": (self.last_cmt_code or ""),
+                "cmt_data": self.cmt_data or {},
+                "therapy_data": self.therapy_data or {},
+            },
+
         }
 
     def load_struct(self, d: dict):
@@ -641,10 +1023,24 @@ class PlanPage(ttk.Frame):
 
             self.plan_text.delete("1.0", "end")
             self.plan_text.insert("1.0", d.get("plan_text", "") or "")
+            
+            # --- Services Provided Today ---
+            services = d.get("services") or {}
+            self.current_cmt_code.set(services.get("cmt_code", "") or "")
+            self.last_cmt_code = services.get("last_cmt_code", "") or ""
+            self.cmt_data = services.get("cmt_data", {}) or {}
+            self.therapy_data = services.get("therapy_data", {}) or {}
+
 
             self._sync_other_entries()
         finally:
             self._loading = False
+            
+        try:
+            self.update_services_summary_labels()
+        except Exception:
+            pass
+
 
         # If auto is enabled and plan is blank or auto-tagged, regen
         if self.auto_plan_var.get():
@@ -665,7 +1061,7 @@ class PlanPage(ttk.Frame):
         combo_var.set("(other)")
         other_var.set(value)
 
-        # ---------------- Compatibility with older TextPage API ----------------
+    # ---------------- Compatibility with older TextPage API ----------------
     def get_value(self) -> str:
         """
         Backwards-compatible: return the Plan narrative text only.
