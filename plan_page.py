@@ -173,6 +173,12 @@ class PlanPage(ttk.Frame):
                 self.update_services_summary_labels()
             except Exception:
                 pass
+            
+            self.print_schedule_var.set(True)
+            try:
+                self._refresh_print_schedule_btn()
+            except Exception:
+                pass
 
 
             # keep UI states correct
@@ -209,6 +215,10 @@ class PlanPage(ttk.Frame):
         self.auto_plan_var = tk.BooleanVar(value=True)
         self._last_auto_plan = bool(self.auto_plan_var.get())  # ✅ track toggle state
 
+        # PDF / output toggle: if False, schedule lines do NOT print on PDF
+        self.print_schedule_var = tk.BooleanVar(value=True)
+
+
         self.custom_notes_var = tk.StringVar(value="")
 
         # multi-check stores
@@ -231,6 +241,31 @@ class PlanPage(ttk.Frame):
 
         # start with generated narrative
         self._regen_plan_now()
+
+    def _toggle_print_schedule(self):
+        """
+        Standalone toggle: affects PDF output only.
+        Does NOT touch schedule UI, does NOT change narrative generation.
+        """
+        self.print_schedule_var.set(not bool(self.print_schedule_var.get()))
+        try:
+            self._refresh_print_schedule_btn()
+        except Exception:
+            pass
+        self._notify_change()
+
+    def _refresh_print_schedule_btn(self):
+        """
+        Makes the button look/feel like a toggle.
+        """
+        on = bool(self.print_schedule_var.get())
+        # You can rename these labels however you like
+        txt = "Schedule: ON (PDF)" if on else "Schedule: OFF (PDF)"
+        try:
+            self._btn_print_schedule.configure(text=txt)
+        except Exception:
+            pass
+
 
     # ---------------- providers ----------------
     def set_patient_provider(self, fn):
@@ -363,6 +398,17 @@ class PlanPage(ttk.Frame):
             text="Auto-generate Plan narrative",
             variable=self.auto_plan_var
         ).pack(side="left")
+
+
+        # PDF schedule toggle button (standalone)
+        self._btn_print_schedule = ttk.Button(
+            sched_box,
+            text="Schedule: ON (PDF)",
+            command=self._toggle_print_schedule
+        )
+        self._btn_print_schedule.grid(row=4, column=0, columnspan=4, sticky="w", padx=8, pady=(4, 8))
+        self._refresh_print_schedule_btn()
+
 
         # Goals + notes
         mid = ttk.Frame(self)
@@ -970,6 +1016,8 @@ class PlanPage(ttk.Frame):
     # ---------------- Public struct API (save/load) ----------------
     def get_struct(self) -> dict:
         return {
+            "print_schedule_pdf": bool(self.print_schedule_var.get()),
+
             # Existing fields (KEEP for backward compatibility)
             "care_types": self._selected(self._care_vars),
             "regions": self._selected(self._region_vars),
@@ -1039,6 +1087,13 @@ class PlanPage(ttk.Frame):
 
                 self.reeval_var.set(sched.get("reeval_choice", self.reeval_var.get()))
                 self.reeval_other_var.set(sched.get("reeval_other", ""))
+
+            self.print_schedule_var.set(bool(d.get("print_schedule_pdf", True)))
+            try:
+                self._refresh_print_schedule_btn()
+            except Exception:
+                pass
+
 
             self._sync_other_entries()
 

@@ -14,6 +14,17 @@ except ModuleNotFoundError:
     REPORTLAB_OK = False
 
 
+def _should_print_schedule_pdf(d: dict) -> bool:
+    """
+    Standalone: defaults to True if key missing (backward compatible).
+    """
+    try:
+        return bool((d or {}).get("print_schedule_pdf", True))
+    except Exception:
+        return True
+
+
+
 def _clean(s: str) -> str:
     return (s or "").strip()
 
@@ -320,6 +331,11 @@ def build_plan_flowables(plan_struct: dict, styles) -> list:
     freq = _clean(str(d.get("frequency_per_week", "")))
     dur = _clean(str(d.get("duration_weeks", "")))
     reeval = _clean(str(d.get("reeval", "")))
+    if not _should_print_schedule_pdf(d):
+        # hide schedule lines in PDF only
+        freq = ""
+        dur = ""
+        reeval = ""
     notes = _clean(d.get("custom_notes", ""))
     plan_text = _clean(d.get("plan_text", ""))
 
