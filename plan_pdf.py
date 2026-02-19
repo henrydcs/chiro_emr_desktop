@@ -167,7 +167,7 @@ def _build_services_flowables(d: dict, B) -> list:
     # 2: Adjustment Codes / Modality Code
     # 3: Segments / body parts
     H0 = ParagraphStyle(
-        "SvcH0", parent=B, fontName="Helvetica-Bold", fontSize=10, leading=12,
+        "SvcH0", parent=B, fontName="Helvetica-Bold", fontSize=11, leading=12,
         spaceBefore=6, spaceAfter=6, leftIndent=0
     )
     H1 = ParagraphStyle(
@@ -192,7 +192,7 @@ def _build_services_flowables(d: dict, B) -> list:
     # =========================
     # Top header
     # =========================
-    story.append(Paragraph("<b>Services Provided Today</b>", H0))
+    story.append(Paragraph("<b>SERVICES PROVIDED TODAY</b>", H0))
 
     # =========================
     # Chiropractic CMT
@@ -200,9 +200,19 @@ def _build_services_flowables(d: dict, B) -> list:
     if has_cmt:
         story.append(Paragraph("<b>Chiropractic CMT</b>", H1))
 
-        adj_label = _format_cmt_code_label(cmt_code)  # e.g. "Spinal, 1-2 Regions (98940)"
-        if adj_label:
-            story.append(Paragraph(f"Adjustment Codes: {esc(adj_label)}", L2))
+        # 
+        
+        code_num = _clean(cmt_code.split(":")[0])
+        code_desc = _format_cmt_code_label(cmt_code)
+
+        if code_num and code_desc:
+            story.append(
+                Paragraph(
+                    f"Adjustment Code: <b>{esc(code_num)}</b> \u2014 {esc(code_desc.replace(f'({code_num})','').strip())}",
+                    L2
+                )
+            )
+
 
         # Segments Adjusted
         seg_lines = []

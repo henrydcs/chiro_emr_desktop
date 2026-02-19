@@ -115,8 +115,8 @@ class PlanPage(ttk.Frame):
     ]
 
     FREQ_CHOICES = ["1", "2", "3", "4", "5", "(other)"]
-    DURATION_CHOICES = ["2", "3", "4", "6", "8", "12", "(other)"]
-    REEVAL_CHOICES = ["2 weeks", "4 weeks", "6 weeks", "8 weeks", "12 visits", "18 visits", "(other)"]
+    DURATION_CHOICES = ["2", "3", "4", "4 to 6", "6", "8", "12", "(other)"]
+    REEVAL_CHOICES = ["2 weeks", "4 weeks", "4 to 6 weeks", "6 weeks", "8 weeks", "12 visits", "18 visits", "(other)"]
 
     def has_content(self) -> bool:
         try:
@@ -135,8 +135,8 @@ class PlanPage(ttk.Frame):
         try:
             # --- Defaults (match your __init__ defaults) ---
             self.freq_var.set("3")
-            self.duration_var.set("6")
-            self.reeval_var.set("12 visits")
+            self.duration_var.set("4")
+            self.reeval_var.set("4 weeks")
 
             self.freq_other_var.set("")
             self.duration_other_var.set("")
@@ -199,8 +199,8 @@ class PlanPage(ttk.Frame):
 
         # vars
         self.freq_var = tk.StringVar(value="3")
-        self.duration_var = tk.StringVar(value="6")
-        self.reeval_var = tk.StringVar(value="12 visits")
+        self.duration_var = tk.StringVar(value="4")
+        self.reeval_var = tk.StringVar(value="4 weeks")
 
         self.freq_other_var = tk.StringVar(value="")
         self.duration_other_var = tk.StringVar(value="")
@@ -367,8 +367,8 @@ class PlanPage(ttk.Frame):
         # Goals + notes
         mid = ttk.Frame(self)
         mid.grid(row=2, column=0, sticky="ew", padx=10)
-        mid.columnconfigure(1, weight=4)
-        mid.columnconfigure(1, weight=1)
+        mid.columnconfigure(2, weight=4)
+        mid.columnconfigure(2, weight=1)
 
         goals_box = ttk.Labelframe(mid, text="Goals")
         goals_box.grid(row=0, column=0, sticky="nsew", padx=(0, 8), pady=6)
@@ -970,23 +970,41 @@ class PlanPage(ttk.Frame):
     # ---------------- Public struct API (save/load) ----------------
     def get_struct(self) -> dict:
         return {
+            # Existing fields (KEEP for backward compatibility)
             "care_types": self._selected(self._care_vars),
             "regions": self._selected(self._region_vars),
+
+            # These are used by PDF + narrative generation
             "frequency_per_week": self._freq_value(),
             "duration_weeks": self._duration_value(),
-            "goals": self._selected(self._goal_vars),
             "reeval": self._reeval_value(),
+
+            "goals": self._selected(self._goal_vars),
             "custom_notes": self.custom_notes.get("1.0", "end").strip(),
             "auto_enabled": bool(self.auto_plan_var.get()),
             "plan_text": self.plan_text.get("1.0", "end").strip(),
+
+            # NEW — preserves combobox selection state exactly
+            "schedule_state": {
+                "freq_choice": self.freq_var.get(),
+                "freq_other": self.freq_other_var.get(),
+
+                "duration_choice": self.duration_var.get(),
+                "duration_other": self.duration_other_var.get(),
+
+                "reeval_choice": self.reeval_var.get(),
+                "reeval_other": self.reeval_other_var.get(),
+            },
+
+            # Services Provided Today
             "services": {
                 "cmt_code": (self.current_cmt_code.get() or ""),
                 "last_cmt_code": (self.last_cmt_code or ""),
                 "cmt_data": self.cmt_data or {},
                 "therapy_data": self.therapy_data or {},
             },
-
         }
+
 
     def load_struct(self, d: dict):
         d = d or {}
@@ -1006,9 +1024,23 @@ class PlanPage(ttk.Frame):
 
             # schedule values
             freq = _clean(str(d.get("frequency_per_week", ""))) or "3"
-            dur  = _clean(str(d.get("duration_weeks", ""))) or "6"
-            reeval = _clean(str(d.get("reeval", ""))) or "12 visits"
+            dur  = _clean(str(d.get("duration_weeks", ""))) or "4"
+            reeval = _clean(str(d.get("reeval", ""))) or "4 weeks"
 
+            # Restore exact combobox state (including "(other)")
+            sched = d.get("schedule_state") or {}
+
+            if sched:
+                self.freq_var.set(sched.get("freq_choice", self.freq_var.get()))
+                self.freq_other_var.set(sched.get("freq_other", ""))
+
+                self.duration_var.set(sched.get("duration_choice", self.duration_var.get()))
+                self.duration_other_var.set(sched.get("duration_other", ""))
+
+                self.reeval_var.set(sched.get("reeval_choice", self.reeval_var.get()))
+                self.reeval_other_var.set(sched.get("reeval_other", ""))
+
+            self._sync_other_entries()
 
             # if not in list, map to (other)
             self._set_combo_or_other(self.freq_var, self.freq_other_var, self.FREQ_CHOICES, freq)
