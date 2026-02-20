@@ -36,16 +36,7 @@ NEXT_YEAR_CASES_ROOT.mkdir(parents=True, exist_ok=True)
 SETTINGS_PATH: Path = get_data_dir() / "_app_settings.json"
 
 
-
 AUTOSAVE_DEBOUNCE_MS = 600
-
-
-print("PATIENTS_ROOT:", PATIENTS_ROOT)
-print("PATIENTS_ID_ROOT:", PATIENTS_ID_ROOT)
-print("SETTINGS_PATH:", SETTINGS_PATH)
-
-
-
 
 
 # ----------------- NAV / UI PAGES -----------------
