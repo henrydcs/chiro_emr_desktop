@@ -56,7 +56,7 @@ from config import (
     REGION_LABELS,
     SETTINGS_PATH,
     AUTOSAVE_DEBOUNCE_MS,
-    LOGO_PATH, CLINIC_NAME, CLINIC_ADDR, CLINIC_PHONE_FAX,
+    LOGO_PATH, PROVIDER_NAME, CLINIC_NAME, CLINIC_ADDR, CLINIC_PHONE_FAX,
     YEAR_CASES_ROOT, NEXT_YEAR_CASES_ROOT, BASE_DIR,
     PATIENT_SUBDIR_EXAMS, PATIENT_SUBDIR_PDFS,
 )
@@ -414,8 +414,9 @@ class App(tk.Tk):
         self.doi_var = tk.StringVar(value="")
 
         self.exam_date_var = tk.StringVar(value=today_mmddyyyy())
-        self.claim_var = tk.StringVar(value="")
-        self.provider_var = tk.StringVar(value="")
+        self.claim_var = tk.StringVar(value="")       
+
+        self.provider_var = tk.StringVar(value=PROVIDER_NAME)
 
         self.current_exam = tk.StringVar(value="Initial")
         self.current_page = tk.StringVar(value="HOI History")

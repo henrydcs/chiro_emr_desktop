@@ -5,6 +5,14 @@ from paths import get_data_dir, patients_dir
 
 
 
+from env_config import get_env
+
+PROVIDER_NAME = get_env("PROVIDER_NAME", "")
+CLINIC_NAME = get_env("CLINIC_NAME", "Default Clinic Name")
+CLINIC_ADDR = get_env("CLINIC_ADDR", "")
+CLINIC_PHONE_FAX = get_env("CLINIC_PHONE", "")
+
+
 
 # ----------------- PROJECT ROOT -----------------
 BASE_DIR = os.path.dirname(__file__)
@@ -13,10 +21,6 @@ BASE_DIR = os.path.dirname(__file__)
 ASSETS_DIR = os.path.join(BASE_DIR, "assets")
 LOGO_PATH = os.path.join(ASSETS_DIR, "clinic_logo.png")  # PNG
 
-
-CLINIC_NAME = "AUTO ACCIDENT & CHIROPRACTIC CENTER"
-CLINIC_ADDR = "2409 E. Plaza Blvd. National City, CA 91950"
-CLINIC_PHONE_FAX = "Phone: (619) 434-7333 Fax: (619) 434-7399"
 
 # ----------------- CASE STORAGE (PHI-safe, external) -----------------
 ACTIVE_YEAR = 2026
