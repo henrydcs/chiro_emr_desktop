@@ -57,11 +57,38 @@ class SubjectivesPage(ttk.Frame):
         self._therapy_order: list[str] = []      # first item = main concern
         self._therapy_loading = False            # guard while programmatically resetting/loading
 
-
-
+        
         self._build_ui()
         self._add_block()  # start with block 1
         self._sync_therapy_visibility()
+
+    
+    # Subjective Body Regions
+    def clear_all_body_regions(self):
+        """
+        Helper function: resets Body region to "(none)" for ALL existing subjective blocks.
+
+        Affects ONLY:
+        - region_var for each block
+
+        Does NOT modify:
+        - pain scale
+        - descriptors
+        - notes
+        - other subjective fields
+        """
+
+        try:
+            # If you store blocks in a list (typical pattern)
+            for block in getattr(self, "blocks", []):
+                try:
+                    if hasattr(block, "region_var"):
+                        block.region_var.set("(none)")
+                except Exception:
+                    pass
+
+        except Exception:
+            pass
 
 
     def _wire_block_therapy_hooks(self, block):

@@ -242,6 +242,64 @@ class PlanPage(ttk.Frame):
         # start with generated narrative
         self._regen_plan_now()
 
+    def set_subjectives_clear_regions_fn(self, fn):
+        """
+        fn: callable that clears ALL subjective block body regions to "(none)"
+        """
+        self._subjectives_clear_regions_fn = fn
+    
+    def clear_all_plan_checkboxes(self):
+        """
+        Helper function: unchecks all Plan of Care checkboxes.
+
+        Affects ONLY:
+        - Care Types
+        - Regions Treated
+        - Goals
+        - Narratives
+
+        Does NOT modify:
+        - Schedule
+        - Narrative
+        - Services
+        - Notes
+        - Any other state
+        """
+
+        # Care Types
+        for var in self._care_vars.values():
+            try:
+                var.set(False)
+            except Exception:
+                pass
+
+        # Regions Treated
+        for var in self._region_vars.values():
+            try:
+                var.set(False)
+            except Exception:
+                pass
+
+        # Goals
+        for var in self._goal_vars.values():
+            try:
+                var.set(False)
+            except Exception:
+                pass
+
+        # Auto-generate Plan narrative checkbox
+        try:
+            self.auto_plan_var.set(False)
+        except Exception:
+            pass
+
+        # Clear narrative textbox
+        try:
+            self._clear_plan_text()
+        except Exception:
+            pass
+
+
     def _toggle_print_schedule(self):
         """
         Standalone toggle: affects PDF output only.
@@ -252,7 +310,22 @@ class PlanPage(ttk.Frame):
             self._refresh_print_schedule_btn()
         except Exception:
             pass
+        self.clear_all_plan_checkboxes()
+
+        # NEW: clear Subjectives body regions via callback
+        fn = getattr(self, "_subjectives_clear_regions_fn", None)
+        if callable(fn):
+            try:
+                fn()
+            except Exception:
+                pass
+
+        
         self._notify_change()
+        #self._clear_plan_text()
+        
+
+
 
     def _refresh_print_schedule_btn(self):
         """

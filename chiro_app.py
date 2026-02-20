@@ -1539,11 +1539,19 @@ class App(tk.Tk):
 
         self.plan_page = PlanPage(self.content, on_change=self.schedule_autosave)
 
+        # ✅ Correct place — wire callback AFTER both exist
+        self.plan_page.set_subjectives_clear_regions_fn(
+            self.subjectives_page.clear_all_body_regions
+        )
+
+
         self.doc_vault_page = DocVaultPage(
             self.content,
             self.schedule_autosave,
             get_patient_root_fn=self.get_current_patient_root
         )
+
+        
 
         # --- Tk Docs timeline page ---
         self.tk_docs_page = TkDocsPage(
