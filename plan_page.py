@@ -134,9 +134,9 @@ class PlanPage(ttk.Frame):
         self._loading = True
         try:
             # --- Defaults (match your __init__ defaults) ---
-            self.freq_var.set("3")
-            self.duration_var.set("4")
-            self.reeval_var.set("4 weeks")
+            self.freq_var.set("")
+            self.duration_var.set("")
+            self.reeval_var.set("")
 
             self.freq_other_var.set("")
             self.duration_other_var.set("")
@@ -164,6 +164,22 @@ class PlanPage(ttk.Frame):
             except Exception:
                 pass
             
+            try:
+                self.clear_all_plan_checkboxes()
+            except Exception:
+                pass
+
+            # 2) schedule vars (examples — rename to your actual vars)
+            for v in getattr(self, "_schedule_vars", {}).values():
+                try: v.set("")
+                except Exception: pass
+
+            for attr in ("_freq_var", "_duration_var", "_reeval_var"):
+                v = getattr(self, attr, None)
+                if v is not None:
+                    try: v.set("")
+                    except Exception: pass
+
             # --- Clear Services Provided Today ---
             self.therapy_data.clear()
             self.cmt_data.clear()
@@ -1144,9 +1160,9 @@ class PlanPage(ttk.Frame):
                 v.set(k in goals)
 
             # schedule values
-            freq = _clean(str(d.get("frequency_per_week", ""))) or "3"
-            dur  = _clean(str(d.get("duration_weeks", ""))) or "4"
-            reeval = _clean(str(d.get("reeval", ""))) or "4 weeks"
+            freq   = _clean(str(d.get("frequency_per_week", "")))
+            dur    = _clean(str(d.get("duration_weeks", "")))
+            reeval = _clean(str(d.get("reeval", "")))
 
             # Restore exact combobox state (including "(other)")
             sched = d.get("schedule_state") or {}

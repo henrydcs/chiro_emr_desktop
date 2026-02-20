@@ -174,7 +174,6 @@ def _ensure_json_file(path: str, default_obj=None):
 
 
 
-
 class VisitsDropdown:
     """
     Persistent dropdown (toggle open/close) that behaves like a timeline list.
@@ -2432,6 +2431,8 @@ class App(tk.Tk):
                 })
             except Exception:
                 pass
+
+        
 
 
     def reset_current_exam(self):

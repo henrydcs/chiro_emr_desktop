@@ -784,6 +784,38 @@ class DiagnosisPage(ttk.Frame):
             self.blocks.clear()
             self._text_is_manual = False
             self._set_text("")
+            # ✅ NEW: clear Prognosis / Imaging / Referrals (structured)
+            try:
+                self.prognosis_var.set("(select)")
+            except Exception:
+                pass
+
+            try:
+                self.imaging_recs = []
+            except Exception:
+                self.imaging_recs = []
+            try:
+                self._refresh_imaging_list()
+            except Exception:
+                pass
+
+            try:
+                self.referrals = []
+            except Exception:
+                self.referrals = []
+            try:
+                self._refresh_ref_list()
+            except Exception:
+                pass
+
+            # ✅ NEW: reset the “picker” combobox vars
+            try:
+                self.img_mod_var.set("(select)")
+                self.img_part_var.set("(select)")
+                self.ref_var.set("(select)")
+            except Exception:
+                pass
+
         finally:
             self._loading = False
 
