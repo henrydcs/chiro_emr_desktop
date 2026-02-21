@@ -1,3 +1,20 @@
+#Git Hub to Work Between Computers
+
+#Start of Day
+#git pull
+
+#End of Day Push
+# cd chiro_emr_desktop
+# git status
+# git add .
+# git commit -m "End of day updates"
+# git push
+
+# git log --oneline --decorate -5  
+
+#And remember to make sure to be in the REPO FOLDER (OFFICE COMPUTER or HOME COMPUTER):
+#...\EMRchiropractic\chiro_emr_desktop OR EMR_Code\chiro_emr_desktop
+#If not in ROOT folder, make sure to "cd chiro_emr_desktop" without the quotes
 #testing git push / pull
 # chiro_app.py
 import json
@@ -19,35 +36,6 @@ import uuid
 from config import PATIENTS_ID_ROOT
 from doc_vault_page import upsert_vault_file
 from tk_docs_page import TkDocsPage
-
-
-
-
-
-
-#Git Hub to Work Between Computers
-
-
-#Start of Day
-#git pull
-
-#End of Day Push
-# cd chiro_emr_desktop
-# git status
-# git add .
-# git commit -m "End of day updates"
-# git push
-
-# git log --oneline --decorate -5  
-
-
-#And remember to make sure to be in the REPO FOLDER (OFFICE COMPUTER or HOME COMPUTER):
-#...\EMRchiropractic\chiro_emr_desktop OR EMR_Code\chiro_emr_desktop
-#If not in ROOT folder, make sure to "cd chiro_emr_desktop" without the quotes
-
-
-
-
 from pdf_export import REPORTLAB_OK, build_combined_pdf
 from config import (
     UI_PAGES,

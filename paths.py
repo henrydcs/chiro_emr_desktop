@@ -4,7 +4,8 @@ import json
 from pathlib import Path
 
 # Fallback location if settings_local.json is missing or broken
-DEFAULT_DATA_DIR = r"C:\EMR_Data\EMR"
+#DEFAULT_DATA_DIR = r"C:\EMR_Data\EMR"
+DEFAULT_DATA_DIR = r"C:\EMR_Data\HOME"
 
 
 def get_data_dir() -> Path:

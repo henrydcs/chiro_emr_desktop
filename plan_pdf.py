@@ -175,6 +175,7 @@ def _build_services_flowables(d: dict, B) -> list:
         fontSize=11,
         leading=13,
         alignment=TA_LEFT,
+        leftIndent=0,
         spaceBefore=6,
         spaceAfter=6,
     )
@@ -186,7 +187,7 @@ def _build_services_flowables(d: dict, B) -> list:
         fontSize=10,     # ✅ consistent
         leading=12,
         alignment=TA_LEFT,
-        leftIndent=0,
+        leftIndent=14,
         spaceBefore=4,
         spaceAfter=2,
     )
@@ -198,7 +199,7 @@ def _build_services_flowables(d: dict, B) -> list:
         fontSize=9,      # ✅ consistent
         leading=11,
         alignment=TA_LEFT,
-        leftIndent=22,   # ✅ “tab in” for lines under subsection title
+        leftIndent=28,   # ✅ “tab in” for lines under subsection title
         spaceBefore=0,
         spaceAfter=1,
     )
@@ -210,7 +211,7 @@ def _build_services_flowables(d: dict, B) -> list:
         fontSize=9,
         leading=11,
         alignment=TA_LEFT,
-        leftIndent=40,   # ✅ “back-tab / extra indent” (Notes, segments, etc.)
+        leftIndent=42,   # ✅ “back-tab / extra indent” (Notes, segments, etc.)
         spaceBefore=0,
         spaceAfter=1,
     )
@@ -258,7 +259,7 @@ def _build_services_flowables(d: dict, B) -> list:
     # =========================
     # Top header
     # =========================
-    story.append(Paragraph("<b>SERVICES PROVIDED TODAY</b>", H0))
+    story.append(Paragraph("<b>SERVICES PROVIDED TODAY</b>", SERV_TITLE))
 
     # =========================
     # Chiropractic CMT
@@ -302,7 +303,7 @@ def _build_services_flowables(d: dict, B) -> list:
         if seg_lines:
             story.append(Paragraph("Segment(s) Adjusted:", LINE))
             for line in seg_lines:
-                story.append(Paragraph(line, L3))
+                story.append(Paragraph(line, SUBLINE))
 
         # blank line between CMT and modalities (as requested)
         story.append(Spacer(1, 6))
