@@ -166,6 +166,8 @@ def _build_services_flowables(d: dict, B) -> list:
     cmt_code = _clean(services.get("cmt_code", ""))
     cmt_data = services.get("cmt_data", {}) or {}
     therapy_data = services.get("therapy_data", {}) or {}
+    exam_code  = _clean(services.get("exam_code", services.get("em_code", "")))
+    exam_notes = _clean(services.get("exam_notes", ""))
 
     has_cmt = bool(cmt_code)
     has_therapy = isinstance(therapy_data, dict) and any(isinstance(v, dict) and v for v in therapy_data.values())
@@ -308,10 +310,35 @@ def _build_services_flowables(d: dict, B) -> list:
                     story.append(Paragraph(f"{part_show}", L3))
 
             story.append(Spacer(1, 6))
+            
+    # =========================
+    # Examination and Management
+    # =========================
+    exam_code  = _clean(services.get("em_code", services.get("exam_code", "")))
+    exam_notes = _clean(services.get("exam_notes", ""))
 
-    return story
+    if exam_code or exam_notes:
 
+        # Section title (matches Chiropractic CMT style)
+        story.append(Paragraph("<b>Examination and Management</b>", L2))
 
+        # Exam Code line
+        if exam_code:
+            code_num = exam_code.split(":")[0].strip()
+            story.append(
+                Paragraph(f"Exam Code: <b>{esc(code_num)}</b>", L3)
+            )
+
+        # Notes line (indented same level)
+        if exam_notes:
+            story.append(
+                Paragraph(f"Notes: {esc(exam_notes)}", L3)
+            )
+
+        story.append(Spacer(1, 6))
+        
+        return story
+    
 
 # =========================================================
 # Main builder

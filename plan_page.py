@@ -144,6 +144,9 @@ class PlanPage(ttk.Frame):
 
             self.auto_plan_var.set(True)  # you start in auto mode
             self.custom_notes_var.set("")
+            
+            self.current_em_code.set("")
+            self.exam_notes_var.set("")
 
             # --- Uncheck all multi-selects ---
             for v in self._care_vars.values():
@@ -250,6 +253,12 @@ class PlanPage(ttk.Frame):
         self.current_cmt_code = tk.StringVar(value="")
         self.last_cmt_code = ""  # used to detect code changes + clear details
 
+        self.current_em_code = tk.StringVar(value="")
+        self.exam_notes_var  = tk.StringVar(value="")
+        
+        # E/M (Exam) code + exam notes (no PDF yet)
+        # self.current_em_code = tk.StringVar(value="")
+        # self.exam_notes = ""  # stored as plain string for now
 
         # UI
         self._build_ui()
@@ -854,6 +863,29 @@ class PlanPage(ttk.Frame):
                 font=("Segoe UI", 9),
                 justify="center",
             ).pack(anchor="center", pady=(0, 8))
+            
+        # 1.5) Exam CPT Summary (E/M)
+        em = (self.current_em_code.get() or "").strip()
+        notes = (self.exam_notes_var.get() or "").strip()
+
+        if em or notes:
+            code_num = em.split(":")[0].strip() if em and ":" in em else (em.strip() if em else "")
+            lines = []
+            if code_num:
+                lines.append(f"• {code_num}: Exam Code")
+            else:
+                lines.append("• Exam Notes")  # if notes exist but no code selected
+
+            if notes:
+                lines.append(notes)
+
+            ttk.Label(
+                self._services_label_frame,
+                text="\n".join(lines),
+                font=("Segoe UI", 9),
+                justify="center",
+                wraplength=340,
+            ).pack(anchor="center", pady=(0, 8))
 
         # 2) Therapy Summaries
         for therapy, data in (self.therapy_data or {}).items():
@@ -912,6 +944,57 @@ class PlanPage(ttk.Frame):
         cmt_combo.pack(pady=(0, 20))
         cmt_combo.bind("<<ComboboxSelected>>", lambda e: self.handle_cmt_interaction(popup))
 
+        # ---- NEW: E/M Exam CPT (Pick One) ----
+        ttk.Label(frame, text="CPT Exam Code (Pick One):", font=("Segoe UI", 10, "bold")).pack(
+            anchor="w", pady=(0, 5)
+        )
+
+        em_options = [
+            "99212: Office/outpatient visit (straightforward)",
+            "99213: Office/outpatient visit (low complexity)",
+            "99214: Office/outpatient visit (moderate complexity)",
+        ]
+
+        em_combo = ttk.Combobox(
+            frame,
+            textvariable=self.current_em_code,
+            values=em_options,
+            state="readonly",
+            width=50
+        )
+        em_combo.pack(pady=(0, 12))
+
+        # ---- NEW: Exam Notes (starts 1 line, expands) ----
+        ttk.Label(frame, text="Exam Notes:", font=("Segoe UI", 10, "bold")).pack(
+            anchor="w", pady=(0, 5)
+        )
+
+        notes_box = tk.Text(frame, height=1, wrap="word")
+        notes_box.pack(fill="x", pady=(0, 16))
+
+        # preload saved notes (if any)
+        try:
+            notes_box.insert("1.0", self.exam_notes_var.get() or "")
+        except Exception:
+            pass
+
+        def _autosize_notes(_evt=None):
+            """
+            Expand/shrink Text height based on content lines.
+            Clamped so it doesn't grow forever inside the popup.
+            """
+            try:
+                # count display lines roughly by newline count
+                lines = int(notes_box.index("end-1c").split(".")[0])
+                lines = max(1, min(lines, 6))  # 1..6 lines max
+                notes_box.configure(height=lines)
+            except Exception:
+                pass
+
+        notes_box.bind("<KeyRelease>", _autosize_notes)
+        _autosize_notes()
+
+
         ttk.Label(frame, text="Therapy Modalities (Click once to Setup):", font=("Segoe UI", 10, "bold")).pack(anchor="w", pady=(0, 5))
 
         list_frame = ttk.Frame(frame)
@@ -948,6 +1031,11 @@ class PlanPage(ttk.Frame):
         self._therapy_listbox.bind("<ButtonRelease-1>", self.handle_therapy_click)
 
         def on_close():
+            try:
+                self.exam_notes_var.set(notes_box.get("1.0", "end-1c").strip())
+            except Exception:
+                self.exam_notes_var.set("")
+
             self.update_services_summary_labels()
             popup.destroy()
 
@@ -1138,6 +1226,8 @@ class PlanPage(ttk.Frame):
                 "cmt_code": (self.current_cmt_code.get() or ""),
                 "last_cmt_code": (self.last_cmt_code or ""),
                 "cmt_data": self.cmt_data or {},
+                "em_code": (self.current_em_code.get() or ""),
+                "exam_notes": (self.exam_notes_var.get() or ""),
                 "therapy_data": self.therapy_data or {},
             },
         }
@@ -1150,7 +1240,8 @@ class PlanPage(ttk.Frame):
             # checks
             care = set(d.get("care_types", []) or [])
             regions = set(d.get("regions", []) or [])
-            goals = set(d.get("goals", []) or [])
+            goals = set(d.get("goals", []) or [])            
+            
 
             for k, v in self._care_vars.items():
                 v.set(k in care)
@@ -1165,7 +1256,8 @@ class PlanPage(ttk.Frame):
             reeval = _clean(str(d.get("reeval", "")))
 
             # Restore exact combobox state (including "(other)")
-            sched = d.get("schedule_state") or {}
+            sched = d.get("schedule_state") or {}            
+            
 
             if sched:
                 self.freq_var.set(sched.get("freq_choice", self.freq_var.get()))
@@ -1205,7 +1297,10 @@ class PlanPage(ttk.Frame):
             self.current_cmt_code.set(services.get("cmt_code", "") or "")
             self.last_cmt_code = services.get("last_cmt_code", "") or ""
             self.cmt_data = services.get("cmt_data", {}) or {}
+            self.current_em_code.set(services.get("em_code", "") or "")
+            self.exam_notes_var.set(services.get("exam_notes", "") or "")
             self.therapy_data = services.get("therapy_data", {}) or {}
+            
 
 
             self._sync_other_entries()

@@ -2300,10 +2300,8 @@ class App(tk.Tk):
             self.claim_var.set(patient.get("claim", ""))
             
             prov = (patient.get("provider") or "").strip()
-            self.provider_var.set(prov if prov else "Dr. Henry Nelson, DC")
-
-            #self.provider_var.set(patient.get("provider", "Dr. Henry Nelson, DC"))
-
+            self.provider_var.set(prov if prov else "")
+            
             soap = payload.get("soap", {}) or {}
 
             self.hoi_page.from_dict(soap.get("hoi_struct") or {})

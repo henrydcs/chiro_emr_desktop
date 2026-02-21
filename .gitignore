@@ -1,34 +1,41 @@
+
 # ==========================
-# PHI / Patient Data
+# Environment / secrets
 # ==========================
-EMR_Data/
+.env
+.env.*
+
+# ==========================
+# PHI / Patient Data (must never be in repo)
+# ==========================
 patients/
+id_cases/
+*cases/
+EMR_Data/
+*_cases/
+*.json
+
+# Allow only specific non-PHI JSON files that belong in repo:
+!.gitignore
+!alerts_dashboard.json
+!alerts_dashboard.json
+!assets/_app_settings.json
 
 # ==========================
-# Local machine settings
-# ==========================
-settings_local.json
-alerts_dashboard.json
-
-# ==========================
-# Exports / uploads
+# Exports / uploads / databases
 # ==========================
 exports/
 uploads/
 db/
-
 *.pdf
 *.sqlite
 *.sqlite3
 *.db
 
-
 # ==========================
-# Python
+# Python / IDE
 # ==========================
 __pycache__/
 *.pyc
 .venv/
-.env
-
-
+.vscode/
