@@ -6,6 +6,9 @@ from xml.sax.saxutils import escape as xml_escape
 from reportlab.lib.units import inch
 from reportlab.lib.styles import ParagraphStyle
 
+from reportlab.lib.styles import ParagraphStyle, getSampleStyleSheet
+from reportlab.lib.enums import TA_LEFT
+
 try:
     from reportlab.platypus import Paragraph, Spacer, Table, TableStyle, KeepTogether
     from reportlab.lib import colors
@@ -162,6 +165,56 @@ def _build_services_flowables(d: dict, B) -> list:
         Modality Code: 97014 — E-Stim
           C/S — 10m
     """
+        
+    styles = getSampleStyleSheet()
+
+    SERV_TITLE = ParagraphStyle(
+        "SERV_TITLE",
+        parent=styles["Normal"],
+        fontName="Helvetica-Bold",
+        fontSize=11,
+        leading=13,
+        alignment=TA_LEFT,
+        spaceBefore=6,
+        spaceAfter=6,
+    )
+
+    SUBHEAD = ParagraphStyle(
+        "SUBHEAD",
+        parent=styles["Normal"],
+        fontName="Helvetica-Bold",
+        fontSize=10,     # ✅ consistent
+        leading=12,
+        alignment=TA_LEFT,
+        leftIndent=0,
+        spaceBefore=4,
+        spaceAfter=2,
+    )
+
+    LINE = ParagraphStyle(
+        "LINE",
+        parent=styles["Normal"],
+        fontName="Helvetica",
+        fontSize=9,      # ✅ consistent
+        leading=11,
+        alignment=TA_LEFT,
+        leftIndent=22,   # ✅ “tab in” for lines under subsection title
+        spaceBefore=0,
+        spaceAfter=1,
+    )
+
+    SUBLINE = ParagraphStyle(
+        "SUBLINE",
+        parent=styles["Normal"],
+        fontName="Helvetica",
+        fontSize=9,
+        leading=11,
+        alignment=TA_LEFT,
+        leftIndent=40,   # ✅ “back-tab / extra indent” (Notes, segments, etc.)
+        spaceBefore=0,
+        spaceAfter=1,
+    )
+    
     services = _services_ctx(d)
     cmt_code = _clean(services.get("cmt_code", ""))
     cmt_data = services.get("cmt_data", {}) or {}
@@ -211,7 +264,7 @@ def _build_services_flowables(d: dict, B) -> list:
     # Chiropractic CMT
     # =========================
     if has_cmt:
-        story.append(Paragraph("<b>Chiropractic CMT</b>", H1))
+        story.append(Paragraph("<b>Chiropractic Manipulative Treatment</b>", SUBHEAD))
 
         # 
         
@@ -221,10 +274,7 @@ def _build_services_flowables(d: dict, B) -> list:
         if code_num and code_desc:
             story.append(
                 Paragraph(
-                    f"Adjustment Code: <b>{esc(code_num)}</b> \u2014 {esc(code_desc.replace(f'({code_num})','').strip())}",
-                    L2
-                )
-            )
+                    f"Adjustment Code: <b>{esc(code_num)}</b> \u2014 {esc(code_desc.replace(f'({code_num})','').strip())}", LINE))
 
 
         # Segments Adjusted
@@ -250,7 +300,7 @@ def _build_services_flowables(d: dict, B) -> list:
                     seg_lines.append(f"<b>{area_lbl}</b> Technique(s):")
 
         if seg_lines:
-            story.append(Paragraph("Segments Adjusted:", L2))
+            story.append(Paragraph("Segment(s) Adjusted:", LINE))
             for line in seg_lines:
                 story.append(Paragraph(line, L3))
 
@@ -261,7 +311,7 @@ def _build_services_flowables(d: dict, B) -> list:
     # Modalities
     # =========================
     if has_therapy:
-        story.append(Paragraph("<b>Modalities</b>", H1))
+        story.append(Paragraph("<b>Therapeutic Modalities</b>", SUBHEAD))
 
         for therapy_key, parts_dict in (therapy_data or {}).items():
             if not isinstance(parts_dict, dict):
@@ -295,19 +345,19 @@ def _build_services_flowables(d: dict, B) -> list:
             code_show = esc(code_num) if code_num else ""
             name_show = esc(display_name or mod_name) if (display_name or mod_name) else ""
             if code_show and name_show:
-                story.append(Paragraph(f"Modality Code: <b>{code_show}</b> \u2014 {name_show}", L2))
+                story.append(Paragraph(f"Modality Code: <b>{code_show}</b> \u2014 {name_show}", LINE))
             elif code_show:
-                story.append(Paragraph(f"Modality Code: <b>{code_show}</b>", L2))
+                story.append(Paragraph(f"Modality Code: <b>{code_show}</b>", LINE))
             else:
-                story.append(Paragraph(f"Modality Code: {name_show}", L2))
+                story.append(Paragraph(f"Modality Code: {name_show}", LINE))
 
             # Body section, time lines
             for part_lbl, minutes in checked:
                 part_show = esc(part_lbl) if part_lbl else "area"
                 if minutes:
-                    story.append(Paragraph(f"{part_show} \u2014 {esc(minutes)}m", L3))
+                    story.append(Paragraph(f"{part_show} \u2014 {esc(minutes)}m", SUBLINE))
                 else:
-                    story.append(Paragraph(f"{part_show}", L3))
+                    story.append(Paragraph(f"{part_show}", SUBLINE))
 
             story.append(Spacer(1, 6))
             
@@ -320,19 +370,19 @@ def _build_services_flowables(d: dict, B) -> list:
     if exam_code or exam_notes:
 
         # Section title (matches Chiropractic CMT style)
-        story.append(Paragraph("<b>Examination and Management</b>", L2))
+        story.append(Paragraph("<b>Examination and Management</b>", SUBHEAD))
 
         # Exam Code line
         if exam_code:
             code_num = exam_code.split(":")[0].strip()
             story.append(
-                Paragraph(f"Exam Code: <b>{esc(code_num)}</b>", L3)
+                Paragraph(f"Exam Code: <b>{esc(code_num)}</b>", LINE)
             )
 
         # Notes line (indented same level)
         if exam_notes:
             story.append(
-                Paragraph(f"Notes: {esc(exam_notes)}", L3)
+                Paragraph(f"Notes: {esc(exam_notes)}", SUBLINE)
             )
 
         story.append(Spacer(1, 6))

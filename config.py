@@ -10,7 +10,7 @@ from env_config import get_env
 PROVIDER_NAME = get_env("PROVIDER_NAME", "")
 CLINIC_NAME = get_env("CLINIC_NAME", "Default Clinic Name")
 CLINIC_ADDR = get_env("CLINIC_ADDR", "")
-CLINIC_PHONE_FAX = get_env("CLINIC_PHONE", "")
+CLINIC_PHONE_FAX = get_env("CLINIC_PHONE_FAX", "")
 
 
 
