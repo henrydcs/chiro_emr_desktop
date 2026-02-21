@@ -356,7 +356,7 @@ def _build_services_flowables(d: dict, B) -> list:
             for part_lbl, minutes in checked:
                 part_show = esc(part_lbl) if part_lbl else "area"
                 if minutes:
-                    story.append(Paragraph(f"{part_show} \u2014 {esc(minutes)}m", SUBLINE))
+                    story.append(Paragraph(f"{part_show} \u2014 {esc(minutes)} minutes", SUBLINE))
                 else:
                     story.append(Paragraph(f"{part_show}", SUBLINE))
 

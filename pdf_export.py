@@ -8,7 +8,7 @@ from xml.sax.saxutils import escape as xml_escape
 from HOIpdf import build_hoi_flowables
 from plan_pdf import build_plan_flowables
 
-from reportlab.platypus import Table, TableStyle
+from reportlab.platypus import Table, TableStyle, KeepTogether
 from reportlab.lib import colors
 
 
@@ -1818,13 +1818,22 @@ def build_combined_pdf(path: str, payloads: list):
             add_section("Plan", "")
 
 
-        story.append(Spacer(1, 0.18 * inch))
-        story.append(Paragraph("Provider Signature: ________________________________", styles["Normal"]))
+        # story.append(Spacer(1, 0.18 * inch))
+        # story.append(Paragraph("Provider Signature: ________________________________", styles["Normal"]))
+        
         
         provider = ((payload.get("patient") or {}).get("provider") or "").strip()
+
+        sig_block = [
+            Spacer(1, 0.18 * inch),
+            Paragraph("Provider Signature: ________________________________", styles["Normal"]),
+        ]
+
         if provider:
             indent = "&nbsp;" * 34
-            story.append(Paragraph(indent + provider, styles["Normal"]))
+            sig_block.append(Paragraph(indent + provider, styles["Normal"]))
+
+        story.append(KeepTogether(sig_block))
 
         if idx < len(payloads) - 1:
             story.append(PageBreak())

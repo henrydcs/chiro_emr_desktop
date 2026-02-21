@@ -905,7 +905,7 @@ class PlanPage(ttk.Frame):
                     short_part = (part or "").replace(" Spine", "S").replace("Right ", "R ").replace("Left ", "L ")
                     short_part = short_part.replace("CervicalS", "CS").replace("ThoracicS", "TS").replace("LumbarS", "LS")
                     if minutes:
-                        parts_summary.append(f"{short_part} ({minutes}m)")
+                        parts_summary.append(f"({short_part} {minutes}m)")
                     else:
                         parts_summary.append(f"{short_part}")
 
@@ -1149,6 +1149,8 @@ class PlanPage(ttk.Frame):
             "Right Knee", "Left Knee",
         ]
 
+
+
         active_therapy_vars = {}
 
         for part in body_parts:
@@ -1156,14 +1158,20 @@ class PlanPage(ttk.Frame):
             b_var = tk.BooleanVar(value=bool(saved_checked))
             s_var = tk.StringVar(value=str(saved_time) if saved_time is not None else "")
 
-            def auto_erase(bv=b_var, sv=s_var):
+            def on_toggle(bv=b_var, sv=s_var):
                 if not bv.get():
+                    # unchecked -> clear minutes
                     sv.set("")
+                    return
+
+                # checked -> default minutes if blank (do NOT overwrite edits)
+                if not (sv.get() or "").strip():
+                    sv.set("15")
 
             row = ttk.Frame(t_win, padding=2)
             row.pack(fill="x", padx=20)
 
-            ttk.Checkbutton(row, text=part, variable=b_var, width=20, command=auto_erase).pack(side="left")
+            ttk.Checkbutton(row, text=part, variable=b_var, width=20, command=on_toggle).pack(side="left")
             ttk.Entry(row, textvariable=s_var, width=5).pack(side="right")
 
             active_therapy_vars[part] = (b_var, s_var)
