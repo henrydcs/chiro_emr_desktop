@@ -418,12 +418,127 @@ class DiagnosisPage(ttk.Frame):
         if callable(self.on_change_callback):
             self.on_change_callback()
 
+
+
+
+    def _assessment_screen_refresh(self, preset_map: dict[str, str]):
+        choice = (self.assessment_choice_var.get() or "").strip()
+
+        if choice in ("", "(select)"):
+            self.assess_preview.configure(text="")
+            self.assess_custom_row.grid_remove()
+        elif choice == "Custom (free text)":
+            self.assess_preview.configure(text="Type your custom assessment one-liner below.")
+            self.assess_custom_row.grid()
+        else:
+            self.assess_preview.configure(text=preset_map.get(choice, ""))
+            self.assess_custom_row.grid_remove()
+
+        self._changed()        
+
+    def _build_assessment_screen(self, parent, padx=10):
+            # Header row with Back button
+            hdr = ttk.Frame(parent)
+            hdr.pack(fill="x", padx=padx, pady=(10, 6))
+
+            ttk.Button(hdr, text="← Back", command=self.show_main_screen).pack(side="left")
+            ttk.Label(hdr, text="Assessment Statement", font=("Segoe UI", 12, "bold")).pack(side="left", padx=(10, 0))
+
+            ttk.Separator(parent).pack(fill="x", padx=padx, pady=(6, 10))
+
+            body = ttk.Frame(parent)
+            body.pack(fill="both", expand=True, padx=padx, pady=(0, 10))
+            body.columnconfigure(0, weight=1)
+
+            # Vars
+            if not hasattr(self, "assessment_choice_var"):
+                self.assessment_choice_var = tk.StringVar(value="(select)")
+            if not hasattr(self, "assessment_custom_var"):
+                self.assessment_custom_var = tk.StringVar(value="")
+
+            ASSESSMENT_STMT_CHOICES = [
+                "(select)",
+                "Standard exam / evaluation day",
+                "Therapy-only visit",
+                "Re-exam / progress visit",
+                "Discharge / final visit",
+                "Custom (free text)",
+            ]
+
+            ASSESSMENT_STMT_TEXT = {
+                "Standard exam / evaluation day":
+                    "Clinical findings are consistent with the diagnoses listed below based on the patient’s history and objective examination.",
+                "Therapy-only visit":
+                    "The patient was seen for continuation of therapeutic treatment per the established plan of care. No re-examination was performed at this visit.",
+                "Re-exam / progress visit":
+                    "Findings were reviewed and treatment response assessed. The diagnoses listed below remain consistent with the patient’s presentation at this visit.",
+                "Discharge / final visit":
+                    "The patient was seen for final assessment and disposition. Diagnoses and clinical status were reviewed, and ongoing recommendations are documented below.",
+            }
+
+            ttk.Label(body, text="Choose statement type:").grid(row=0, column=0, sticky="w")
+
+            cb = ttk.Combobox(
+                body,
+                textvariable=self.assessment_choice_var,
+                values=ASSESSMENT_STMT_CHOICES,
+                state="readonly",
+                width=44,
+            )
+            cb.grid(row=1, column=0, sticky="ew", pady=(4, 10))
+            cb.bind("<<ComboboxSelected>>", lambda e: self._assessment_screen_refresh(ASSESSMENT_STMT_TEXT))
+
+            # Preview label
+            self.assess_preview = ttk.Label(body, text="", wraplength=700, justify="left", foreground="gray")
+            self.assess_preview.grid(row=2, column=0, sticky="w", pady=(0, 10))
+
+            # Custom entry (shown/hidden)
+            self.assess_custom_row = ttk.Frame(body)
+            self.assess_custom_row.grid(row=3, column=0, sticky="ew")
+            self.assess_custom_row.columnconfigure(0, weight=1)
+
+            ttk.Label(self.assess_custom_row, text="Custom statement:").grid(row=0, column=0, sticky="w")
+            ent = ttk.Entry(self.assess_custom_row, textvariable=self.assessment_custom_var)
+            ent.grid(row=1, column=0, sticky="ew", pady=(4, 0))
+            self.assessment_custom_var.trace_add("write", lambda *_: self._changed())
+
+            # Start hidden until Custom is selected
+            self.assess_custom_row.grid_remove()
+
+            # Initial refresh
+            self._assessment_screen_refresh(ASSESSMENT_STMT_TEXT)
+
+    
+
     # ---------- UI ----------
     def _build_ui(self):
         padx = 10
 
+        
+
+        # ✅ Screen container (stacked frames)
+        self.screen_container = ttk.Frame(self)
+        self.screen_container.pack(fill="both", expand=True)
+
+        self.main_screen = ttk.Frame(self.screen_container)
+        self.assess_screen = ttk.Frame(self.screen_container)
+
+        for f in (self.main_screen, self.assess_screen):
+            f.grid(row=0, column=0, sticky="nsew")
+
+        self.screen_container.rowconfigure(0, weight=1)
+        self.screen_container.columnconfigure(0, weight=1)
+
+
+        
+
+
+
+
+
+
         # Top controls
-        top = ttk.Frame(self)
+        top = ttk.Frame(self.main_screen)
         top.pack(fill="x", padx=padx, pady=(10, 6))
 
         ttk.Button(top, text="Add Diagnosis", command=self.add_block).pack(side="left")
@@ -444,7 +559,11 @@ class DiagnosisPage(ttk.Frame):
             command=self._changed
         ).pack(side="left", padx=(10, 0))
 
-
+        ttk.Button(
+            top,
+            text="Assessment Statement",
+            command=self.show_assessment_screen
+        ).pack(side="left", padx=(8, 0))
 
         # Collapse toggles (right side)
         self.toggle_blocks_btn = ttk.Button(top, text="Hide Blocks", command=self._toggle_blocks)
@@ -453,12 +572,12 @@ class DiagnosisPage(ttk.Frame):
         self.toggle_text_btn = ttk.Button(top, text="Show Text Box", command=self._toggle_text)
         self.toggle_text_btn.pack(side="right", padx=(0, 8))
 
-        ttk.Separator(self).pack(fill="x", padx=padx, pady=(6, 10))
+        ttk.Separator(self.main_screen).pack(fill="x", padx=padx, pady=(6, 10))
 
         # -------------------------
         # Blocks grid frame (collapsible)  ✅ NOW SCROLLABLE
         # -------------------------
-        self.blocks_frame = ttk.Frame(self)
+        self.blocks_frame = ttk.Frame(self.main_screen)
         self.blocks_frame.pack(fill="both", expand=True, padx=padx, pady=(0, 10))
 
         # Canvas + Scrollbar container
@@ -498,7 +617,7 @@ class DiagnosisPage(ttk.Frame):
         # -------------------------
         # Text box frame (collapsible)
         # -------------------------
-        self.text_frame = ttk.Frame(self)
+        self.text_frame = ttk.Frame(self.main_screen)
         # pack later in _apply_collapse_states
 
         # Two-column area inside text_frame
@@ -595,8 +714,19 @@ class DiagnosisPage(ttk.Frame):
             "Tip: Use ↑/↓ on a diagnosis block to change order. "
             "Diagnoses will auto-renumber. The text box rebuilds automatically unless you type into it."
         )
-        self.tip_label = ttk.Label(self, text=tip, foreground="gray")
+        self.tip_label = ttk.Label(self.main_screen, text=tip, foreground="gray")
         # packed in _apply_collapse_states with text_frame visibility
+
+        self._build_assessment_screen(self.assess_screen, padx=padx)
+
+        # ✅ start on main screen
+        self.main_screen.tkraise()
+
+    def show_assessment_screen(self):
+        self.assess_screen.tkraise()
+
+    def show_main_screen(self):
+        self.main_screen.tkraise()
 
 
     def _apply_collapse_states(self, startup: bool = False):
@@ -816,6 +946,12 @@ class DiagnosisPage(ttk.Frame):
             except Exception:
                 pass
 
+            try:
+                self.assessment_choice_var.set("(select)")
+                self.assessment_custom_var.set("")
+            except Exception:
+                pass
+
         finally:
             self._loading = False
 
@@ -828,7 +964,8 @@ class DiagnosisPage(ttk.Frame):
             "blocks": [b.to_dict() for b in self.blocks],
             "text": txt,
             "text_is_manual": self._text_is_manual,
-
+            "assessment_choice": self.assessment_choice_var.get(),
+            "assessment_custom": self.assessment_custom_var.get(),
             "prognosis": self.prognosis_var.get(),
             "imaging_recs": list(self.imaging_recs),
             "referrals": list(self.referrals),
@@ -906,6 +1043,13 @@ class DiagnosisPage(ttk.Frame):
             except Exception:
                 pass
 
+            self.assessment_choice_var.set(data.get("assessment_choice") or "(select)")
+            self.assessment_custom_var.set(data.get("assessment_custom") or "")
+
+            try:
+                self._assessment_screen_refresh(self.ASSESSMENT_STMT_TEXT)
+            except Exception:
+                pass
 
 
             if not _clean(self.get_value()):
