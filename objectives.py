@@ -984,7 +984,7 @@ class VitalsInspectionPanel(ttk.Frame):
         f = self.adl_frame
 
         # Title row
-        ttk.Label(f, text="Functional Status / ADLs", font=("Segoe UI", 10, "bold")).grid(
+        ttk.Label(f, text="Functional Status / ADLs", font=("Segoe UI", 9, "bold")).grid(
             row=0, column=0, sticky="w"
         )
 
@@ -1100,7 +1100,7 @@ class VitalsInspectionPanel(ttk.Frame):
 
         parts = []
         if regions:
-            parts.append("Subluxations noted in the " + ", ".join(regions) + ".")
+            parts.append("SRestricted joint motion consistent with segmental dysfunction was noted in the " + ", ".join(regions) + ".")
         if level_parts:
             parts.append("Specific levels: " + "; ".join(level_parts) + ".")
 

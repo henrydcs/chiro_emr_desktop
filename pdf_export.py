@@ -755,7 +755,7 @@ def _build_sublux_paragraph(sx: dict, styles):
     lines = []
     if selected_regions:
         lines.append(
-            "Restricted joint motion was noted in the " +
+            "Restricted joint motion consistent with segmental dysfunction was noted in the " +
             _join_with_and(selected_regions) +
             "."
         )
@@ -848,11 +848,11 @@ def _build_adl_paragraph(adl: dict, styles):
     parts = []
     if sev != -1:
         # uses your existing SEVERITY_LABELS mapping
-        parts.append(f"Severity: {sev} — {SEVERITY_LABELS.get(sev, '')}".strip())
+        parts.append(f"ADL Overall Impact Severity: {sev} — {SEVERITY_LABELS.get(sev, '')}".strip())
 
     clean_items = [str(x).strip() for x in items if str(x).strip()]
     if clean_items:
-        parts.append("Affected ADLs: " + ", ".join(clean_items))
+        parts.append("Activities of Daily Living: " + ", ".join(clean_items))
 
     if notes:
         parts.append("Notes: " + notes)
@@ -900,8 +900,8 @@ def build_objectives_flowables(objectives_struct: dict, styles, doc_width: float
         if vit_tbl or pos_para or grip_para or adl_para or vit_notes or pos_notes or grip_notes or sublux_para or sublux_notes:
 
             printed_any = True
-            out.append(Paragraph("<b>VITALS / INSPECTION</b>", styles["Heading3"]))
-            out.append(Spacer(1, 0.08 * inch))
+            # out.append(Paragraph("<b>VITALS / INSPECTION</b>", styles["Heading3"]))
+            # out.append(Spacer(1, 0.08 * inch))
 
             if vit_tbl or vit_notes:
                 out.append(Paragraph("<b>Vitals</b>", styles["Heading4"]))
@@ -924,7 +924,7 @@ def build_objectives_flowables(objectives_struct: dict, styles, doc_width: float
                 out.append(Spacer(1, 0.12 * inch))
 
             if sublux_para or sublux_notes:
-                out.append(Paragraph("<b>Subluxations</b>", styles["Heading4"]))  # ✅ same size/style as others
+                out.append(Paragraph("<b>Spinal Palpatory Inspection</b>", styles["Heading4"]))  # ✅ same size/style as others
                 out.append(Spacer(1, 0.05 * inch))
                 if sublux_para:
                     out.append(sublux_para)
@@ -943,15 +943,8 @@ def build_objectives_flowables(objectives_struct: dict, styles, doc_width: float
                 if grip_notes:
                     out.append(Spacer(1, 0.10 * inch))
                     out.append(grip_notes)
-                out.append(Spacer(1, 0.12 * inch))            
-
-
-            # if adl_para:
-            #     out.append(Paragraph("<b>Functional Status / ADLs</b>", styles["Heading4"]))
-            #     out.append(Spacer(1, 0.05 * inch))
-            #     out.append(adl_para)  # adl_para is already a Paragraph/flowable
-            #     out.append(Spacer(1, 0.12 * inch))
-
+                out.append(Spacer(1, 0.12 * inch))         
+           
 
             out.append(Spacer(1, 0.06 * inch))
 
@@ -1046,7 +1039,7 @@ def build_objectives_flowables(objectives_struct: dict, styles, doc_width: float
         tag = _region_tag(code)
 
         if palp_left or palp_right or palp_notes:
-            out.append(Paragraph(f"<b>PALPATION {xml_escape(tag)}</b>", styles["ObjSectionCenter"]))
+            out.append(Paragraph(f"<b>SOFT TISSUE PALPATION {xml_escape(tag)}</b>", styles["ObjSectionCenter"]))
             out.append(Spacer(1, 0.06 * inch))
             if palp_left or palp_right:
                 out.append(_build_centered_lr_table(palp_left, palp_right, styles, col_widths))
@@ -1478,6 +1471,8 @@ def payload_to_exam_sections(payload: dict):
 # =======================================================
 def build_combined_pdf(path: str, payloads: list):
     styles = getSampleStyleSheet()
+    #styles["Heading2"].spaceBefore = 8
+    #styles["Heading2"].spaceAfter = 5
 
     rom_motion = ParagraphStyle(
         name="ROMMotion",
@@ -1645,7 +1640,7 @@ def build_combined_pdf(path: str, payloads: list):
 
 
         # Subjectives
-        story.append(Paragraph("<b>Subjectives</b>", styles["Heading2"]))
+        story.append(Paragraph("<b>SUBJECTIVES</b>", styles["Heading2"]))
         story.append(Spacer(1, 0.08 * inch))
 
         # ✅ NEW: Therapy paragraph prints FIRST (independent of dropdown/blocks)
@@ -1698,14 +1693,14 @@ def build_combined_pdf(path: str, payloads: list):
             adl_para = None
 
         if adl_para:
-            story.append(Paragraph("<b>Functional Status / ADLs</b>", styles["Heading2"]))
+            story.append(Paragraph("<b>Functional Status</b>", styles["Heading3"]))
             story.append(Spacer(1, 0.08 * inch))
             story.append(adl_para)
             story.append(Spacer(1, 0.12 * inch))
 
         # ✅ Family / Social History (print ONLY if not empty)
         if family_social:
-            story.append(Paragraph("<b>Family / Social History</b>", styles["Heading2"]))
+            story.append(Paragraph("<b>FAMILY / SOCIAL HISTORY</b>", styles["Heading2"]))
             story.append(Spacer(1, 0.08 * inch))
 
             safe_fs = xml_escape(family_social).replace("\n\n", "<br/><br/>").replace("\n", "<br/>")
@@ -1726,7 +1721,7 @@ def build_combined_pdf(path: str, payloads: list):
 
         # ✅ If nothing is selected/entered, do NOT print the Objectives title at all
         if obj_flow or safe_obj:
-            story.append(Paragraph("<b>Objectives</b>", styles["Heading2"]))
+            story.append(Paragraph("<b>OBJECTIVES</b>", styles["Heading2"]))
             story.append(Spacer(1, 0.10 * inch))
 
             if obj_flow:
@@ -1771,6 +1766,7 @@ def build_combined_pdf(path: str, payloads: list):
                     out = "\n".join(lines).strip()
                     if out:
                         return out
+            
 
             # 3) Fallback to legacy string if struct missing
             return _strip_dx_auto_tag((soap.get("diagnosis") or "").strip())
@@ -1787,11 +1783,18 @@ def build_combined_pdf(path: str, payloads: list):
                 safe = xml_escape(safe).replace("\n\n", "<br/><br/>").replace("\n", "<br/>")
                 story.append(Paragraph(safe, styles["BodyText"]))
             else:
-                story.append(Paragraph("—", styles["BodyText"]))
-
+                story.append(Paragraph("Clinical findings are consistent with the diagnoses listed below based on the patient’s history and objective examination.", styles["BodyText"]))
+                #"The patient presented for therapeutic management consistent with the established plan of care. No additional examination was performed at this time."
             story.append(Spacer(1, 0.14 * inch))
 
         dx_text = _dx_text_from_soap(soap)
+
+        # print("Heading2 spaceAfter:", styles["Heading2"].spaceAfter)
+        # print("Heading2 spaceBefore:", styles["Heading2"].spaceBefore)
+        
+        add_section("ASSESSMENT", "")        
+
+        #if dx_text.strip():
         add_section("Diagnosis", dx_text)
 
         dx_struct = soap.get("diagnosis_struct") or {}

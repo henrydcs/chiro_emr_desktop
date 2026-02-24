@@ -86,7 +86,6 @@ class PlanPage(ttk.Frame):
     ]
 
     REGIONS = [
-        "Cervical, Thoracic, and Lumbar Spine",
         "Cervical",
         "Cervical / Thoracic",
         "Thoracic",
