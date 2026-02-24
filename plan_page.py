@@ -86,20 +86,29 @@ class PlanPage(ttk.Frame):
     ]
 
     REGIONS = [
+        "Cervical, Thoracic, and Lumbar Spine",
         "Cervical",
+        "Cervical / Thoracic",
         "Thoracic",
+        "Thoracic / Lumbar",
         "Lumbar",
         "Pelvis / SI",
+        "Bilateral shoulders",
         "Right shoulder",
         "Left shoulder",
+        "Bilateral elbows",
         "Right elbow",
         "Left elbow",
+        "Bilateral wrists/hands",
         "Right wrist/hand",
         "Left wrist/hand",
+        "Bilateral hips",
         "Right hip",
         "Left hip",
+        "Bilateral knees",
         "Right knee",
         "Left knee",
+        "Bilateral ankles/feet",
         "Right ankle/foot",
         "Left ankle/foot",
     ]
@@ -186,6 +195,11 @@ class PlanPage(ttk.Frame):
             # --- Clear Services Provided Today ---
             self.therapy_data.clear()
             self.cmt_data.clear()
+            self.current_cmt_notes.set("")
+            try:
+                self.cmt_notes_text.delete("1.0", "end")
+            except Exception:
+                pass
             self.current_cmt_code.set("")
             self.last_cmt_code = ""
             try:
@@ -252,6 +266,8 @@ class PlanPage(ttk.Frame):
         self.cmt_data = {}      # dict[str, tuple[bool, list[bool]]]
         self.current_cmt_code = tk.StringVar(value="")
         self.last_cmt_code = ""  # used to detect code changes + clear details
+        
+        self.current_cmt_notes = tk.StringVar()
 
         self.current_em_code = tk.StringVar(value="")
         self.exam_notes_var  = tk.StringVar(value="")
@@ -943,14 +959,45 @@ class PlanPage(ttk.Frame):
         cmt_combo = ttk.Combobox(frame, textvariable=self.current_cmt_code, values=cmt_options, state="readonly", width=50)
         cmt_combo.pack(pady=(0, 20))
         cmt_combo.bind("<<ComboboxSelected>>", lambda e: self.handle_cmt_interaction(popup))
+        
+                
+        ttk.Label(
+            frame,
+            text="CMT Notes (Optional):",
+            font=("Segoe UI", 9, "bold")
+        ).pack(anchor="w", pady=(10, 5))
+
+        notes_frame = ttk.Frame(frame)
+        notes_frame.pack(fill="both", expand=True)
+
+        self.cmt_notes_text = tk.Text(
+            notes_frame,
+            height=4,
+            wrap="word",
+            font=("Segoe UI", 9)
+        )
+        self.cmt_notes_text.pack(side="left", fill="both", expand=True)
+
+        scroll = ttk.Scrollbar(notes_frame, command=self.cmt_notes_text.yview)
+        scroll.pack(side="right", fill="y")
+
+        self.cmt_notes_text.config(yscrollcommand=scroll.set)
+        
+        # preload saved notes (if any)
+        try:
+            self.cmt_notes_text.delete("1.0", "end")
+            self.cmt_notes_text.insert("1.0", self.current_cmt_notes.get() or "")
+        except Exception:
+            pass
 
         # ---- NEW: E/M Exam CPT (Pick One) ----
         ttk.Label(frame, text="CPT Exam Code (Pick One):", font=("Segoe UI", 10, "bold")).pack(
             anchor="w", pady=(0, 5)
         )
-
+                
         em_options = [
             "99212: Office/outpatient visit (straightforward)",
+            "99212-25: Office/outpatient visit (straightforward)",
             "99213: Office/outpatient visit (low complexity)",
             "99214: Office/outpatient visit (moderate complexity)",
         ]
@@ -977,6 +1024,17 @@ class PlanPage(ttk.Frame):
             notes_box.insert("1.0", self.exam_notes_var.get() or "")
         except Exception:
             pass
+
+        def delete_exam():
+            self.current_em_code.set("")
+            self.exam_notes_var.set("")
+            try:
+                notes_box.delete("1.0", "end")
+            except Exception:
+                pass
+            self.update_services_summary_labels()            
+        
+        ttk.Button(frame, style='Right.TButton', text="Delete Exam", command=delete_exam).pack(pady=(0,10))
 
         def _autosize_notes(_evt=None):
             """
@@ -1013,6 +1071,7 @@ class PlanPage(ttk.Frame):
         self._therapy_options = [
             "97012: Mechanical Traction",
             "97014: Electric Stimulation",
+            "97124: MRT / Vibratory Massage",
             "97110: Therapeutic Exercise",
             "97140: Manual Therapy",
             "97035: Ultrasound",
@@ -1031,10 +1090,18 @@ class PlanPage(ttk.Frame):
         self._therapy_listbox.bind("<ButtonRelease-1>", self.handle_therapy_click)
 
         def on_close():
+            
+            # Save CMT notes
+            try:
+                self.current_cmt_notes.set(self.cmt_notes_text.get("1.0", "end-1c").strip())
+            except Exception:
+                self.current_cmt_notes.set("")
+            
             try:
                 self.exam_notes_var.set(notes_box.get("1.0", "end-1c").strip())
             except Exception:
-                self.exam_notes_var.set("")
+                self.exam_notes_var.set("")                
+            
 
             self.update_services_summary_labels()
             popup.destroy()
@@ -1144,9 +1211,10 @@ class PlanPage(ttk.Frame):
         t_win.grab_set()
 
         body_parts = [
-            "Cervical Spine", "Thoracic Spine", "Lumbar Spine",
-            "Right Shoulder", "Left Shoulder",
-            "Right Knee", "Left Knee",
+            "Cervical Spine / Thoracic Spine / Lumbar Spine", "Cervical Spine", "Cervical / Thoracic Spine", "Thoracic Spine", "Lumbar Spine",
+            "Thoracic Spine", "Thoracic / Lumbar Spine", "Lumbar Spine","Bilateral Shoulders", "Right Shoulder", "Left Shoulder",
+            "Bilateral Elbows", "Right Elbow", "Left Elbow", "Bilateral Hips", "Right Hip", "Left Hip", "Bilateral Knees", "Right Knee", "Left Knee",
+            "Bilateral Ankles/Feet", "Right Ankle/Foot", "Left Ankle/Foot",
         ]
 
 
@@ -1234,6 +1302,7 @@ class PlanPage(ttk.Frame):
                 "cmt_code": (self.current_cmt_code.get() or ""),
                 "last_cmt_code": (self.last_cmt_code or ""),
                 "cmt_data": self.cmt_data or {},
+                "cmt_notes": (self.current_cmt_notes.get() or ""),
                 "em_code": (self.current_em_code.get() or ""),
                 "exam_notes": (self.exam_notes_var.get() or ""),
                 "therapy_data": self.therapy_data or {},
@@ -1305,6 +1374,7 @@ class PlanPage(ttk.Frame):
             self.current_cmt_code.set(services.get("cmt_code", "") or "")
             self.last_cmt_code = services.get("last_cmt_code", "") or ""
             self.cmt_data = services.get("cmt_data", {}) or {}
+            self.current_cmt_notes.set(services.get("cmt_notes", "") or "") 
             self.current_em_code.set(services.get("em_code", "") or "")
             self.exam_notes_var.set(services.get("exam_notes", "") or "")
             self.therapy_data = services.get("therapy_data", {}) or {}

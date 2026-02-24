@@ -219,6 +219,7 @@ def _build_services_flowables(d: dict, B) -> list:
     services = _services_ctx(d)
     cmt_code = _clean(services.get("cmt_code", ""))
     cmt_data = services.get("cmt_data", {}) or {}
+    cmt_notes = _clean(services.get("cmt_notes", ""))  # ✅ NEW
     therapy_data = services.get("therapy_data", {}) or {}
     exam_code  = _clean(services.get("exam_code", services.get("em_code", "")))
     exam_notes = _clean(services.get("exam_notes", ""))
@@ -298,12 +299,17 @@ def _build_services_flowables(d: dict, B) -> list:
                     seg_lines.append(f"<b>{area_lbl}</b> \u2014 Technique(s): {tech_txt}")
 
                 else:
-                    seg_lines.append(f"<b>{area_lbl}</b> Technique(s):")
+                    seg_lines.append(f"<b>{area_lbl}</b> \u2014 Technique(s):")
 
         if seg_lines:
             story.append(Paragraph("Segment(s) Adjusted:", LINE))
             for line in seg_lines:
                 story.append(Paragraph(line, SUBLINE))
+                
+        if cmt_notes:
+            safe_notes = esc(cmt_notes).replace("\n", "<br/>")
+            story.append(Paragraph("CMT Notes:", LINE))
+            story.append(Paragraph(safe_notes, SUBLINE))
 
         # blank line between CMT and modalities (as requested)
         story.append(Spacer(1, 6))
@@ -388,7 +394,7 @@ def _build_services_flowables(d: dict, B) -> list:
 
         story.append(Spacer(1, 6))
         
-        return story
+    return story
     
 
 # =========================================================

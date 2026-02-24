@@ -1,3 +1,5 @@
+# A significant, separately identifiable E/M service was performed in addition to CMT, including a focused history, examination, and medical decision-making.
+
 #Git Hub to Work Between Computers
 
 #Start of Day
