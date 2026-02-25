@@ -1232,33 +1232,16 @@ class App(tk.Tk):
         # RIGHT: live preview (starts at top of window)
         # =========================
         main = ttk.Frame(self)
-        main.pack(fill="both", expand=True)
+        main.pack(fill="both", expand=True)        
 
-        #left_root = ttk.Frame(main)
-        #left_root.pack(side="left", fill="both", expand=True)
-
-        left_root = ttk.Frame(main, width=760)
+        left_root = ttk.Frame(main, width=960)
         left_root.pack(side="left", fill="both", expand=True)
         left_root.pack_propagate(False)
 
         right_root = ttk.Frame(main)
-        right_root.pack(side="right", fill="both", expand=True)
-
+        right_root.pack(side="right", fill="both", expand=True)        
         
-        
-        # this controls Preview Size (we can always delete these two lines)
-        right_root.configure(width=420)
-        right_root.pack_propagate(False)  # IMPORTANT but can delete these two lines and preview will be hard coded instead automatically
-
-
-
-
-        #right_root = ttk.Frame(main, width=820)
-        #right_root.pack(side="right", fill="y")
-        #right_root.pack_propagate(False)
-        #right_root.pack(side="right", fill="both", expand=True)
-
-
+       
         # --- Header container (collapsible) ---
         self.header_container = ttk.Frame(left_root)
         self.header_container.pack(fill="x", padx=padx, pady=(padx, 0))
