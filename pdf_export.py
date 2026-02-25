@@ -10,6 +10,7 @@ from plan_pdf import build_plan_flowables
 
 from reportlab.platypus import Table, TableStyle, KeepTogether
 from reportlab.lib import colors
+from HOIpdf import build_rof_flowables
 
 
 from config import (
@@ -1165,7 +1166,15 @@ def build_objectives_flowables(objectives_struct: dict, styles, doc_width: float
 
             out.append(Spacer(1, 0.14 * inch))
 
+            
+            
 
+
+            # hoi_struct = payload.get("hoi") or {}
+
+            # out.extend(build_objectives_flowables(objective_struct, styles, doc_width))
+            # out.extend(build_rof_flowables(hoi_struct, styles))
+            # out.extend(build_hoi_flowables(hoi_struct, styles, doc_width, include_rof=False))
 
 
 
@@ -1731,6 +1740,8 @@ def build_combined_pdf(path: str, payloads: list):
                 story.append(Paragraph(safe_obj, styles["BodyText"]))
 
             story.append(Spacer(1, 0.10 * inch))
+
+        story.extend(build_rof_flowables(hoi_struct, styles, allow_modes={"ROF", ""}))
 
 
         def _dx_text_from_soap(soap: dict) -> str:
