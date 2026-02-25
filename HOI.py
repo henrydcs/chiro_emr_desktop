@@ -1053,6 +1053,8 @@ class HOIPage(ttk.Frame):
         # ----------------
         self.rof_mode_var = tk.StringVar(value="Initial")  # Initial / Re-Exam / ROF / Final
 
+        self.rof_also_print_var = tk.BooleanVar(value=False)
+
         # Intro / Evaluation vars (Initial / Re-Exam / Final)
         # ----------------
         self.eval_type_var = tk.StringVar(value="initial evaluation")
@@ -1094,7 +1096,7 @@ class HOIPage(ttk.Frame):
         #Notes for Type of Injury
         self.course_notes_var = tk.StringVar(value="")  # type.course_notes (new)
 
-        self.rof_input_mode_var = tk.StringVar(value="Structured")  # "Structured" or "Text"
+        self.rof_input_mode_var = tk.StringVar(value="Structured")  # "Structured" or "Text/Write"
 
 
         
@@ -1888,6 +1890,7 @@ class HOIPage(ttk.Frame):
         ctrls = ttk.Frame(f)
         ctrls.grid(row=1, column=0, columnspan=3, sticky="ew", padx=10, pady=(0, 8))
         ttk.Button(ctrls, text="Add Imaging Block", command=self._add_imaging_block).pack(side="left")
+        
 
         ttk.Label(ctrls, text="(Each block links imaging types to one or more body parts.)", foreground="gray")\
             .pack(side="left", padx=(10, 0))
@@ -1931,7 +1934,7 @@ class HOIPage(ttk.Frame):
                 text=label,
                 value=label,
                 variable=self.rof_mode_var,
-                command=self._on_rof_input_mode_changed,
+                #command=self._on_rof_input_mode_changed,
             ).pack(side="left", padx=(10, 0))
 
 
@@ -1943,7 +1946,7 @@ class HOIPage(ttk.Frame):
             text="Structured",
             value="Structured",
             variable=self.rof_input_mode_var,
-            command=self._on_rof_input_mode_changed,
+            #command=self._on_rof_input_mode_changed,
         ).pack(side="left", padx=(8, 0))
 
         ttk.Radiobutton(
@@ -1951,7 +1954,7 @@ class HOIPage(ttk.Frame):
             text="Text/Write",
             value="Text/Write",
             variable=self.rof_input_mode_var,
-            command=self._on_rof_input_mode_changed,
+            #command=self._on_rof_input_mode_changed,
         ).pack(side="left", padx=(8, 0))
 
         # =========================
@@ -1991,6 +1994,16 @@ class HOIPage(ttk.Frame):
             row_ctrls,
             text="(Use multiple blocks if imaging occurred at different facilities.)",
             foreground="gray",
+        ).pack(side="left", padx=(10, 0))
+
+        if not hasattr(self, "rof_also_print_var"):
+            self.rof_also_print_var = tk.BooleanVar(value=False)
+
+        ttk.Checkbutton(
+            row_ctrls,
+            text="Also print ROF after Objectives",
+            variable=self.rof_also_print_var,
+            command=self._changed,
         ).pack(side="left", padx=(10, 0))
 
         # Imaging area should expand downward
@@ -2106,6 +2119,7 @@ class HOIPage(ttk.Frame):
                 "mode": self.rof_mode_var.get(),
                 "input_mode": self.rof_input_mode_var.get(),   # ✅ ADD
                 "auto_paragraph": self.rof_auto_paragraph_var.get(),
+                "also_print_rof_after_objectives": bool(self.rof_also_print_var.get()),
                 # ✅ SAVE Intro dropdown settings (Initial/Re-Exam/Final)
                 "intro": {
                     "event_word": self.intro_event_word_var.get(),
@@ -2182,6 +2196,8 @@ class HOIPage(ttk.Frame):
             self.manual_reexam_var.set(rof.get("manual_reexam", "") or "")
             self.manual_rof_var.set(rof.get("manual_rof", "") or "")
             self.manual_final_var.set(rof.get("manual_final", "") or "")
+            self.rof_also_print_var.set(bool(rof.get("also_print_rof_after_objectives", False)))
+            self.rof_manual_paragraph_var.set(rof.get("manual_paragraph", "") or "")
 
             # ✅ restore Intro dropdown settings
             intro = rof.get("intro") or {}
@@ -2402,7 +2418,8 @@ class HOIPage(ttk.Frame):
             # ✅ INSERT ROF RESET HERE
             # =========================
             self.rof_mode_var.set("ROF")  
-            self.rof_input_mode_var.set("Structured")   # ✅ ADD           
+            self.rof_input_mode_var.set("Structured")   # ✅ ADD   
+            self.rof_also_print_var.set(False)
             
             self.manual_initial_var.set("")
             self.manual_reexam_var.set("")

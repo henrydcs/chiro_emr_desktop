@@ -1741,7 +1741,17 @@ def build_combined_pdf(path: str, payloads: list):
 
             story.append(Spacer(1, 0.10 * inch))
 
-        story.extend(build_rof_flowables(hoi_struct, styles, allow_modes={"ROF", ""}))
+        rof_struct = (hoi_struct or {}).get("rof") or {}
+        also_print = False
+        if isinstance(rof_struct, dict):
+            also_print = bool(rof_struct.get("also_print_rof_after_objectives", False))
+
+        if also_print:
+            # print ROF text even when mode is Initial/Re-Exam/Final
+            story.extend(build_rof_flowables(hoi_struct, styles))
+        else:
+            # current behavior: only classic ROF/legacy
+            story.extend(build_rof_flowables(hoi_struct, styles, allow_modes={"ROF", ""}))
 
 
         def _dx_text_from_soap(soap: dict) -> str:
