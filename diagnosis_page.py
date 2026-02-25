@@ -509,14 +509,16 @@ class DiagnosisPage(ttk.Frame):
             self._assessment_screen_refresh(ASSESSMENT_STMT_TEXT)
 
     def _build_employment_screen(self, parent, padx=10):
-        # Header row with navigation buttons
+        # Optional: clear screen if you ever rebuild it
+        for child in parent.winfo_children():
+            child.destroy()
+
         hdr = ttk.Frame(parent)
         hdr.pack(fill="x", padx=padx, pady=(10, 6))
 
         ttk.Button(hdr, text="← Diagnosis", command=self.show_main_screen).pack(side="left")
         ttk.Button(hdr, text="← Assessment", command=self.show_assessment_screen).pack(side="left", padx=(8, 0))
-
-        ttk.Label(hdr, text="Employment Status", font=("Segoe UI", 12, "bold")).pack(side="left", padx=(12, 0))
+        ttk.Label(hdr, text="Employment / Work Status", font=("Segoe UI", 12, "bold")).pack(side="left", padx=(12, 0))
 
         ttk.Separator(parent).pack(fill="x", padx=padx, pady=(6, 10))
 
@@ -527,8 +529,14 @@ class DiagnosisPage(ttk.Frame):
         # Vars
         if not hasattr(self, "employment_status_var"):
             self.employment_status_var = tk.StringVar(value="(select)")
+        if not hasattr(self, "work_plan_var"):
+            self.work_plan_var = tk.StringVar(value="(select)")
+        if not hasattr(self, "employment_notes_var"):
+            self.employment_notes_var = tk.StringVar(value="")
+        if not hasattr(self, "employment_other_var"):
+            self.employment_other_var = tk.StringVar(value="")
 
-        # Editable options list (you can expand later)
+        # Choices
         if not hasattr(self, "employment_status_choices"):
             self.employment_status_choices = [
                 "(select)",
@@ -544,32 +552,63 @@ class DiagnosisPage(ttk.Frame):
                 "Other (free text)",
             ]
 
-        ttk.Label(body, text="Current employment status:").grid(row=0, column=0, sticky="w")
+        work_plan_choices = [
+            "(select)",  # ✅ do not print
+            "Full Duty (No Restrictions)",
+            "Modified Duty (Work Restrictions)",
+            "Off Work / TTD (Temporary Total Disability)",
+            "Off Work (Work Status Note Only)",
+            "Work Restrictions Pending Re-evaluation",
+            "Disability Note Requested",
+            "Return to Work Note Requested",
+            "FMLA / Leave Documentation Requested",
+            "Referral for Work Capacity Evaluation",
+        ]
+
+        # --- Two dropdowns side-by-side ---
+        row = ttk.Frame(body)
+        row.grid(row=0, column=0, sticky="ew")
+        row.columnconfigure(0, weight=1)
+        row.columnconfigure(1, weight=1)
+
+        left = ttk.Frame(row)
+        left.grid(row=0, column=0, sticky="ew", padx=(0, 10))
+        left.columnconfigure(0, weight=1)
+
+        right = ttk.Frame(row)
+        right.grid(row=0, column=1, sticky="ew", padx=(10, 0))
+        right.columnconfigure(0, weight=1)
+
+        ttk.Label(left, text="Current employment status:").grid(row=0, column=0, sticky="w")
         self.employment_cb = ttk.Combobox(
-            body,
+            left,
             textvariable=self.employment_status_var,
             values=self.employment_status_choices,
             state="readonly",
-            width=44,
         )
-        self.employment_cb.grid(row=1, column=0, sticky="ew", pady=(4, 10))
+        self.employment_cb.grid(row=1, column=0, sticky="ew", pady=(4, 0))
         self.employment_cb.bind("<<ComboboxSelected>>", lambda e: self._changed())
 
-        # Optional "Other" free text (hidden unless selected)
-        if not hasattr(self, "employment_other_var"):
-            self.employment_other_var = tk.StringVar(value="")
+        ttk.Label(right, text="Work restrictions / disability plan:").grid(row=0, column=0, sticky="w")
+        self.work_plan_cb = ttk.Combobox(
+            right,
+            textvariable=self.work_plan_var,
+            values=work_plan_choices,
+            state="readonly",
+        )
+        self.work_plan_cb.grid(row=1, column=0, sticky="ew", pady=(4, 0))
+        self.work_plan_cb.bind("<<ComboboxSelected>>", lambda e: self._changed())
 
+        # --- Optional "Other employment status" line ---
         self.employment_other_row = ttk.Frame(body)
-        self.employment_other_row.grid(row=2, column=0, sticky="ew")
+        self.employment_other_row.grid(row=1, column=0, sticky="ew", pady=(10, 0))
         self.employment_other_row.columnconfigure(0, weight=1)
 
-        ttk.Label(self.employment_other_row, text="Other:").grid(row=0, column=0, sticky="w")
+        ttk.Label(self.employment_other_row, text="Other employment status:").grid(row=0, column=0, sticky="w")
         ttk.Entry(self.employment_other_row, textvariable=self.employment_other_var).grid(
             row=1, column=0, sticky="ew", pady=(4, 0)
         )
         self.employment_other_var.trace_add("write", lambda *_: self._changed())
-
-        # hide initially
         self.employment_other_row.grid_remove()
 
         def _refresh_other_visibility(*_):
@@ -577,12 +616,33 @@ class DiagnosisPage(ttk.Frame):
                 self.employment_other_row.grid()
             else:
                 self.employment_other_row.grid_remove()
-                # optional: clear when not used
-                # self.employment_other_var.set("")
             self._changed()
 
         self.employment_status_var.trace_add("write", _refresh_other_visibility)
         _refresh_other_visibility()
+
+        # --- Notes box (bottom) ---
+        ttk.Label(body, text="Additional notes (optional):").grid(row=2, column=0, sticky="w", pady=(14, 4))
+
+        self.employment_notes = tk.Text(body, height=5, wrap="word")
+        self.employment_notes.grid(row=3, column=0, sticky="nsew")
+        body.rowconfigure(3, weight=1)
+
+        # Load existing notes into Text
+        self.employment_notes.delete("1.0", "end")
+        self.employment_notes.insert("1.0", self.employment_notes_var.get() or "")
+
+        def _sync_notes(*_):
+            try:
+                txt = self.employment_notes.get("1.0", "end-1c")
+                self.employment_notes_var.set(txt)
+            except Exception:
+                pass
+            self._changed()
+
+        self.employment_notes.bind("<KeyRelease>", lambda e: _sync_notes())
+        self.employment_notes.bind("<<Paste>>", lambda e: parent.after(1, _sync_notes))
+        self.employment_notes.bind("<<Cut>>", lambda e: parent.after(1, _sync_notes))
 
     # ---------- UI ----------
     def _build_ui(self):
@@ -1039,6 +1099,8 @@ class DiagnosisPage(ttk.Frame):
             try:
                 self.employment_status_var.set("(select)")
                 self.employment_other_var.set("")
+                self.work_plan_var.set("(select)")
+                self.employment_notes_var.set("")
             except Exception:
                 pass
 
@@ -1058,6 +1120,8 @@ class DiagnosisPage(ttk.Frame):
             "assessment_custom": self.assessment_custom_var.get(),
             "employment_status": self.employment_status_var.get(),
             "employment_other": self.employment_other_var.get(),
+            "work_plan": self.work_plan_var.get(),
+            "employment_notes": self.employment_notes_var.get(),
             "prognosis": self.prognosis_var.get(),
             "imaging_recs": list(self.imaging_recs),
             "referrals": list(self.referrals),
@@ -1137,6 +1201,7 @@ class DiagnosisPage(ttk.Frame):
 
             self.assessment_choice_var.set(data.get("assessment_choice") or "(select)")
             self.assessment_custom_var.set(data.get("assessment_custom") or "")
+            
 
             try:
                 self._assessment_screen_refresh(self.ASSESSMENT_STMT_TEXT)
@@ -1146,6 +1211,8 @@ class DiagnosisPage(ttk.Frame):
             try:
                 self.employment_status_var.set(data.get("employment_status") or "(select)")
                 self.employment_other_var.set(data.get("employment_other") or "")
+                self.work_plan_var.set(data.get("work_plan") or "(select)")
+                self.employment_notes_var.set(data.get("employment_notes") or "")
             except Exception:
                 pass
 

@@ -1244,8 +1244,13 @@ class App(tk.Tk):
         right_root = ttk.Frame(main)
         right_root.pack(side="right", fill="both", expand=True)
 
+        
+        
+        # this controls Preview Size (we can always delete these two lines)
         right_root.configure(width=420)
-        right_root.pack_propagate(False)  # IMPORTANT
+        right_root.pack_propagate(False)  # IMPORTANT but can delete these two lines and preview will be hard coded instead automatically
+
+
 
 
         #right_root = ttk.Frame(main, width=820)
