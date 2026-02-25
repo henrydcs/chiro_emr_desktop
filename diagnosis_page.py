@@ -508,7 +508,81 @@ class DiagnosisPage(ttk.Frame):
             # Initial refresh
             self._assessment_screen_refresh(ASSESSMENT_STMT_TEXT)
 
-    
+    def _build_employment_screen(self, parent, padx=10):
+        # Header row with navigation buttons
+        hdr = ttk.Frame(parent)
+        hdr.pack(fill="x", padx=padx, pady=(10, 6))
+
+        ttk.Button(hdr, text="← Diagnosis", command=self.show_main_screen).pack(side="left")
+        ttk.Button(hdr, text="← Assessment", command=self.show_assessment_screen).pack(side="left", padx=(8, 0))
+
+        ttk.Label(hdr, text="Employment Status", font=("Segoe UI", 12, "bold")).pack(side="left", padx=(12, 0))
+
+        ttk.Separator(parent).pack(fill="x", padx=padx, pady=(6, 10))
+
+        body = ttk.Frame(parent)
+        body.pack(fill="both", expand=True, padx=padx, pady=(0, 10))
+        body.columnconfigure(0, weight=1)
+
+        # Vars
+        if not hasattr(self, "employment_status_var"):
+            self.employment_status_var = tk.StringVar(value="(select)")
+
+        # Editable options list (you can expand later)
+        if not hasattr(self, "employment_status_choices"):
+            self.employment_status_choices = [
+                "(select)",
+                "Employed Full-Time",
+                "Employed Part-Time",
+                "Self-Employed",
+                "Unemployed",
+                "Student",
+                "Retired",
+                "Homemaker",
+                "Disabled / Unable to Work",
+                "Leave of Absence",
+                "Other (free text)",
+            ]
+
+        ttk.Label(body, text="Current employment status:").grid(row=0, column=0, sticky="w")
+        self.employment_cb = ttk.Combobox(
+            body,
+            textvariable=self.employment_status_var,
+            values=self.employment_status_choices,
+            state="readonly",
+            width=44,
+        )
+        self.employment_cb.grid(row=1, column=0, sticky="ew", pady=(4, 10))
+        self.employment_cb.bind("<<ComboboxSelected>>", lambda e: self._changed())
+
+        # Optional "Other" free text (hidden unless selected)
+        if not hasattr(self, "employment_other_var"):
+            self.employment_other_var = tk.StringVar(value="")
+
+        self.employment_other_row = ttk.Frame(body)
+        self.employment_other_row.grid(row=2, column=0, sticky="ew")
+        self.employment_other_row.columnconfigure(0, weight=1)
+
+        ttk.Label(self.employment_other_row, text="Other:").grid(row=0, column=0, sticky="w")
+        ttk.Entry(self.employment_other_row, textvariable=self.employment_other_var).grid(
+            row=1, column=0, sticky="ew", pady=(4, 0)
+        )
+        self.employment_other_var.trace_add("write", lambda *_: self._changed())
+
+        # hide initially
+        self.employment_other_row.grid_remove()
+
+        def _refresh_other_visibility(*_):
+            if (self.employment_status_var.get() or "").strip() == "Other (free text)":
+                self.employment_other_row.grid()
+            else:
+                self.employment_other_row.grid_remove()
+                # optional: clear when not used
+                # self.employment_other_var.set("")
+            self._changed()
+
+        self.employment_status_var.trace_add("write", _refresh_other_visibility)
+        _refresh_other_visibility()
 
     # ---------- UI ----------
     def _build_ui(self):
@@ -522,13 +596,13 @@ class DiagnosisPage(ttk.Frame):
 
         self.main_screen = ttk.Frame(self.screen_container)
         self.assess_screen = ttk.Frame(self.screen_container)
+        self.employment_screen = ttk.Frame(self.screen_container)
 
-        for f in (self.main_screen, self.assess_screen):
+        for f in (self.main_screen, self.assess_screen, self.main_screen, self.assess_screen, self.employment_screen):
             f.grid(row=0, column=0, sticky="nsew")
 
         self.screen_container.rowconfigure(0, weight=1)
         self.screen_container.columnconfigure(0, weight=1)
-
 
         
 
@@ -563,6 +637,12 @@ class DiagnosisPage(ttk.Frame):
             top,
             text="Assessment Statement",
             command=self.show_assessment_screen
+        ).pack(side="left", padx=(8, 0))
+
+        ttk.Button(
+            top,
+            text="Employment Status",
+            command=self.show_employment_screen
         ).pack(side="left", padx=(8, 0))
 
         # Collapse toggles (right side)
@@ -718,10 +798,14 @@ class DiagnosisPage(ttk.Frame):
         # packed in _apply_collapse_states with text_frame visibility
 
         self._build_assessment_screen(self.assess_screen, padx=padx)
+        self._build_employment_screen(self.employment_screen, padx=padx)
 
         # ✅ start on main screen
         self.main_screen.tkraise()
 
+    def show_employment_screen(self):
+        self.employment_screen.tkraise()
+    
     def show_assessment_screen(self):
         self.assess_screen.tkraise()
 
@@ -952,6 +1036,12 @@ class DiagnosisPage(ttk.Frame):
             except Exception:
                 pass
 
+            try:
+                self.employment_status_var.set("(select)")
+                self.employment_other_var.set("")
+            except Exception:
+                pass
+
         finally:
             self._loading = False
 
@@ -966,6 +1056,8 @@ class DiagnosisPage(ttk.Frame):
             "text_is_manual": self._text_is_manual,
             "assessment_choice": self.assessment_choice_var.get(),
             "assessment_custom": self.assessment_custom_var.get(),
+            "employment_status": self.employment_status_var.get(),
+            "employment_other": self.employment_other_var.get(),
             "prognosis": self.prognosis_var.get(),
             "imaging_recs": list(self.imaging_recs),
             "referrals": list(self.referrals),
@@ -1048,6 +1140,12 @@ class DiagnosisPage(ttk.Frame):
 
             try:
                 self._assessment_screen_refresh(self.ASSESSMENT_STMT_TEXT)
+            except Exception:
+                pass
+
+            try:
+                self.employment_status_var.set(data.get("employment_status") or "(select)")
+                self.employment_other_var.set(data.get("employment_other") or "")
             except Exception:
                 pass
 

@@ -1244,6 +1244,9 @@ class App(tk.Tk):
         right_root = ttk.Frame(main)
         right_root.pack(side="right", fill="both", expand=True)
 
+        right_root.configure(width=420)
+        right_root.pack_propagate(False)  # IMPORTANT
+
 
         #right_root = ttk.Frame(main, width=820)
         #right_root.pack(side="right", fill="y")
