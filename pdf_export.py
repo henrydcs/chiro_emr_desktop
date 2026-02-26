@@ -1473,7 +1473,157 @@ def payload_to_exam_sections(payload: dict):
     exam_date = normalize_mmddyyyy(patient.get("exam_date", "")) or today_mmddyyyy()
     return exam_name, patient, narratives, family_social, objectives_text, objectives_struct, diagnosis, plan_struct, exam_date
 
+def _assessment_paragraph(dx_struct: dict, styles):
+    dx_struct = dx_struct or {}
 
+    choice = (dx_struct.get("assessment_choice") or "").strip()
+    custom = (dx_struct.get("assessment_custom") or "").strip()
+
+    ASSESSMENT_TEXT = {
+        "Standard exam / evaluation day":
+            "Clinical findings are consistent with the diagnoses listed below based on the patient’s history and objective examination.",
+        "Therapy-only visit":
+            "The patient was seen for continuation of therapeutic treatment per the established plan of care. No re-examination was performed at this visit.",
+        "Re-exam / progress visit":
+            "Findings were reviewed and treatment response assessed. The diagnoses listed below remain consistent with the patient’s presentation at this visit.",
+        "Discharge / final visit":
+            "The patient was seen for final assessment and disposition. Diagnoses and clinical status were reviewed, and ongoing recommendations are documented below.",
+    }
+
+    if choice == "Custom (free text)" and custom:
+        text = custom
+    else:
+        text = ASSESSMENT_TEXT.get(choice, "")
+
+    if not text:
+        return None
+
+    safe = xml_escape(text).replace("\n", "<br/>")
+    return Paragraph(safe, styles["BodyText"])
+
+def _employment_current_status_paragraph(dx_struct: dict, styles):
+    """
+    Assessment-side: current employment + optional work plan + notes.
+    Heading handled outside (so you can control layout).
+    """
+    dx_struct = dx_struct or {}
+
+    status = (dx_struct.get("employment_status") or "").strip()
+    other  = (dx_struct.get("employment_other") or "").strip()
+    work_plan = (dx_struct.get("work_plan") or "").strip()
+    notes = (dx_struct.get("employment_notes") or "").strip()
+
+    lines = []
+
+    if status and status != "(select)":
+        if status == "Other (free text)" and other:
+            lines.append(f"Employment Status: {other}")
+        else:
+            lines.append(f"Employment Status: {status}")
+
+    # You can choose whether work_plan belongs here too.
+    # I’d keep it here IF it reflects CURRENT status (e.g., Off work / TTD).
+    if work_plan and work_plan != "(select)":
+        lines.append(f"Current Work Status: {work_plan}")
+
+    if notes:
+        lines.append(f"Notes: {notes}")
+
+    if not lines:
+        return None
+
+    safe = xml_escape("\n".join(lines)).replace("\n", "<br/>")
+    return Paragraph(safe, styles["BodyText"])
+
+
+# def _employment_work_recommendations_paragraph(dx_struct: dict, styles):
+#     """
+#     Plan-side: forward-looking work recommendations derived from work_plan (+ optional notes).
+#     Keeps the wording plan-ish. Heading handled outside.
+#     """
+#     dx_struct = dx_struct or {}
+
+#     work_plan = (dx_struct.get("work_plan") or "").strip()
+#     notes = (dx_struct.get("employment_notes") or "").strip()
+
+#     if not work_plan or work_plan == "(select)":
+#         return None
+
+#     # Turn the selection into plan language.
+#     # Keep it conservative, generic, and readable.
+#     mapping = {
+#         "Full Duty (No Restrictions)":
+#             "Return to work full duty with no restrictions.",
+#         "Modified Duty (Work Restrictions)":
+#             "Recommend modified duty with appropriate work restrictions.",
+#         "Off Work / TTD (Temporary Total Disability)":
+#             "Recommend the patient remain off work at this time (TTD) pending clinical improvement and re-evaluation.",
+#         "Off Work (Work Status Note Only)":
+#             "Work status note provided; patient advised to remain off work at this time as clinically indicated.",
+#         "Work Restrictions Pending Re-evaluation":
+#             "Work restrictions are pending re-evaluation at the next visit based on treatment response.",
+#         "Disability Note Requested":
+#             "Disability documentation requested; provide as clinically appropriate based on examination findings.",
+#         "Return to Work Note Requested":
+#             "Return-to-work documentation requested; provide based on current work status and clinical findings.",
+#         "FMLA / Leave Documentation Requested":
+#             "FMLA/leave documentation requested; provide as clinically appropriate.",
+#         "Referral for Work Capacity Evaluation":
+#             "Recommend referral for a work capacity evaluation to better define functional limitations and work restrictions.",
+#     }
+
+#     rec = mapping.get(work_plan, "").strip()
+#     if not rec:
+#         # If you add new choices later, fall back gracefully.
+#         rec = f"Work recommendation: {work_plan}."
+
+#     lines = [rec]
+
+#     # Optional: include notes as “supporting” detail in plan
+#     # (If you prefer notes ONLY in assessment, delete this block.)
+#     if notes:
+#         lines.append(f"Notes: {notes}")
+
+#     safe = xml_escape("\n\n".join(lines)).replace("\n", "<br/>")
+#     return Paragraph(safe, styles["BodyText"])
+
+def _causation_paragraph(dx_struct: dict, styles):
+    dx_struct = dx_struct or {}
+
+    choice = (dx_struct.get("causation_choice") or "").strip()
+    custom = (dx_struct.get("causation_custom") or "").strip()
+    notes = (dx_struct.get("causation_notes") or "").strip()
+
+    CAUSATION_TEXT = {
+        "Causally related (WDM certainty)":
+            "Within a reasonable degree of medical certainty, the patient’s diagnosed conditions are causally related to the reported mechanism of injury.",
+        "Clinically consistent with reported mechanism (conservative)":
+            "The patient’s presentation and examination findings are clinically consistent with the reported mechanism of injury.",
+        "Aggravation of pre-existing condition":
+            "The current condition represents an aggravation of a pre-existing condition, as supported by the patient’s history and current clinical findings.",
+        "Not causally related":
+            "Based on the available history and examination findings, the diagnosed conditions are not causally related to the reported mechanism of injury.",
+        "Unable to determine at this time":
+            "Causation cannot be determined at this time based on the available information; additional history, records, and/or diagnostic testing may be required.",
+    }
+
+    lines = []
+
+    if choice == "Custom (free text)" and custom:
+        lines.append(custom)
+    else:
+        preset = CAUSATION_TEXT.get(choice, "")
+        if preset:
+            lines.append(preset)
+
+    if notes:
+        lines.append(f"Additional Notes: {notes}")
+
+    if not lines:
+        return None
+
+    safe = xml_escape("\n\n".join(lines)).replace("\n", "<br/>")
+    return Paragraph(safe, styles["BodyText"])
 
 # =======================================================
 # PDF builder
@@ -1796,7 +1946,7 @@ def build_combined_pdf(path: str, payloads: list):
 
         # Diagnosis / Plan
         def add_section(title: str, content: str):
-            story.append(Paragraph(f"<b>{xml_escape(title)}</b>", styles["Heading2"]))
+            story.append(Paragraph(f"<b>{xml_escape(title)}</b>", styles["Heading3"]))
             story.append(Spacer(1, 0.08 * inch))
 
             safe = (content or "").strip()
@@ -1813,10 +1963,34 @@ def build_combined_pdf(path: str, payloads: list):
         # print("Heading2 spaceAfter:", styles["Heading2"].spaceAfter)
         # print("Heading2 spaceBefore:", styles["Heading2"].spaceBefore)
         
-        add_section("ASSESSMENT", "")        
+        # ================================
+        # ASSESSMENT SECTION
+        # ================================
+        story.append(Paragraph("<b>ASSESSMENT</b>", styles["Heading2"]))
+        story.append(Spacer(1, 0.08 * inch))
+
+        dx_struct = soap.get("diagnosis_struct") or {}
+
+        assessment_para = _assessment_paragraph(dx_struct, styles)
+        causation_para  = _causation_paragraph(dx_struct, styles)
+        emp_current_para = _employment_current_status_paragraph(dx_struct, styles)
+
+        if assessment_para:
+            story.append(assessment_para)
+            story.append(Spacer(1, 0.10 * inch))
+        
+
+        story.append(Spacer(1, 0.14 * inch))
 
         #if dx_text.strip():
         add_section("Diagnosis", dx_text)
+        
+        if causation_para:
+            story.append(Paragraph("<b>Causation</b>", styles["Heading3"]))
+            story.append(Spacer(1, 0.04 * inch))
+            story.append(causation_para)
+            story.append(Spacer(1, 0.10 * inch))
+        
 
         dx_struct = soap.get("diagnosis_struct") or {}
 
@@ -1831,16 +2005,52 @@ def build_combined_pdf(path: str, payloads: list):
         ref = _referral_sentence(dx_struct)
         if ref:
             add_section("Referrals", ref)
+            
+        if emp_current_para:
+            story.append(Paragraph("<b>Current Work Status</b>", styles["Heading3"]))
+            story.append(Spacer(1, 0.04 * inch))
+            story.append(emp_current_para)
+            story.append(Spacer(1, 0.10 * inch))
 
 
         # ✅ Plan (structured PDF rendering)
-        plan_flow = build_plan_flowables(plan_struct, styles)
+        dx_struct = soap.get("diagnosis_struct") or {}
+
+        # Build a clean, plan-style work recommendation string
+        work_recs = ""
+        wp = (dx_struct.get("work_plan") or "").strip()
+        if wp and wp != "(select)":
+            mapping = {
+                "Full Duty (No Restrictions)":
+                    "Return to work full duty with no restrictions.",
+                "Modified Duty (Work Restrictions)":
+                    "Recommend modified duty with appropriate work restrictions.",
+                "Off Work / TTD (Temporary Total Disability)":
+                    "Recommend the patient remain off work at this time (TTD) pending clinical improvement and re-evaluation.",
+                "Off Work (Work Status Note Only)":
+                    "Work status note provided; patient advised to remain off work at this time as clinically indicated.",
+                "Work Restrictions Pending Re-evaluation":
+                    "Work restrictions are pending re-evaluation at the next visit based on treatment response.",
+                "Disability Note Requested":
+                    "Disability documentation requested; provide as clinically appropriate based on examination findings.",
+                "Return to Work Note Requested":
+                    "Return-to-work documentation requested; provide based on current work status and clinical findings.",
+                "FMLA / Leave Documentation Requested":
+                    "FMLA/leave documentation requested; provide as clinically appropriate.",
+                "Referral for Work Capacity Evaluation":
+                    "Recommend referral for a work capacity evaluation to better define functional limitations and work restrictions.",
+            }
+
+            work_recs = mapping.get(wp, wp)
+
+        plan_flow = build_plan_flowables(plan_struct, styles, work_recs=work_recs)
         if plan_flow:
             story.extend(plan_flow)
             story.append(Spacer(1, 0.14 * inch))
         else:
             add_section("Plan", "")
-
+            
+        
 
         # story.append(Spacer(1, 0.18 * inch))
         # story.append(Paragraph("Provider Signature: ________________________________", styles["Normal"]))

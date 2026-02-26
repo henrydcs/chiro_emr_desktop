@@ -400,7 +400,7 @@ def _build_services_flowables(d: dict, B) -> list:
 # =========================================================
 # Main builder
 # =========================================================
-def build_plan_flowables(plan_struct: dict, styles) -> list:
+def build_plan_flowables(plan_struct: dict, styles, *, work_recs: str = "") -> list:
     """
     Returns a list of ReportLab flowables for the Plan section.
     plan_struct is expected to be what PlanPage.get_struct() returns.
@@ -412,6 +412,7 @@ def build_plan_flowables(plan_struct: dict, styles) -> list:
     care = _list_or_empty(d.get("care_types"))
     regions = _list_or_empty(d.get("regions"))
     goals = _list_or_empty(d.get("goals"))
+    work_recs = _clean(work_recs)
     freq = _clean(str(d.get("frequency_per_week", "")))
     dur = _clean(str(d.get("duration_weeks", "")))
     reeval = _clean(str(d.get("reeval", "")))
@@ -469,6 +470,7 @@ def build_plan_flowables(plan_struct: dict, styles) -> list:
         ("Duration:", f"{dur} weeks" if dur else ""),
         ("Re-evaluation:", reeval or ""),
         ("Goals:", ", ".join(goals) if goals else ""),
+        ("Work Duties:", work_recs or ""),
     ]
     grid_rows = [(k, v) for (k, v) in grid_rows if _clean(v)]
 

@@ -643,6 +643,130 @@ class DiagnosisPage(ttk.Frame):
         self.employment_notes.bind("<KeyRelease>", lambda e: _sync_notes())
         self.employment_notes.bind("<<Paste>>", lambda e: parent.after(1, _sync_notes))
         self.employment_notes.bind("<<Cut>>", lambda e: parent.after(1, _sync_notes))
+        
+        
+    def _build_causation_screen(self, parent, padx=10):
+        # Optional: clear if rebuilt
+        for child in parent.winfo_children():
+            child.destroy()
+
+        hdr = ttk.Frame(parent)
+        hdr.pack(fill="x", padx=padx, pady=(10, 6))
+
+        ttk.Button(hdr, text="← Diagnosis", command=self.show_main_screen).pack(side="left")
+        ttk.Button(hdr, text="← Assessment", command=self.show_assessment_screen).pack(side="left", padx=(8, 0))
+        ttk.Button(hdr, text="← Employment", command=self.show_employment_screen).pack(side="left", padx=(8, 0))
+
+        ttk.Label(hdr, text="Causation Statement", font=("Segoe UI", 12, "bold")).pack(side="left", padx=(12, 0))
+
+        ttk.Separator(parent).pack(fill="x", padx=padx, pady=(6, 10))
+
+        body = ttk.Frame(parent)
+        body.pack(fill="both", expand=True, padx=padx, pady=(0, 10))
+        body.columnconfigure(0, weight=1)
+
+        # Vars
+        if not hasattr(self, "causation_choice_var"):
+            self.causation_choice_var = tk.StringVar(value="(select)")
+        if not hasattr(self, "causation_custom_var"):
+            self.causation_custom_var = tk.StringVar(value="")
+        if not hasattr(self, "causation_notes_var"):
+            self.causation_notes_var = tk.StringVar(value="")
+
+        CAUSATION_CHOICES = [
+            "(select)",  # ✅ do not print
+            "Causally related (WDM certainty)",
+            "Clinically consistent with reported mechanism (conservative)",
+            "Aggravation of pre-existing condition",
+            "Not causally related",
+            "Unable to determine at this time",
+            "Custom (free text)",
+        ]
+
+        CAUSATION_TEXT = {
+            "Causally related (WDM certainty)":
+                "Within a reasonable degree of medical certainty, the patient’s diagnosed conditions are causally related to the reported mechanism of injury.",
+            "Clinically consistent with reported mechanism (conservative)":
+                "The patient’s presentation and examination findings are clinically consistent with the reported mechanism of injury.",
+            "Aggravation of pre-existing condition":
+                "The current condition represents an aggravation of a pre-existing condition, as supported by the patient’s history and current clinical findings.",
+            "Not causally related":
+                "Based on the available history and examination findings, the diagnosed conditions are not causally related to the reported mechanism of injury.",
+            "Unable to determine at this time":
+                "Causation cannot be determined at this time based on the available information; additional history, records, and/or diagnostic testing may be required.",
+        }
+
+        ttk.Label(body, text="Select causation statement:").grid(row=0, column=0, sticky="w")
+        cb = ttk.Combobox(
+            body,
+            textvariable=self.causation_choice_var,
+            values=CAUSATION_CHOICES,
+            state="readonly",
+            width=54,
+        )
+        cb.grid(row=1, column=0, sticky="ew", pady=(4, 10))
+        cb.bind("<<ComboboxSelected>>", lambda e: self._causation_refresh(CAUSATION_TEXT))
+
+        # Preview
+        self.causation_preview = ttk.Label(body, text="", wraplength=760, justify="left", foreground="gray")
+        self.causation_preview.grid(row=2, column=0, sticky="w", pady=(0, 10))
+
+        # Custom row (hidden unless Custom)
+        self.causation_custom_row = ttk.Frame(body)
+        self.causation_custom_row.grid(row=3, column=0, sticky="ew")
+        self.causation_custom_row.columnconfigure(0, weight=1)
+
+        ttk.Label(self.causation_custom_row, text="Custom causation statement:").grid(row=0, column=0, sticky="w")
+        ttk.Entry(self.causation_custom_row, textvariable=self.causation_custom_var).grid(
+            row=1, column=0, sticky="ew", pady=(4, 0)
+        )
+        self.causation_custom_var.trace_add("write", lambda *_: self._changed())
+        self.causation_custom_row.grid_remove()
+        
+        # --- Notes section ---
+        ttk.Label(body, text="Additional causation notes (optional):").grid(
+            row=4, column=0, sticky="w", pady=(14, 4)
+        )
+
+        self.causation_notes = tk.Text(body, height=5, wrap="word")
+        self.causation_notes.grid(row=5, column=0, sticky="nsew")
+        body.rowconfigure(5, weight=1)
+
+        # Load existing value
+        self.causation_notes.delete("1.0", "end")
+        self.causation_notes.insert("1.0", self.causation_notes_var.get() or "")
+
+        def _sync_causation_notes(*_):
+            try:
+                txt = self.causation_notes.get("1.0", "end-1c")
+                self.causation_notes_var.set(txt)
+            except Exception:
+                pass
+            self._changed()
+
+        self.causation_notes.bind("<KeyRelease>", lambda e: _sync_causation_notes())
+        self.causation_notes.bind("<<Paste>>", lambda e: parent.after(1, _sync_causation_notes))
+        self.causation_notes.bind("<<Cut>>", lambda e: parent.after(1, _sync_causation_notes))
+
+        # Keep preset map for refresh during load
+        self._CAUSATION_TEXT_MAP = CAUSATION_TEXT
+
+        self._causation_refresh(CAUSATION_TEXT)
+        
+    def _causation_refresh(self, preset_map: dict[str, str]):
+        choice = (getattr(self, "causation_choice_var", None).get() or "").strip()
+
+        if choice in ("", "(select)"):
+            self.causation_preview.configure(text="")
+            self.causation_custom_row.grid_remove()
+        elif choice == "Custom (free text)":
+            self.causation_preview.configure(text="Type a custom causation statement below.")
+            self.causation_custom_row.grid()
+        else:
+            self.causation_preview.configure(text=preset_map.get(choice, ""))
+            self.causation_custom_row.grid_remove()
+
+        self._changed()
 
     # ---------- UI ----------
     def _build_ui(self):
@@ -657,8 +781,9 @@ class DiagnosisPage(ttk.Frame):
         self.main_screen = ttk.Frame(self.screen_container)
         self.assess_screen = ttk.Frame(self.screen_container)
         self.employment_screen = ttk.Frame(self.screen_container)
-
-        for f in (self.main_screen, self.assess_screen, self.main_screen, self.assess_screen, self.employment_screen):
+        self.causation_screen = ttk.Frame(self.screen_container)                    
+        
+        for f in (self.main_screen, self.assess_screen, self.employment_screen, self.causation_screen):
             f.grid(row=0, column=0, sticky="nsew")
 
         self.screen_container.rowconfigure(0, weight=1)
@@ -675,12 +800,12 @@ class DiagnosisPage(ttk.Frame):
         top = ttk.Frame(self.main_screen)
         top.pack(fill="x", padx=padx, pady=(10, 6))
 
-        ttk.Button(top, text="Add Diagnosis", command=self.add_block).pack(side="left")
-        ttk.Button(top, text="Reset Diagnosis", command=self._confirm_reset).pack(side="left", padx=(8, 0))
+        ttk.Button(top, text="Add Dx", command=self.add_block).pack(side="left")
+        ttk.Button(top, text="Reset Dx", command=self._confirm_reset).pack(side="left", padx=(8, 0))
 
         ttk.Button(
             top,
-            text="Rebuild Text From Dropdowns",
+            text="Rebuild Text",
             command=self.rebuild_text_from_blocks
         ).pack(side="left", padx=(18, 0))
 
@@ -695,15 +820,17 @@ class DiagnosisPage(ttk.Frame):
 
         ttk.Button(
             top,
-            text="Assessment Statement",
+            text="Assessment",
             command=self.show_assessment_screen
         ).pack(side="left", padx=(8, 0))
 
         ttk.Button(
             top,
-            text="Employment Status",
+            text="Work Status",
             command=self.show_employment_screen
         ).pack(side="left", padx=(8, 0))
+
+        ttk.Button(top, text="Causation", command=self.show_causation_screen).pack(side="left", padx=(8, 0))
 
         # Collapse toggles (right side)
         self.toggle_blocks_btn = ttk.Button(top, text="Hide Blocks", command=self._toggle_blocks)
@@ -859,9 +986,13 @@ class DiagnosisPage(ttk.Frame):
 
         self._build_assessment_screen(self.assess_screen, padx=padx)
         self._build_employment_screen(self.employment_screen, padx=padx)
+        self._build_causation_screen(self.causation_screen, padx=padx)
 
         # ✅ start on main screen
         self.main_screen.tkraise()
+        
+    def show_causation_screen(self):
+        self.causation_screen.tkraise()
 
     def show_employment_screen(self):
         self.employment_screen.tkraise()
@@ -1103,6 +1234,14 @@ class DiagnosisPage(ttk.Frame):
                 self.employment_notes_var.set("")
             except Exception:
                 pass
+                       
+            
+            try:
+                self.causation_choice_var.set("(select)")
+                self.causation_custom_var.set("")
+                self.causation_notes_var.set("")
+            except Exception:
+                pass
 
         finally:
             self._loading = False
@@ -1118,6 +1257,9 @@ class DiagnosisPage(ttk.Frame):
             "text_is_manual": self._text_is_manual,
             "assessment_choice": self.assessment_choice_var.get(),
             "assessment_custom": self.assessment_custom_var.get(),
+            "causation_choice": self.causation_choice_var.get() if hasattr(self, "causation_choice_var") else "(select)",
+            "causation_custom": self.causation_custom_var.get() if hasattr(self, "causation_custom_var") else "",
+            "causation_notes": (self.causation_notes.get("1.0", "end-1c") if hasattr(self, "causation_notes") else self.causation_notes_var.get()),
             "employment_status": self.employment_status_var.get(),
             "employment_other": self.employment_other_var.get(),
             "work_plan": self.work_plan_var.get(),
@@ -1216,6 +1358,19 @@ class DiagnosisPage(ttk.Frame):
             except Exception:
                 pass
 
+            try:
+                self.causation_choice_var.set(data.get("causation_choice") or "(select)")
+                self.causation_custom_var.set(data.get("causation_custom") or "")
+                self.causation_notes_var.set(data.get("causation_notes") or "")
+                try:
+                    if hasattr(self, "causation_notes"):
+                        self.causation_notes.delete("1.0", "end")
+                        self.causation_notes.insert("1.0", self.causation_notes_var.get() or "")
+                except Exception:
+                    pass
+                self._causation_refresh(getattr(self, "_CAUSATION_TEXT_MAP", {}))
+            except Exception:
+                pass
 
             if not _clean(self.get_value()):
                 self._text_is_manual = False
