@@ -425,8 +425,19 @@ def build_plan_flowables(plan_struct: dict, styles, *, work_recs: str = "") -> l
     plan_text = _clean(d.get("plan_text", ""))
 
     # Strip AUTO tag if present
+    had_auto = False
     if plan_text.startswith("[AUTO:PLAN]"):
+        had_auto = True
         plan_text = plan_text.replace("[AUTO:PLAN]", "", 1).strip()
+
+    # ✅ If this is the AUTO-generated plan paragraph, append Work Duties into it
+    if had_auto and work_recs:
+        # avoid duplicating if it’s already present (case-insensitive)
+        if work_recs.lower() not in plan_text.lower():
+            # ensure spacing + punctuation
+            if plan_text and not plan_text.endswith(("." , "!", "?")):
+                plan_text += "."
+            plan_text = (plan_text + " " + work_recs).strip()
 
     # If everything is empty AND no services, return nothing
     if not (care or regions or goals or freq or dur or reeval or notes or plan_text or _has_any_services(d)):
@@ -516,4 +527,4 @@ def build_plan_flowables(plan_struct: dict, styles, *, work_recs: str = "") -> l
         story.extend(svc_flowables)
         story.append(Spacer(1, 6))
 
-    return [KeepTogether(story)]
+    return story

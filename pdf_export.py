@@ -1510,7 +1510,7 @@ def _employment_current_status_paragraph(dx_struct: dict, styles):
 
     status = (dx_struct.get("employment_status") or "").strip()
     other  = (dx_struct.get("employment_other") or "").strip()
-    work_plan = (dx_struct.get("work_plan") or "").strip()
+    #work_plan = (dx_struct.get("work_plan") or "").strip()
     notes = (dx_struct.get("employment_notes") or "").strip()
 
     lines = []
@@ -1523,8 +1523,8 @@ def _employment_current_status_paragraph(dx_struct: dict, styles):
 
     # You can choose whether work_plan belongs here too.
     # I’d keep it here IF it reflects CURRENT status (e.g., Off work / TTD).
-    if work_plan and work_plan != "(select)":
-        lines.append(f"Current Work Status: {work_plan}")
+    #if work_plan and work_plan != "(select)":
+        #lines.append(f"Current Work Status: {work_plan}")
 
     if notes:
         lines.append(f"Notes: {notes}")
