@@ -39,6 +39,7 @@ from config import PATIENTS_ID_ROOT
 from doc_vault_page import upsert_vault_file
 from tk_docs_page import TkDocsPage
 from pdf_export import REPORTLAB_OK, build_combined_pdf
+from master_save import MasterSaveController
 from config import (
     UI_PAGES,
     EXAMS,
@@ -434,7 +435,7 @@ class App(tk.Tk):
 
 
 
-
+        self.master_save = MasterSaveController(self)
         self._build_ui()       
         self._wire_autosave_triggers()
 
@@ -1112,8 +1113,8 @@ class App(tk.Tk):
             "last_exam_pdfs": self.last_exam_pdf_paths,
             "last_all_exams_pdf": self.last_all_exams_pdf_path
         })
-        if messagebox.askyesno("PDF Saved", f"PDF overwritten/saved:\n{path}\n\nOpen it now?"):
-            open_with_default_app(path)
+        # if messagebox.askyesno("PDF Saved", f"PDF overwritten/saved:\n{path}\n\nOpen it now?"):
+        #     open_with_default_app(path)
 
 
 
@@ -1262,6 +1263,9 @@ class App(tk.Tk):
             command=self._open_alerts_popup
         )
         self.alerts_btn.pack(side="left", padx=5)
+
+        self.master_save_btn = ttk.Button(toggle_row, text="Master Save", command=self.master_save.run)
+        self.master_save_btn.pack(side="left", padx=5)
 
 
         # The actual clinic header frame (this will be hidden/shown)
