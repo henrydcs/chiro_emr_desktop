@@ -1954,7 +1954,7 @@ def build_combined_pdf(path: str, payloads: list):
                 safe = xml_escape(safe).replace("\n\n", "<br/><br/>").replace("\n", "<br/>")
                 story.append(Paragraph(safe, styles["BodyText"]))
             else:
-                story.append(Paragraph("Clinical findings are consistent with the diagnoses listed below based on the patient’s history and objective examination.", styles["BodyText"]))
+                story.append(Paragraph("", styles["BodyText"]))
                 #"The patient presented for therapeutic management consistent with the established plan of care. No additional examination was performed at this time."
             story.append(Spacer(1, 0.14 * inch))
 
