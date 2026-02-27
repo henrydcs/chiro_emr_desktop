@@ -282,6 +282,25 @@ class PlanPage(ttk.Frame):
         # start with generated narrative
         self._regen_plan_now()
 
+    
+    def open_therapy_modalities_from_therapy_only(self):
+        """
+        Therapy Only shortcut:
+        opens Services Provided Today and jumps the user to Therapy Modalities list.
+        Uses the exact same PlanPage popup + state.
+        """
+        self.open_services_main_popup()
+
+        # After the popup is created, your listbox exists; focus it.
+        try:
+            if getattr(self, "_therapy_listbox", None) is not None:
+                self._therapy_listbox.focus_set()
+                # optional: make sure the top of the list is visible
+                self._therapy_listbox.see(0)
+        except Exception:
+            pass
+    
+    
     def set_subjectives_clear_regions_fn(self, fn):
         """
         fn: callable that clears ALL subjective block body regions to "(none)"
@@ -1211,7 +1230,7 @@ class PlanPage(ttk.Frame):
 
         body_parts = [
             "Cervical Spine / Thoracic Spine / Lumbar Spine", "Cervical Spine", "Cervical / Thoracic Spine", "Thoracic Spine", "Lumbar Spine",
-            "Thoracic Spine", "Thoracic / Lumbar Spine", "Lumbar Spine","Bilateral Shoulders", "Right Shoulder", "Left Shoulder",
+            "Thoracic / Lumbar Spine", "Bilateral Shoulders", "Right Shoulder", "Left Shoulder",
             "Bilateral Elbows", "Right Elbow", "Left Elbow", "Bilateral Hips", "Right Hip", "Left Hip", "Bilateral Knees", "Right Knee", "Left Knee",
             "Bilateral Ankles/Feet", "Right Ankle/Foot", "Left Ankle/Foot",
         ]

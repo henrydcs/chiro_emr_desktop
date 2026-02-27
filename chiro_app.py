@@ -1518,7 +1518,7 @@ class App(tk.Tk):
         self.hoi_page = HOIPage(self.content, self.schedule_autosave)
         self.after(50, self.request_live_preview_refresh)
 
-        self.subjectives_page = SubjectivesPage(self.content, self.schedule_autosave)
+        self.subjectives_page = SubjectivesPage(self.content, self.schedule_autosave, app=self)
         self.family_social_page = TextPage(self.content, "Family/Social History", self.schedule_autosave)
         self.objectives_page = ObjectivesPage(self.content, self.schedule_autosave)
         self.diagnosis_page = DiagnosisPage(self.content, self.schedule_autosave)

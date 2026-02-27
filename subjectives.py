@@ -41,8 +41,9 @@ class SubjectivesPage(ttk.Frame):
     - Buttons auto-update when each block's region changes
     """
 
-    def __init__(self, parent, on_change_callback, max_blocks: int = 10):
+    def __init__(self, parent, on_change_callback, app, max_blocks: int = 10):
         super().__init__(parent)
+        self.app = app
         self.on_change_callback = on_change_callback
         self.max_blocks = max_blocks        
 
@@ -63,6 +64,12 @@ class SubjectivesPage(ttk.Frame):
         self._sync_therapy_visibility()
 
     
+    def _open_therapy_modalities(self):
+        try:
+            self.app.plan_page.open_therapy_modalities_from_therapy_only()
+        except Exception as e:
+            messagebox.showerror("Therapy Modalities", f"Could not open Therapy Modalities.\n\n{e}")
+
     # Subjective Body Regions
     def clear_all_body_regions(self):
         """
@@ -295,6 +302,7 @@ class SubjectivesPage(ttk.Frame):
 
         ttk.Label(hdr, text="Select affected areas (first checked = main concern):").grid(row=0, column=0, sticky="w")
         ttk.Button(hdr, text="Reset Therapy", command=self._therapy_reset).grid(row=0, column=1, sticky="e")
+        ttk.Button(hdr, text="Open Therapy Modalities", command=self._open_therapy_modalities).grid(row=0, column=2, sticky="e")
 
         cols = 5
         start_row = 1
