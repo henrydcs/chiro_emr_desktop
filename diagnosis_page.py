@@ -127,6 +127,29 @@ DX_LIST: list[tuple[str, str]] = [
 
 PROGNOSIS_CHOICES = ["(select)", "Poor", "Guarded", "Fair", "Good", "Excellent"]
 
+def generate_prognosis_paragraph(self):
+    prognosis_level = (self.prognosis_var.get() or "").strip()
+
+    if not prognosis_level:
+        return ""
+
+    # 🔹 Special case: Guarded
+    if prognosis_level.lower() == "guarded":
+        return (
+            "Based on the patient’s reported symptoms, objective findings, "
+            "and functional impairments, the prognosis is currently assessed "
+            f"as {prognosis_level}. Clinical improvement is anticipated with "
+            "consistent participation in care and adherence to prescribed "
+            "therapeutic recommendations."
+        )
+
+    # 🔹 Default paragraph for all other selections
+    return (
+        "Based on the patient’s clinical presentation, examination findings, "
+        f"and overall health status, the prognosis is considered {prognosis_level}. "
+        "Progress will be monitored and reassessed throughout the course of care."
+    )
+
 IMAGING_MODALITIES = ["(select)", "X-ray", "MRI", "CT", "Ultrasound"]
 IMAGING_PARTS = [
     "(select)",

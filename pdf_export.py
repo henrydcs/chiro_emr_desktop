@@ -8,8 +8,10 @@ from xml.sax.saxutils import escape as xml_escape
 from HOIpdf import build_hoi_flowables
 from plan_pdf import build_plan_flowables
 
-from reportlab.platypus import Table, TableStyle, KeepTogether
+from reportlab.platypus import Table, TableStyle, KeepTogether, Paragraph
 from reportlab.lib import colors
+
+from reportlab.lib.styles import getSampleStyleSheet
 from HOIpdf import build_rof_flowables
 
 
@@ -1517,9 +1519,9 @@ def _employment_current_status_paragraph(dx_struct: dict, styles):
 
     if status and status != "(select)":
         if status == "Other (free text)" and other:
-            lines.append(f"Employment Status: {other}")
+            lines.append(f"The patient is: {other}")
         else:
-            lines.append(f"Employment Status: {status}")
+            lines.append(f"The patient is: {status}")
 
     # You can choose whether work_plan belongs here too.
     # I’d keep it here IF it reflects CURRENT status (e.g., Off work / TTD).
@@ -1991,13 +1993,36 @@ def build_combined_pdf(path: str, payloads: list):
             story.append(causation_para)
             story.append(Spacer(1, 0.10 * inch))
         
-
-        dx_struct = soap.get("diagnosis_struct") or {}
-
+        bold_body = ParagraphStyle(
+            'BoldBody',
+            parent=styles['BodyText'],
+            fontName='Helvetica-Bold'
+        )
+        
+        # dx_struct = soap.get("diagnosis_struct") or {}
+        
+        
+                       
         prog = (dx_struct.get("prognosis") or "").strip()
         if prog and prog != "(select)":
-            add_section("Prognosis", prog)
+            if prog.lower() == "guarded":
+                prognosis_text = (
+                    "Based on the patient’s reported symptoms, objective findings, "
+                    "and functional impairments, the prognosis is currently assessed "
+                    f"as {prog}. Clinical improvement is anticipated with consistent "
+                    "participation in care and adherence to prescribed therapeutic "
+                    "recommendations."
+                )
+            else:
+                prognosis_text = (
+                    "Based on the patient’s clinical presentation and examination findings, "
+                    f"the prognosis is currently assessed as {prog}. Progress will be monitored "
+                    "and reassessed throughout the course of care."
+                )
 
+            add_section("Prognosis", prognosis_text)
+                    
+            
         img = _imaging_sentence(dx_struct)
         if img:
             add_section("Imaging", img)
