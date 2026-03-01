@@ -14,6 +14,16 @@
 
 # git log --oneline --decorate -5  
 
+
+# python chiro_app.py or
+
+# cd chiro_emr_desktop
+
+# git status
+# git add -A
+# git commit
+# git push
+
 #And remember to make sure to be in the REPO FOLDER (OFFICE COMPUTER or HOME COMPUTER):
 #...\EMRchiropractic\chiro_emr_desktop OR EMR_Code\chiro_emr_desktop
 #If not in ROOT folder, make sure to "cd chiro_emr_desktop" without the quotes
@@ -1056,6 +1066,9 @@ class App(tk.Tk):
         self.master_save_btn = ttk.Button(toggle_row, text="Master Save", command=self.master_save.run)
         self.master_save_btn.pack(side="left", padx=5)
 
+        self.templates_btn = ttk.Button(toggle_row, text="Templates", command=self._open_templates_popup)
+        self.templates_btn.pack(side="left", padx=5)
+
 
         # The actual clinic header frame (this will be hidden/shown)
         self.clinic_frame = ttk.Frame(self.header_container)
@@ -1857,6 +1870,94 @@ class App(tk.Tk):
 
     # ---------- Save / Load ----------
 
+    def _apply_soap_to_ui(self, soap: dict):
+        """Apply a soap dict to all SOAP pages (HOI, Subjectives, Objectives, Diagnosis, Plan, Family/Social). Does not change patient demographics."""
+        soap = soap or {}
+        self.hoi_page.from_dict(soap.get("hoi_struct") or {})
+        self.subjectives_page.from_dict(soap.get("subjectives") or {})
+        try:
+            self.family_social_page.set_value(soap.get("family_social") or "")
+        except Exception:
+            pass
+        obj_struct = soap.get("objectives_struct")
+        if isinstance(obj_struct, dict):
+            self.objectives_page.from_dict(obj_struct)
+        else:
+            self.objectives_page.from_dict({"global": {}, "blocks": []})
+        dx_struct = soap.get("diagnosis_struct")
+        if isinstance(dx_struct, dict):
+            self.diagnosis_page.from_dict(dx_struct)
+        else:
+            try:
+                self.diagnosis_page.set_value(soap.get("diagnosis", ""))
+            except Exception:
+                pass
+        plan = soap.get("plan") or {}
+        if isinstance(plan, dict):
+            self.plan_page.load_struct(plan)
+        else:
+            self.plan_page.load_struct({"plan_text": str(plan or ""), "auto_enabled": False})
+
+    def apply_template_to_current_exam(self, template_dict: dict):
+        """
+        Merge template (partial soap) into current exam payload and refresh UI.
+        Does not save to file or change exam type. Template can be { "soap": {...} } or direct soap keys.
+        """
+        if not template_dict:
+            return
+        template_soap = template_dict.get("soap")
+        if template_soap is None:
+            template_soap = {k: v for k, v in template_dict.items() if k != "template_name"}
+        current = self.make_payload() or {}
+        current_soap = current.get("soap") or {}
+        merged_soap = dict(current_soap)
+        for k, v in template_soap.items():
+            merged_soap[k] = v
+        self._apply_soap_to_ui(merged_soap)
+
+    def _open_templates_popup(self):
+        """Open a Toplevel listing template buttons; each applies that template to the current exam."""
+        templates_dir = os.path.join(BASE_DIR, "templates")
+        if not os.path.isdir(templates_dir):
+            messagebox.showinfo("Templates", "No templates folder found.\n\nCreate a folder named 'templates' with .json template files.")
+            return
+        popup = tk.Toplevel(self)
+        popup.title("Apply Template")
+        popup.geometry("360x320")
+        popup.transient(self)
+        popup.attributes("-topmost", True)
+        frame = ttk.Frame(popup, padding=12)
+        frame.pack(fill="both", expand=True)
+        ttk.Label(frame, text="Select a template to apply to the current exam:", font=("Segoe UI", 10, "bold")).pack(anchor="w", pady=(0, 8))
+        inner = ttk.Frame(frame)
+        inner.pack(fill="both", expand=True)
+        try:
+            files = sorted(f for f in os.listdir(templates_dir) if f.lower().endswith(".json"))
+        except Exception:
+            files = []
+        if not files:
+            ttk.Label(inner, text="(No .json files in templates folder)").pack(anchor="w")
+        else:
+            for fn in files:
+                path = os.path.join(templates_dir, fn)
+                try:
+                    with open(path, "r", encoding="utf-8") as f:
+                        data = json.load(f)
+                except Exception:
+                    label = fn.replace(".json", "").replace("_", " ").title()
+                    data = {}
+                label = (data.get("template_name") or "").strip() or fn.replace(".json", "").replace("_", " ").title()
+                btn = ttk.Button(inner, text=label, command=lambda d=data.copy(), p=popup: self._apply_template_and_close(d, p))
+                btn.pack(fill="x", pady=3)
+        ttk.Button(frame, text="Close", command=popup.destroy).pack(pady=(12, 0))
+
+    def _apply_template_and_close(self, template_dict: dict, popup: tk.Toplevel):
+        self.apply_template_to_current_exam(template_dict)
+        try:
+            popup.destroy()
+        except Exception:
+            pass
+
     def make_payload(self) -> dict:
         exam_date = normalize_mmddyyyy(self.exam_date_var.get()) or today_mmddyyyy()
         last = self.last_name_var.get()
@@ -2042,41 +2143,7 @@ class App(tk.Tk):
             self.provider_var.set(prov if prov else "")
             
             soap = payload.get("soap", {}) or {}
-
-            self.hoi_page.from_dict(soap.get("hoi_struct") or {})
-            self.subjectives_page.from_dict(soap.get("subjectives") or {})
-
-            # ✅ NEW: Family/Social History
-            try:
-                fs = (soap.get("family_social") or "")
-                self.family_social_page.set_value(fs)
-            except Exception:
-                pass
-
-            obj_struct = soap.get("objectives_struct")
-            if isinstance(obj_struct, dict):
-                self.objectives_page.from_dict(obj_struct)
-            else:
-                self.objectives_page.from_dict({"global": {}, "blocks": []})
-
-            dx_struct = soap.get("diagnosis_struct")
-            if isinstance(dx_struct, dict):
-                self.diagnosis_page.from_dict(dx_struct)
-            else:
-                # backward compat
-                try:
-                    self.diagnosis_page.set_value(soap.get("diagnosis", ""))
-                except Exception:
-                    pass
-
-            # -------- Plan (structured) --------
-            plan = (soap.get("plan", {}) or {})
-            if isinstance(plan, dict):
-                self.plan_page.load_struct(plan)
-            else:
-                # Backward compat: old cases stored plan as a string
-                self.plan_page.load_struct({"plan_text": str(plan or ""), "auto_enabled": False})
-
+            self._apply_soap_to_ui(soap)
 
             self.current_case_path = path
             self.write_settings({"last_case_path": path, "last_exam": self.current_exam.get()})
