@@ -34,7 +34,7 @@ import os
 import sys
 import subprocess
 import tkinter as tk
-from tkinter import ttk, messagebox, filedialog
+from tkinter import ttk, messagebox, filedialog, simpledialog
 from datetime import datetime
 from diagnosis_page import DiagnosisPage
 from doc_vault_page import DocVaultPage
@@ -1916,40 +1916,67 @@ class App(tk.Tk):
         self._apply_soap_to_ui(merged_soap)
 
     def _open_templates_popup(self):
-        """Open a Toplevel listing template buttons; each applies that template to the current exam."""
+        """Open a Toplevel: Save Template button + list of template buttons to apply to current exam."""
         templates_dir = os.path.join(BASE_DIR, "templates")
-        if not os.path.isdir(templates_dir):
-            messagebox.showinfo("Templates", "No templates folder found.\n\nCreate a folder named 'templates' with .json template files.")
-            return
+        os.makedirs(templates_dir, exist_ok=True)
         popup = tk.Toplevel(self)
-        popup.title("Apply Template")
-        popup.geometry("360x320")
+        popup.title("Templates")
+        popup.geometry("360x380")
         popup.transient(self)
         popup.attributes("-topmost", True)
         frame = ttk.Frame(popup, padding=12)
         frame.pack(fill="both", expand=True)
-        ttk.Label(frame, text="Select a template to apply to the current exam:", font=("Segoe UI", 10, "bold")).pack(anchor="w", pady=(0, 8))
+        ttk.Label(frame, text="Templates", font=("Segoe UI", 10, "bold")).pack(anchor="w", pady=(0, 4))
+        btn_row = ttk.Frame(frame)
+        btn_row.pack(fill="x", pady=(0, 8))
         inner = ttk.Frame(frame)
         inner.pack(fill="both", expand=True)
-        try:
-            files = sorted(f for f in os.listdir(templates_dir) if f.lower().endswith(".json"))
-        except Exception:
-            files = []
-        if not files:
-            ttk.Label(inner, text="(No .json files in templates folder)").pack(anchor="w")
-        else:
-            for fn in files:
-                path = os.path.join(templates_dir, fn)
-                try:
-                    with open(path, "r", encoding="utf-8") as f:
-                        data = json.load(f)
-                except Exception:
-                    label = fn.replace(".json", "").replace("_", " ").title()
-                    data = {}
-                label = (data.get("template_name") or "").strip() or fn.replace(".json", "").replace("_", " ").title()
-                btn = ttk.Button(inner, text=label, command=lambda d=data.copy(), p=popup: self._apply_template_and_close(d, p))
-                btn.pack(fill="x", pady=3)
+
+        def refresh_list():
+            for w in inner.winfo_children():
+                w.destroy()
+            try:
+                files = sorted(f for f in os.listdir(templates_dir) if f.lower().endswith(".json"))
+            except Exception:
+                files = []
+            if not files:
+                ttk.Label(inner, text="(No templates yet. Use Save Template to create one.)").pack(anchor="w")
+            else:
+                ttk.Label(inner, text="Apply to current exam:", font=("Segoe UI", 9)).pack(anchor="w", pady=(0, 4))
+                for fn in files:
+                    path = os.path.join(templates_dir, fn)
+                    try:
+                        with open(path, "r", encoding="utf-8") as f:
+                            data = json.load(f)
+                    except Exception:
+                        data = {}
+                    label = (data.get("template_name") or "").strip() or fn.replace(".json", "").replace("_", " ").title()
+                    btn = ttk.Button(inner, text=label, command=lambda d=data.copy(), p=popup: self._apply_template_and_close(d, p))
+                    btn.pack(fill="x", pady=3)
+
+        ttk.Button(btn_row, text="Save Template", command=lambda: self._save_current_as_template(templates_dir, inner, refresh_list)).pack(side="left", padx=(0, 8))
+        refresh_list()
         ttk.Button(frame, text="Close", command=popup.destroy).pack(pady=(12, 0))
+
+    def _save_current_as_template(self, templates_dir: str, inner_frame: ttk.Frame, refresh_list):
+        """Save current exam's SOAP content as a new template; prompt for name, then refresh the template list."""
+        name = simpledialog.askstring("Save Template", "Template name (e.g. Re-Exam F/S Mild):", parent=self)
+        if not (name or "").strip():
+            return
+        name = name.strip()
+        slug = safe_slug(name) or "template"
+        filename = f"{slug}.json"
+        path = os.path.join(templates_dir, filename)
+        try:
+            payload = self.make_payload() or {}
+            soap = payload.get("soap") or {}
+            out = {"template_name": name, "soap": soap}
+            with open(path, "w", encoding="utf-8") as f:
+                json.dump(out, f, indent=2)
+            refresh_list()
+            messagebox.showinfo("Templates", f"Saved as:\n{filename}")
+        except Exception as e:
+            messagebox.showerror("Save Template", f"Could not save template:\n{e}")
 
     def _apply_template_and_close(self, template_dict: dict, popup: tk.Toplevel):
         self.apply_template_to_current_exam(template_dict)
