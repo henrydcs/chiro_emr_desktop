@@ -34,9 +34,9 @@ from plan_page import PlanPage
 from pathlib import Path
 import tkinter.font as tkfont
 from alerts_popup import AlertsPopup
-import uuid
 from config import PATIENTS_ID_ROOT
 from doc_vault_page import upsert_vault_file
+from patient_storage import new_patient_id, get_patient_root, find_patient_root
 from tk_docs_page import TkDocsPage
 from pdf_export import REPORTLAB_OK, build_combined_pdf
 from master_save import MasterSaveController
@@ -57,8 +57,7 @@ from utils import (
     safe_slug,
     normalize_mmddyyyy, today_mmddyyyy,
     ensure_patient_dirs,
-    to_last_first, ensure_named_patient_folder
-
+    to_last_first,
 )
 
 # Pages
@@ -99,56 +98,27 @@ def _find_sets(obj, path="root"):
     return False
 
 
-
-
-# import tkinter as tk
-# from tkinter import ttk
-# from datetime import datetime
-
-
-# import tkinter as tk
-# from tkinter import ttk
-# from datetime import datetime
-
-PATIENTS_DIR = Path(PATIENTS_ID_ROOT)   # ✅ uses the same root you already configured
-
-def new_patient_id() -> str:
-    return datetime.now().strftime("%Y%m%d%H%M%S") + "-" + uuid.uuid4().hex[:8]
-
-
-def patient_folder(patient_id: str) -> Path:
-    return PATIENTS_DIR / patient_id
-
-def patient_json_path(patient_id: str) -> Path:
-    return patient_folder(patient_id) / "patient.json"
+# Patient ID and folder paths: patient_storage.new_patient_id, get_patient_root, find_patient_root
 
 def save_patient(content: dict):
-    pid = (content.get("patient") or {}).get("patient_id")
+    """Reserved for future use; app currently uses exam JSON as source of truth."""
+    p = content.get("patient") or {}
+    pid = (p.get("patient_id") or "").strip()
     if not pid:
         raise ValueError("Missing patient_id; cannot save.")
-    folder = patient_folder(pid)
+    folder = get_patient_root(pid, p.get("last_name", ""), p.get("first_name", ""))
     folder.mkdir(parents=True, exist_ok=True)
+    (folder / "patient.json").write_text(json.dumps(content, indent=2), encoding="utf-8")
 
-    path = patient_json_path(pid)
-    path.write_text(json.dumps(content, indent=2), encoding="utf-8")
 
 def load_patient(patient_id: str) -> dict:
-    path = patient_json_path(patient_id)
-    return json.loads(path.read_text(encoding="utf-8"))
+    """Reserved for future use; folder resolved by id (pid or last_first__pid)."""
+    folder = find_patient_root(patient_id)
+    if not folder:
+        raise FileNotFoundError(f"No patient folder found for id: {patient_id}")
+    return json.loads((folder / "patient.json").read_text(encoding="utf-8"))
 
-# def update_index_for_patient(content: dict):
-#     p = content.get("patient") or {}
-#     pid = p.get("patient_id")
-#     if not pid:
-#         return
-#     index = load_index()
-#     index[pid] = {
-#         "first": (p.get("first") or "").strip(),
-#         "last": (p.get("last") or "").strip(),
-#         "dob": (p.get("dob") or "").strip(),
-#         "phone": (p.get("phone") or "").strip(),
-#     }
-#     save_index(index)
+
 
 ALERTS_FILENAME = "alerts_dashboard.json"
 
@@ -161,177 +131,6 @@ def _ensure_json_file(path: str, default_obj=None):
                 json.dump(default_obj, f, indent=2)
     except Exception:
         pass
-
-
-
-
-
-class VisitsDropdown:
-    """
-    Persistent dropdown (toggle open/close) that behaves like a timeline list.
-
-    - +Visits toggles the popup
-    - popup stays open after adding
-    - adding items inserts by datetime (most recent at top)
-    - each item is clickable (placeholder callback)
-    """
-
-    def __init__(self, parent, anchor_widget, on_select=None, get_dt_func=None):
-        self.parent = parent
-        self.anchor_widget = anchor_widget
-
-        # When user clicks a timeline item (later: load that visit/exam)
-        self.on_select = on_select or self._default_on_select
-
-        # For now: datetime.now(). Later: pull date from demographics + manual time.
-        self.get_dt_func = get_dt_func or (lambda: datetime.now())
-
-        # Internal list of items: [{"dt": datetime, "kind": str, "label": str}, ...]
-        self.items = []
-
-        self.popup = None
-        self.container = None
-        self.items_frame = None
-
-    # ---------- UI behavior ----------
-    def is_open(self) -> bool:
-        return self.popup is not None and self.popup.winfo_exists()
-
-    def toggle(self):
-        if self.is_open():
-            self.close()
-        else:
-            self.open()
-
-    def open(self):
-        if self.is_open():
-            return
-
-        self.popup = tk.Toplevel(self.parent)
-        self.popup.overrideredirect(True)
-        self.popup.attributes("-topmost", True)
-
-        # Position under the anchor button
-        self.anchor_widget.update_idletasks()
-        x = self.anchor_widget.winfo_rootx()
-        y = self.anchor_widget.winfo_rooty() + self.anchor_widget.winfo_height()
-        w = max(self.anchor_widget.winfo_width(), 260)
-        self.popup.geometry(f"{w}x10+{x}+{y}")
-
-        self.container = ttk.Frame(self.popup, padding=6, relief="solid", borderwidth=1)
-        self.container.pack(fill="both", expand=True)
-
-        # ----- Add buttons (top of dropdown) -----
-        #ttk.Button(self.container, text="Add Chiro Visit", command=lambda: self.add_item("Chiro Visit")).pack(fill="x", pady=(0, 4))
-        #ttk.Button(self.container, text="Add Therapy Visit", command=lambda: self.add_item("Therapy Visit")).pack(fill="x", pady=(0, 6))
-
-        ttk.Separator(self.container).pack(fill="x", pady=(0, 6))
-
-        # ttk.Button(self.container, text="Add Initial", command=lambda: self.add_item("Initial")).pack(fill="x", pady=(0, 4))
-        # ttk.Button(self.container, text="Add Re-Exam", command=lambda: self.add_item("Re-Exam")).pack(fill="x", pady=(0, 4))
-        # ttk.Button(self.container, text="Add ROF", command=lambda: self.add_item("ROF")).pack(fill="x", pady=(0, 4))
-        # ttk.Button(self.container, text="Add Final", command=lambda: self.add_item("Final")).pack(fill="x", pady=(0, 6))
-
-        ttk.Separator(self.container).pack(fill="x", pady=(0, 6))
-
-        # ----- Timeline list area -----
-        self.items_frame = ttk.Frame(self.container)
-        self.items_frame.pack(fill="both", expand=True)
-
-        self._render_items()
-        self._resize_to_fit()
-
-        # If you want it to close when it loses focus, uncomment:
-        # self.popup.bind("<FocusOut>", lambda e: self.close())
-        self.popup.focus_force()
-
-    def close(self):
-        if self.popup and self.popup.winfo_exists():
-            self.popup.destroy()
-        self.popup = None
-        self.container = None
-        self.items_frame = None
-
-    def _resize_to_fit(self):
-        if not self.is_open():
-            return
-        self.popup.update_idletasks()
-        req_w = self.container.winfo_reqwidth()
-        req_h = self.container.winfo_reqheight()
-
-        anchor_w = self.anchor_widget.winfo_width()
-        w = max(req_w, anchor_w, 260)
-        h = min(max(req_h, 180), 520)
-
-        x = self.anchor_widget.winfo_rootx()
-        y = self.anchor_widget.winfo_rooty() + self.anchor_widget.winfo_height()
-        self.popup.geometry(f"{w}x{h}+{x}+{y}")
-
-    # ---------- Timeline logic (UI-only for now) ----------
-    def add_item(self, kind: str):
-        dt = self.get_dt_func()
-        label = self._format_label(dt, kind)
-        self.items.append({"dt": dt, "kind": kind, "label": label})
-
-        # Sort newest first by dt (date + time)
-        self.items.sort(key=lambda x: x["dt"], reverse=True)
-
-        # Re-render list
-        self._render_items()
-        self._resize_to_fit()
-
-    def _clear_items_frame(self):
-        if not self.items_frame:
-            return
-        for child in self.items_frame.winfo_children():
-            child.destroy()
-
-    def _render_items(self):
-        if not self.items_frame:
-            return
-
-        self._clear_items_frame()
-
-        if not self.items:
-            ttk.Label(self.items_frame, text="(No visits/exams yet)").pack(anchor="w")
-            return
-
-        # Create one button per timeline entry
-        for entry in self.items:
-            lbl = entry["label"]
-
-            def _make_cmd(e=entry):
-                return lambda: self.on_select(e)
-
-            b = ttk.Button(self.items_frame, text=lbl, command=_make_cmd(entry))
-            b.pack(fill="x", pady=2)
-
-    def _default_on_select(self, entry: dict):
-        # Placeholder. Later: load that visit/exam JSON into the Tkinter pages.
-        print(f"[VISITS] selected: {entry['label']} ({entry['dt'].isoformat()})")
-
-    # ---------- Formatting ----------
-    def _format_label(self, dt: datetime, kind: str) -> str:
-        # Example desired:
-        # 02/02/2025 Chiro Visit 3:15pm
-        date_str = dt.strftime("%m/%d/%Y")
-        hour = dt.strftime("%I").lstrip("0") or "0"
-        minute = dt.strftime("%M")
-        ampm = dt.strftime("%p").lower()  # am/pm
-        time_str = f"{hour}:{minute}{ampm}"
-        return f"{date_str} {kind} {time_str}"
-
-
-
-
-
-
-
-
-
-
-
-
 
 def open_with_default_app(path: str):
     try:
@@ -572,17 +371,10 @@ class App(tk.Tk):
         """
         Always patient-specific. If no patient yet, create a new patient_id and folder.
         """
-        if not getattr(self, "current_patient_id", None):
-            self.current_patient_id = new_patient_id()
-
-        # This will create/rename the folder as names change (still same patient_id)
+        self._ensure_current_patient_id()
         patient_root = self.get_current_patient_root()
         if not patient_root:
-            # as a last resort, force a folder at least by id
-            # (only if your get_current_patient_root can ever return None with a pid)
-            folder = ensure_named_patient_folder(PATIENTS_ID_ROOT, self.current_patient_id, "", "")
-            patient_root = str(folder)
-
+            patient_root = str(get_patient_root(self.current_patient_id, "", ""))
         return os.path.join(patient_root, ALERTS_FILENAME)
 
 
@@ -597,9 +389,7 @@ class App(tk.Tk):
     
     def _ensure_patient_id_in_payload(self, payload: dict) -> str:
         payload.setdefault("patient", {})
-        if not getattr(self, "current_patient_id", None):
-            self.current_patient_id = new_patient_id()
-        payload["patient"]["patient_id"] = self.current_patient_id
+        payload["patient"]["patient_id"] = self._ensure_current_patient_id()
         return self.current_patient_id
 
 
@@ -771,8 +561,7 @@ class App(tk.Tk):
 
 
     def _ensure_patient_for_dynamic_exam(self) -> bool:
-        if not getattr(self, "current_patient_id", None):
-            self.current_patient_id = new_patient_id()
+        self._ensure_current_patient_id()
         return True
 
 
@@ -1316,44 +1105,8 @@ class App(tk.Tk):
             text="Hide Demographics",
             command=self._toggle_demographics
         )
-        self.demo_toggle_btn.pack(side="left")
-
-
-
-
-
-        # parent_frame = whatever frame contains your +Final button
-        # Example: parent_frame could be self.exam_btn_row or topbar_right, etc.
-
-
-
-
-
-
-
-        # self.btn_visits = ttk.Button(demo_top, text="+Visits")
-        # self.btn_visits.pack(side="left", padx=(0, 6))  # tight spacing
-
-        # self.visits_dropdown = VisitsDropdown(
-        #     parent=self,
-        #     anchor_widget=self.btn_visits,
-        #     on_select=None,      # later we’ll point this to "load_visit(entry)"
-        #     get_dt_func=None     # later we’ll pull date from demographics + manual time
-        # )
-
-        # self.btn_visits.configure(command=self.visits_dropdown.toggle)
-
-
-
-
-
-
-
-        # then your existing +Final button right after...
-        # self.btn_final = ttk.Button(parent_frame, text="+Final", command=...)
-        # self.btn_final.pack(side="left", padx=...)
+        self.demo_toggle_btn.pack(side="left")          
         
-
         # One-line summary row (shown only when collapsed)
         self.demo_summary_row = ttk.Frame(demo_wrap)
         # (do NOT pack here; visibility controlled by _apply_demographics_visibility)
@@ -1959,18 +1712,22 @@ class App(tk.Tk):
     # ---------- Patient folders / paths ----------
 
     
-    #PATIENTS_DIR = Path("patients")
+    def _ensure_current_patient_id(self) -> str:
+        """Ensure we have a patient ID; create one if missing. Returns current_patient_id."""
+        pid = getattr(self, "current_patient_id", None)
+        if not pid:
+            self.current_patient_id = new_patient_id()
+            return self.current_patient_id
+        return pid
 
     def get_current_patient_root(self):
         pid = getattr(self, "current_patient_id", None)
         if not pid:
             return None
-
-        folder = ensure_named_patient_folder(
-            PATIENTS_ID_ROOT,
+        folder = get_patient_root(
             pid,
-            self.last_name_var.get(),
-            self.first_name_var.get(),            
+            self.last_name_var.get() or "",
+            self.first_name_var.get() or "",
         )
         return str(folder)
 
@@ -2171,9 +1928,7 @@ class App(tk.Tk):
     
         # ✅ Ensure stable patient_id
         payload.setdefault("patient", {})
-        if not getattr(self, "current_patient_id", None):
-            self.current_patient_id = new_patient_id()
-        payload["patient"]["patient_id"] = self.current_patient_id
+        payload["patient"]["patient_id"] = self._ensure_current_patient_id()
 
         return payload
       
@@ -2210,9 +1965,7 @@ class App(tk.Tk):
         """
 
         # Ensure patient id exists so we can compute a path (no Save As dialog)
-        if not getattr(self, "current_patient_id", None):
-            self.current_patient_id = new_patient_id()
-
+        self._ensure_current_patient_id()
         computed = self.compute_exam_path()
         if not computed:
             messagebox.showerror("Save Failed", "Could not compute save path.")
@@ -2697,7 +2450,7 @@ class App(tk.Tk):
         self.last_all_exams_pdf_path = ""
         self.status_var.set("New case started. Previous cases/files are unchanged.")
         self.current_patient_id = None
-        self.current_patient_id = new_patient_id()
+        self._ensure_current_patient_id()
         self.after_idle(self.show_current_patient_alerts_popup)
 
 
