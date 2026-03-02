@@ -3,6 +3,9 @@
 # Prevent AI indexing of patient data, exports, and generated documents
 # =============================================================================
 
+# App PHI root
+EMR_Data/
+**/EMR_Data/
 
 # ---------------------------------------------------------------------
 # Patient data folders
