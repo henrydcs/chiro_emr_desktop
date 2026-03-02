@@ -61,6 +61,7 @@ from config import (
     YEAR_CASES_ROOT, NEXT_YEAR_CASES_ROOT, BASE_DIR,
     PATIENT_SUBDIR_EXAMS, PATIENT_SUBDIR_PDFS,
 )
+from paths import get_data_dir
 
 from utils import (
     ensure_year_root,
@@ -87,6 +88,34 @@ EXAM_INDEX_FILENAME = "_exam_index.json"
 
 # Keep config.EXAMS as your base list
 BASE_EXAMS = list(EXAMS)
+
+
+# Template category configuration: filesystem-safe slugs + human-readable labels
+TEMPLATE_CATEGORIES = [
+    ("initials", "Initials"),
+    ("re_exams", "Re-Exams"),
+    ("review_of_findings", "Review of Findings"),
+    ("chiro_visits", "Chiro Visits"),
+    ("therapy_only", "Therapy Only"),
+    ("finals", "Finals"),
+]
+
+
+def get_templates_root() -> Path:
+    """
+    Return the external templates root directory under the EMR data directory,
+    ensuring it and all category subfolders exist.
+
+    Example: C:\\EMR_Data\\HOME\\templates\\initials, etc.
+    """
+    data_dir = get_data_dir()
+    root = data_dir / "templates"
+    root.mkdir(parents=True, exist_ok=True)
+
+    for slug, _display in TEMPLATE_CATEGORIES:
+        (root / slug).mkdir(parents=True, exist_ok=True)
+
+    return root
 
 
 
@@ -1916,67 +1945,207 @@ class App(tk.Tk):
         self._apply_soap_to_ui(merged_soap)
 
     def _open_templates_popup(self):
-        """Open a Toplevel: Save Template button + list of template buttons to apply to current exam."""
-        templates_dir = os.path.join(BASE_DIR, "templates")
-        os.makedirs(templates_dir, exist_ok=True)
+        """Open a Toplevel: Save Template button + 6-column categorized template list."""
+        templates_root = get_templates_root()
+
         popup = tk.Toplevel(self)
         popup.title("Templates")
-        popup.geometry("360x380")
+        popup.geometry("900x420")
         popup.transient(self)
         popup.attributes("-topmost", True)
+
         frame = ttk.Frame(popup, padding=12)
         frame.pack(fill="both", expand=True)
+
         ttk.Label(frame, text="Templates", font=("Segoe UI", 10, "bold")).pack(anchor="w", pady=(0, 4))
+
         btn_row = ttk.Frame(frame)
         btn_row.pack(fill="x", pady=(0, 8))
+
         inner = ttk.Frame(frame)
         inner.pack(fill="both", expand=True)
 
-        def refresh_list():
-            for w in inner.winfo_children():
+        column_frames: dict[str, ttk.Frame] = {}
+
+        for col_index, (slug, display) in enumerate(TEMPLATE_CATEGORIES):
+            ttk.Label(inner, text=display, font=("Segoe UI", 9, "bold")).grid(
+                row=0, column=col_index, sticky="n", padx=4, pady=(0, 4)
+            )
+            col_frame = ttk.Frame(inner)
+            col_frame.grid(row=1, column=col_index, sticky="nsew", padx=4)
+            column_frames[slug] = col_frame
+            inner.columnconfigure(col_index, weight=1)
+
+        inner.rowconfigure(1, weight=1)
+
+        def _load_category(slug: str):
+            col_frame = column_frames[slug]
+            for w in col_frame.winfo_children():
                 w.destroy()
+
+            dir_path = templates_root / slug
             try:
-                files = sorted(f for f in os.listdir(templates_dir) if f.lower().endswith(".json"))
+                files = sorted(
+                    f for f in os.listdir(dir_path)
+                    if f.lower().endswith(".json")
+                )
             except Exception:
                 files = []
-            if not files:
-                ttk.Label(inner, text="(No templates yet. Use Save Template to create one.)").pack(anchor="w")
-            else:
-                ttk.Label(inner, text="Apply to current exam:", font=("Segoe UI", 9)).pack(anchor="w", pady=(0, 4))
-                for fn in files:
-                    path = os.path.join(templates_dir, fn)
-                    try:
-                        with open(path, "r", encoding="utf-8") as f:
-                            data = json.load(f)
-                    except Exception:
-                        data = {}
-                    label = (data.get("template_name") or "").strip() or fn.replace(".json", "").replace("_", " ").title()
-                    btn = ttk.Button(inner, text=label, command=lambda d=data.copy(), p=popup: self._apply_template_and_close(d, p))
-                    btn.pack(fill="x", pady=3)
 
-        ttk.Button(btn_row, text="Save Template", command=lambda: self._save_current_as_template(templates_dir, inner, refresh_list)).pack(side="left", padx=(0, 8))
-        refresh_list()
+            if not files:
+                ttk.Label(col_frame, text="(None)").pack(anchor="w", pady=(0, 2))
+                return
+
+            for fn in files:
+                path = dir_path / fn
+                try:
+                    with open(path, "r", encoding="utf-8") as f:
+                        data = json.load(f)
+                except Exception:
+                    data = {}
+
+                label = (data.get("template_name") or "").strip() or (
+                    fn.replace(".json", "").replace("_", " ").title()
+                )
+
+                row = ttk.Frame(col_frame)
+                row.pack(fill="x", pady=2)
+
+                apply_btn = ttk.Button(
+                    row,
+                    text=label,
+                    command=lambda d=data.copy(), p=popup: self._apply_template_and_close(d, p),
+                )
+                apply_btn.pack(side="left", fill="x", expand=True)
+
+                def _make_delete_cmd(template_path: Path = path, category_slug: str = slug):
+                    def _delete():
+                        if not messagebox.askyesno(
+                            "Delete Template",
+                            f"Are you sure you want to delete this template?\n\n{template_path.name}",
+                            parent=popup,
+                        ):
+                            return
+                        try:
+                            os.remove(template_path)
+                        except Exception as e:
+                            messagebox.showerror(
+                                "Delete Template",
+                                f"Could not delete template:\n{e}",
+                                parent=popup,
+                            )
+                            return
+                        _load_category(category_slug)
+
+                    return _delete
+
+                del_btn = ttk.Button(row, text="X", width=3, command=_make_delete_cmd())
+                del_btn.pack(side="right", padx=(4, 0))
+
+        def refresh_all_categories():
+            for slug, _display in TEMPLATE_CATEGORIES:
+                _load_category(slug)
+
+        ttk.Button(
+            btn_row,
+            text="Save Template",
+            command=lambda: self._save_current_as_template(templates_root, refresh_all_categories),
+        ).pack(side="left", padx=(0, 8))
+
+        refresh_all_categories()
+
         ttk.Button(frame, text="Close", command=popup.destroy).pack(pady=(12, 0))
 
-    def _save_current_as_template(self, templates_dir: str, inner_frame: ttk.Frame, refresh_list):
-        """Save current exam's SOAP content as a new template; prompt for name, then refresh the template list."""
-        name = simpledialog.askstring("Save Template", "Template name (e.g. Re-Exam F/S Mild):", parent=self)
+    def _ask_template_category(self, parent) -> str | None:
+        """
+        Show a small dialog with a Combobox to select one of the six template categories.
+        Returns the folder slug (e.g. 're_exams') or None if cancelled.
+        """
+        dialog = tk.Toplevel(parent)
+        dialog.title("Select Template Category")
+        dialog.transient(parent)
+        dialog.attributes("-topmost", True)
+        dialog.geometry("320x120")
+
+        frame = ttk.Frame(dialog, padding=12)
+        frame.pack(fill="both", expand=True)
+
+        ttk.Label(frame, text="Category:").pack(anchor="w")
+        display_names = [display for _slug, display in TEMPLATE_CATEGORIES]
+        var = tk.StringVar(value=display_names[0])
+        combo = ttk.Combobox(frame, textvariable=var, values=display_names, state="readonly", width=28)
+        combo.pack(fill="x", pady=(0, 8))
+        combo.current(0)
+
+        result: list[str | None] = [None]
+
+        def on_ok():
+            try:
+                idx = display_names.index(var.get())
+            except ValueError:
+                idx = 0
+            result[0] = TEMPLATE_CATEGORIES[idx][0]
+            dialog.grab_release()
+            dialog.destroy()
+
+        def on_cancel():
+            result[0] = None
+            dialog.grab_release()
+            dialog.destroy()
+
+        btn_row = ttk.Frame(frame)
+        btn_row.pack(fill="x")
+        ttk.Button(btn_row, text="Save", command=on_ok).pack(side="left", padx=(0, 8))
+        ttk.Button(btn_row, text="Cancel", command=on_cancel).pack(side="left")
+
+        dialog.grab_set()
+        dialog.focus_set()
+        combo.focus_set()
+        dialog.wait_window()
+        return result[0]
+
+    def _save_current_as_template(self, templates_root: Path, refresh_all_categories):
+        """
+        Save current exam's SOAP content as a new template in the external templates directory.
+        Prompts for template name, then shows category dropdown; writes to the selected category folder.
+        """
+        name = simpledialog.askstring(
+            "Save Template",
+            "Template name (e.g. Re-Exam F/S Mild):",
+            parent=self,
+        )
         if not (name or "").strip():
             return
         name = name.strip()
-        slug = safe_slug(name) or "template"
-        filename = f"{slug}.json"
-        path = os.path.join(templates_dir, filename)
+
+        slug = self._ask_template_category(self)
+        if slug is None:
+            return
+
+        category_dir = templates_root / slug
+
+        filename_slug = safe_slug(name) or "template"
+        filename = f"{filename_slug}.json"
+        path = category_dir / filename
+
+        if path.exists():
+            if not messagebox.askyesno(
+                "Overwrite Template",
+                f"A template file already exists:\n\n{path}\n\nOverwrite it?",
+                parent=self,
+            ):
+                return
+
         try:
             payload = self.make_payload() or {}
             soap = payload.get("soap") or {}
             out = {"template_name": name, "soap": soap}
             with open(path, "w", encoding="utf-8") as f:
                 json.dump(out, f, indent=2)
-            refresh_list()
-            messagebox.showinfo("Templates", f"Saved as:\n{filename}")
+            refresh_all_categories()
+            messagebox.showinfo("Templates", f"Saved as:\n{path}", parent=self)
         except Exception as e:
-            messagebox.showerror("Save Template", f"Could not save template:\n{e}")
+            messagebox.showerror("Save Template", f"Could not save template:\n{e}", parent=self)
 
     def _apply_template_and_close(self, template_dict: dict, popup: tk.Toplevel):
         self.apply_template_to_current_exam(template_dict)
