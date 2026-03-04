@@ -1519,9 +1519,9 @@ def _employment_current_status_paragraph(dx_struct: dict, styles):
 
     if status and status != "(select)":
         if status == "Other (free text)" and other:
-            lines.append(f"The patient is: {other}")
+            lines.append(f"The patient is {other}")
         else:
-            lines.append(f"The patient is: {status}")
+            lines.append(f"The patient is {status}")
 
     # You can choose whether work_plan belongs here too.
     # I’d keep it here IF it reflects CURRENT status (e.g., Off work / TTD).

@@ -567,11 +567,11 @@ class DiagnosisPage(ttk.Frame):
                 "Employed Part-Time",
                 "Self-Employed",
                 "Unemployed",
-                "Student",
+                "a Student",
                 "Retired",
-                "Homemaker",
+                "a Homemaker",
                 "Disabled / Unable to Work",
-                "Leave of Absence",
+                "on a Leave of Absence",
                 "Other (free text)",
             ]
 
