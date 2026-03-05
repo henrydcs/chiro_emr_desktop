@@ -179,7 +179,7 @@ class DescriptorBlock:
             ttk.Combobox(
                 self.descriptor_frame,
                 textvariable=self.desc1_var,
-                values=PAIN_DESCRIPTORS,
+                values=["(none)"] +PAIN_DESCRIPTORS,
                 state="readonly",
                 width=26
             ).grid(row=1, column=1, columnspan=2, sticky="w", padx=(10, 0), pady=pady)

@@ -1452,6 +1452,11 @@ def payload_to_exam_sections(payload: dict):
             title = REGION_LABELS[region]
             text = (b.get("narrative") or "").strip()
             if text:
+                if not tokens_from_subjective_block(b):
+                    continue
+                tokens = tokens_from_subjective_block(b)
+                if not tokens:
+                    continue
                 narratives.append({
                     "title": title,
                     "text": text,
@@ -1595,6 +1600,8 @@ def _causation_paragraph(dx_struct: dict, styles):
     choice = (dx_struct.get("causation_choice") or "").strip()
     custom = (dx_struct.get("causation_custom") or "").strip()
     notes = (dx_struct.get("causation_notes") or "").strip()
+
+    
 
     CAUSATION_TEXT = {
         "Causally related (WDM certainty)":
