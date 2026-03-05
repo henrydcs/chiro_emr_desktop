@@ -12,6 +12,7 @@ from utils import build_sentence
 
 
 PAIN_SCALE_OPTIONS = [
+    "Select",
     "None",
     "Minimum",
     "Minimum to Mild",
@@ -428,7 +429,8 @@ class DescriptorBlock:
         parts = [base_sentence]
         if tenderness_sentence:
             parts.append(tenderness_sentence)
-        parts.append(pain_line)
+        if scale.lower() != "select":
+            parts.append(pain_line)
         return "\n\n".join(p for p in parts if p.strip())
        
     
