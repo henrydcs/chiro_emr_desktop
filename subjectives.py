@@ -387,6 +387,7 @@ class SubjectivesPage(ttk.Frame):
         self.content.columnconfigure(0, weight=1)
 
         # Therapy Only Home area: minimal content + back button
+                # Therapy Only Home area: Back button + Therapy Only block (same logic as radio view)
         therapy_home_top = ttk.Frame(self._therapy_only_home_frame)
         therapy_home_top.pack(fill="x", padx=10, pady=(10, 6))
         ttk.Button(
@@ -394,6 +395,40 @@ class SubjectivesPage(ttk.Frame):
             text="Back to Subjectives",
             command=self._go_back_to_subjectives,
         ).pack(side="left")
+
+        # --- Therapy Only block (mirrors _therapy_frame, uses same therapy_vars) ---
+        self._therapy_only_home_frame_inner = ttk.LabelFrame(
+            self._therapy_only_home_frame, text="Therapy Only"
+        )
+        self._therapy_only_home_frame_inner.pack(fill="x", padx=10, pady=(0, 10))
+
+        hdr_home = ttk.Frame(self._therapy_only_home_frame_inner)
+        hdr_home.grid(row=0, column=0, columnspan=3, sticky="ew", padx=6, pady=(6, 4))
+        hdr_home.grid_columnconfigure(0, weight=1)
+
+        ttk.Label(hdr_home, text="Select affected areas (first checked = main concern):").grid(
+            row=0, column=0, sticky="w"
+        )
+        ttk.Button(hdr_home, text="Reset Therapy", command=self._therapy_reset).grid(
+            row=0, column=1, sticky="e"
+        )
+        ttk.Button(hdr_home, text="Open Therapy Modalities", command=self._open_therapy_modalities).grid(
+            row=0, column=2, sticky="e"
+        )
+
+        cols_home = 5
+        start_row_home = 1
+        for i, name in enumerate(THERAPY_BODY_PARTS):
+            r = start_row_home + (i // cols_home)
+            c = i % cols_home
+            ttk.Checkbutton(
+                self._therapy_only_home_frame_inner,
+                text=name,
+                variable=self.therapy_vars[name],
+            ).grid(row=r, column=c, sticky="w", padx=8, pady=2)
+
+        for c in range(cols_home):
+            self._therapy_only_home_frame_inner.grid_columnconfigure(c, weight=1)
 
     # ---------- Block label helpers ----------
     def _region_short(self, region_code: str) -> str:
