@@ -267,7 +267,9 @@ class SubjectivesPage(ttk.Frame):
     def get_live_preview_runs(self) -> list[tuple[str, str | None]]:
         """
         Returns runs for Live Preview: therapy paragraph + auto-generated content
-        from each block. Format: [(chunk, tag), ...] with tag "H_BOLD" for headings.
+        from each block + narrative text box. Format: [(chunk, tag), ...] with
+        tag "H_BOLD" for headings. Mirrors PDF structure: one line of space
+        between last subjectives and narrative text.
         """
         runs = []
         therapy = self.build_therapy_paragraph().strip()
@@ -284,6 +286,13 @@ class SubjectivesPage(ttk.Frame):
                     runs.append((label + "\n", "H_BOLD"))
                     runs.append(("\n", None))
                 runs.append((auto + "\n\n", None))
+        # Narrative text box: last in subjectives, one line of space before (mirrors PDF user_narratives)
+        user_narratives = [(b.get_narrative() or "").strip() for b in self.blocks]
+        user_narratives = [t for t in user_narratives if t]
+        if user_narratives:
+            combined = "\n\n".join(user_narratives)
+            runs.append(("\n", None))
+            runs.append((combined + "\n\n", None))
         return runs
 
     
