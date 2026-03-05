@@ -396,24 +396,16 @@ class DescriptorBlock:
 
     def get_narrative(self) -> str:
         return self.narrative_text.get("1.0", tk.END).strip()
-       
-    
-    def update_narrative(self, overwrite_if_auto: bool):
-        # Never regenerate while loading a saved file
-        if getattr(self, "_loading_from_file", False):
-            return
 
+    def get_auto_generated_text(self) -> str:
+        """
+        Build the same auto paragraph (region + descriptors + tenderness + pain scale)
+        without writing to narrative_text. Used for Live Preview and PDF region blocks.
+        """
         code = self.region_var.get()
         label = REGION_LABELS.get(code, "")
-        self.region_label_var.set(label)
-
-        # If no region, clear only if allowed
         if code == "(none)" or not label:
-            if overwrite_if_auto:
-                self.narrative_text.delete("1.0", tk.END)
-            return
-
-        # 1) Base sentence (region + descriptors + radic)
+            return ""
         base_sentence = build_sentence(
             label,
             self.desc1_var.get(),
@@ -421,71 +413,37 @@ class DescriptorBlock:
             self.radic_symptom_var.get(),
             self.radic_location_var.get()
         )
-
-        # 2) Deterministic muscle tenderness sentence (NO RANDOM)
         selected = [m for m, v in self.muscle_vars.items() if v.get()]
-
         tenderness_sentence = ""
-        if selected:
-            if len(selected) == 1:
-                tenderness_sentence = f"The patient indicates or points to the {selected[0]} as the area of tenderness."
-            elif len(selected) == 2:
-                tenderness_sentence = f"The patient indicates or points to the {selected[0]} and the {selected[1]} as the areas of tenderness."
-            else:
-                # Oxford comma style: a, b, and c
-                mid = ", ".join(selected[:-1])
-                last = selected[-1]
-                tenderness_sentence = f"The patient indicates or points to the {mid}, and the {last} as the areas of tenderness."
-
-        # 3) Pain scale sentence
+        if len(selected) == 1:
+            tenderness_sentence = f"The patient indicates or points to the {selected[0]} as the area of tenderness."
+        elif len(selected) == 2:
+            tenderness_sentence = f"The patient indicates or points to the {selected[0]} and the {selected[1]} as the areas of tenderness."
+        elif len(selected) > 2:
+            mid = ", ".join(selected[:-1])
+            last = selected[-1]
+            tenderness_sentence = f"The patient indicates or points to the {mid}, and the {last} as the areas of tenderness."
         scale = (self.pain_scale_var.get() or "None").strip()
         pain_line = f"The patient states the overall discomfort in this area is {scale.lower()}."
-
-        # Final narrative (paragraph style)
         parts = [base_sentence]
         if tenderness_sentence:
             parts.append(tenderness_sentence)
         parts.append(pain_line)
-        auto_sentence = "\n\n".join(p for p in parts if p.strip())
-
-        # 4) Overwrite decision logic (only overwrite if blank or looks auto-generated)
-        current = self.get_narrative()
-
-        lead_re = re.compile(r"\bThe patient reports symptoms in the\b", re.IGNORECASE)
-        tenderness_re = re.compile(r"\bTenderness is localized to the\b", re.IGNORECASE)
-        pain_line_re = re.compile(r"\boverall discomfort in this area\b", re.IGNORECASE)
-
-        if (
-            not current
-            or lead_re.search(current)
-            or tenderness_re.search(current)
-            or pain_line_re.search(current)
-        ):
-            self.narrative_text.delete("1.0", tk.END)
-            self.narrative_text.insert(tk.END, auto_sentence)
-
-            # ---- APPLY BOLDING (AFTER INSERT) ----
-            bold_terms = []
-
-            # pain descriptors
-            for d in (self.desc1_var.get(), self.desc2_var.get()):
-                if d and d not in ("(none)",):
-                    bold_terms.append(d)
-
-            # radiculopathy
-            if self.radic_symptom_var.get() != "None":
-                bold_terms.append(self.radic_symptom_var.get())
-            if self.radic_location_var.get() != "(select)":
-                bold_terms.append(self.radic_location_var.get())
-
-            # muscles
-            bold_terms.extend([m for m, v in self.muscle_vars.items() if v.get()])
-
-            # pain scale
-            if self.pain_scale_var.get() != "None":
-                bold_terms.append(self.pain_scale_var.get())
-
-            self._bold_phrases(bold_terms)
+        return "\n\n".join(p for p in parts if p.strip())
+       
+    
+    def update_narrative(self, overwrite_if_auto: bool):
+        if getattr(self, "_loading_from_file", False):
+            return
+        code = self.region_var.get()
+        label = REGION_LABELS.get(code, "")
+        self.region_label_var.set(label)
+        if code == "(none)" or not label:
+            if overwrite_if_auto:
+                self.narrative_text.delete("1.0", tk.END)
+            return
+        # Auto content no longer written to narrative_text; it is exposed via
+        # get_auto_generated_text() and shown in Live Preview.
 
 
 

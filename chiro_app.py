@@ -515,6 +515,13 @@ class App(tk.Tk):
                     s = self.hoi_page.get_live_preview_text()
                     if s:
                         runs = [(s, None)]
+                # Append subjectives auto-generated content
+                if hasattr(self, "subjectives_page") and self.subjectives_page is not None:
+                    subj_runs = self.subjectives_page.get_live_preview_runs()
+                    if subj_runs:
+                        if runs:
+                            runs.append(("\n\n", None))
+                        runs.extend(subj_runs)
             except Exception as e:
                 print("refresh_live_preview error:", e)
                 runs = []

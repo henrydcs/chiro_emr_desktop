@@ -19,7 +19,7 @@ from config import (
     LOGO_PATH, CLINIC_NAME, CLINIC_ADDR, CLINIC_PHONE_FAX,
     EXAMS, REGION_LABELS
 )
-from utils import normalize_mmddyyyy, today_mmddyyyy
+from utils import normalize_mmddyyyy, today_mmddyyyy, build_sentence
 
 # ----------- OPTIONAL: ReportLab (PDF export) -----------
 try:
@@ -178,6 +178,42 @@ def tokens_from_subjective_block(block: dict) -> list[str]:
         toks.append(ps)
 
     return _dedupe_preserve_order(toks)
+
+
+def _auto_text_from_block(block: dict) -> str:
+    """
+    Rebuild the auto-generated subjective paragraph from block dict.
+    Same logic as DescriptorBlock.get_auto_generated_text().
+    """
+    block = block or {}
+    region = (block.get("region") or "").strip()
+    label = REGION_LABELS.get(region, "")
+    if not region or region == "(none)" or not label:
+        return ""
+    base = build_sentence(
+        label,
+        block.get("desc1", ""),
+        block.get("desc2", ""),
+        block.get("radic_symptom", "None"),
+        block.get("radic_location", "(select)"),
+    )
+    muscles = block.get("muscles") or []
+    tenderness = ""
+    if len(muscles) == 1:
+        tenderness = f"The patient indicates or points to the {muscles[0]} as the area of tenderness."
+    elif len(muscles) == 2:
+        tenderness = f"The patient indicates or points to the {muscles[0]} and the {muscles[1]} as the areas of tenderness."
+    elif len(muscles) > 2:
+        mid = ", ".join(muscles[:-1])
+        last = muscles[-1]
+        tenderness = f"The patient indicates or points to the {mid}, and the {last} as the areas of tenderness."
+    scale = (block.get("pain_scale") or "None").strip().lower()
+    pain_line = f"The patient states the overall discomfort in this area is {scale}."
+    parts = [base]
+    if tenderness:
+        parts.append(tenderness)
+    parts.append(pain_line)
+    return "\n\n".join(p for p in parts if p.strip())
 
 
 def semibold_markup(text: str, tokens: list[str]) -> str:
@@ -1446,22 +1482,23 @@ def payload_to_exam_sections(payload: dict):
     subj = soap.get("subjectives") or {}
 
     narratives = []
+    user_narratives = []
     for b in (subj.get("blocks") or []):
         region = (b.get("region") or "").strip()
+        user_text = (b.get("narrative") or "").strip()
+
         if region in REGION_LABELS:
-            title = REGION_LABELS[region]
-            text = (b.get("narrative") or "").strip()
-            if text:
-                if not tokens_from_subjective_block(b):
-                    continue
-                tokens = tokens_from_subjective_block(b)
-                if not tokens:
-                    continue
-                narratives.append({
-                    "title": title,
-                    "text": text,
-                    "tokens": tokens_from_subjective_block(b),
-                })
+            tokens = tokens_from_subjective_block(b)
+            if tokens:
+                auto_text = _auto_text_from_block(b)
+                if auto_text:
+                    narratives.append({
+                        "title": REGION_LABELS[region],
+                        "text": auto_text,
+                        "tokens": tokens,
+                    })
+        if user_text:
+            user_narratives.append(user_text)
 
     family_social = (soap.get("family_social") or "").strip()
 
@@ -1478,7 +1515,7 @@ def payload_to_exam_sections(payload: dict):
     plan_struct = soap.get("plan", {}) or {}
 
     exam_date = normalize_mmddyyyy(patient.get("exam_date", "")) or today_mmddyyyy()
-    return exam_name, patient, narratives, family_social, objectives_text, objectives_struct, diagnosis, plan_struct, exam_date
+    return exam_name, patient, narratives, user_narratives, family_social, objectives_text, objectives_struct, diagnosis, plan_struct, exam_date
 
 def _assessment_paragraph(dx_struct: dict, styles):
     dx_struct = dx_struct or {}
@@ -1760,7 +1797,7 @@ def build_combined_pdf(path: str, payloads: list):
 
     story = []
     for idx, payload in enumerate(payloads):
-        exam_name, patient, narratives, family_social, objectives_text, objectives_struct, diagnosis, plan_struct, exam_date = payload_to_exam_sections(payload)
+        exam_name, patient, narratives, user_narratives, family_social, objectives_text, objectives_struct, diagnosis, plan_struct, exam_date = payload_to_exam_sections(payload)
 
 
         story.append(ExamStart(exam_name, patient, exam_date))
@@ -1844,7 +1881,13 @@ def build_combined_pdf(path: str, payloads: list):
                 story.append(Spacer(1, 0.10 * inch))
             printed_any_subjectives = True
 
-        # ✅ Only print dash if NOTHING exists (no therapy + no narratives)
+        if user_narratives:
+            story.append(Spacer(1, 0.10 * inch))
+            combined = "\n\n".join(user_narratives)
+            story.append(Paragraph(semibold_markup(combined, []), styles["SubjectiveBody"]))
+            printed_any_subjectives = True
+
+        # ✅ Only print dash if NOTHING exists (no therapy + no narratives + no user narrative)
         if not printed_any_subjectives:
             story.append(Paragraph("—", styles["BodyText"]))
 

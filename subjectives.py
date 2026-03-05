@@ -264,6 +264,28 @@ class SubjectivesPage(ttk.Frame):
 
         return "\n\n".join(parts).strip()
 
+    def get_live_preview_runs(self) -> list[tuple[str, str | None]]:
+        """
+        Returns runs for Live Preview: therapy paragraph + auto-generated content
+        from each block. Format: [(chunk, tag), ...] with tag "H_BOLD" for headings.
+        """
+        runs = []
+        therapy = self.build_therapy_paragraph().strip()
+        if therapy:
+            runs.append(("Subjectives\n", "H_BOLD"))
+            runs.append(("\n", None))
+            runs.append((therapy + "\n\n", None))
+        for b in self.blocks:
+            auto = (b.get_auto_generated_text() or "").strip()
+            if auto:
+                region_code = b.region_var.get()
+                label = REGION_LABELS.get(region_code, "")
+                if label:
+                    runs.append((label + "\n", "H_BOLD"))
+                    runs.append(("\n", None))
+                runs.append((auto + "\n\n", None))
+        return runs
+
     
     def _confirm_reset(self):
         ok = messagebox.askyesno(

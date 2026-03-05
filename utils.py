@@ -268,7 +268,7 @@ def build_sentence(region_label: str,
                 f"{descriptors[0]} along with {descriptors[1]}."
             )
     else:
-        pain_sentence = "The patient describes the pain."
+        pain_sentence = ""
 
     # Radiculopathy
     radic_sentence = ""
