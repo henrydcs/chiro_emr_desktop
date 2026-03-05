@@ -303,24 +303,47 @@ class SubjectivesPage(ttk.Frame):
             "Are you sure you want to continue?"
         )
         if ok:
-            self.reset()   
+            self.reset()
+
+    def _go_therapy_only_home(self):
+        """Switch to Therapy Only Home view (hides subjectives)."""
+        self._therapy_only_home_frame.tkraise()
+
+    def _go_back_to_subjectives(self):
+        """Switch back to regular Subjectives view."""
+        self._subjectives_frame.tkraise()
+
     
     # ---------- UI ----------
     def _build_ui(self):
+        # Stack for tkraise: subjectives view vs therapy-only-home view
+        self._stack = ttk.Frame(self)
+        self._stack.pack(fill="both", expand=True)
+        self._stack.rowconfigure(0, weight=1)
+        self._stack.columnconfigure(0, weight=1)
+
+        self._subjectives_frame = ttk.Frame(self._stack)
+        self._subjectives_frame.grid(row=0, column=0, sticky="nsew")
+        self._therapy_only_home_frame = ttk.Frame(self._stack)
+        self._therapy_only_home_frame.grid(row=0, column=0, sticky="nsew")
+
+        # --- All content below goes inside _subjectives_frame ---
+        _host = self._subjectives_frame
+
         # Header row: Add, Reset
-        top = ttk.Frame(self)
+        top = ttk.Frame(_host)
         top.pack(fill="x", padx=10, pady=(10, 6))
 
         ttk.Button(top, text="Add Block", command=self._add_block).pack(side="left")
         ttk.Button(top, text="Reset Subjectives", command=self._confirm_reset).pack(side="left", padx=(8, 0))
-
+        ttk.Button(top, text="New Therapy Only Home", command=self._go_therapy_only_home).pack(side="left", padx=(8, 0))
 
         # Row of block navigation buttons
-        self.nav = ttk.Frame(self)
+        self.nav = ttk.Frame(_host)
         self.nav.pack(fill="x", padx=10, pady=(0, 10))
         
         # --- Therapy Only section (GLOBAL, independent of blocks) ---
-        self._therapy_container = ttk.Frame(self)
+        self._therapy_container = ttk.Frame(_host)
         # start hidden (we'll pack it only when needed)
         self._therapy_visible = False
 
@@ -358,10 +381,19 @@ class SubjectivesPage(ttk.Frame):
        
 
         # Container where blocks live (stacked with grid, like your main app pages)
-        self.content = ttk.Frame(self)
+        self.content = ttk.Frame(_host)
         self.content.pack(fill="both", expand=True, padx=10, pady=(0, 10))
         self.content.rowconfigure(0, weight=1)
         self.content.columnconfigure(0, weight=1)
+
+        # Therapy Only Home area: minimal content + back button
+        therapy_home_top = ttk.Frame(self._therapy_only_home_frame)
+        therapy_home_top.pack(fill="x", padx=10, pady=(10, 6))
+        ttk.Button(
+            therapy_home_top,
+            text="Back to Subjectives",
+            command=self._go_back_to_subjectives,
+        ).pack(side="left")
 
     # ---------- Block label helpers ----------
     def _region_short(self, region_code: str) -> str:
