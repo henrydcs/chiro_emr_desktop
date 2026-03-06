@@ -284,7 +284,7 @@ class SubjectivesPage(ttk.Frame):
         # Show Subjectives heading if we have ANY subjectives content (mirrors PDF)
         has_any_subjectives = bool(therapy or has_block_content or user_narratives)
         if has_any_subjectives:
-            runs.append(("Subjectives\n", "H_BOLD"))
+            runs.append(("SUBJECTIVES\n", "H_BOLD"))
             runs.append(("\n", None))
 
         if therapy:

@@ -605,9 +605,9 @@ class HOIPage(ttk.Frame):
         mode = _clean(self.rof_mode_var.get()) or "ROF"
 
         title_map = {
-            "Initial": "INTRODUCTION",
-            "Re-Exam": "RE-EXAMINATION",
-            "Final": "FINAL EVALUATION",
+            "Initial": "History of Present Illness",
+            "Re-Exam": "Status Update",
+            "Final": "Final Visit Summary",
             "ROF": "REVIEW OF FINDINGS",
         }
         title = title_map.get(mode, "REVIEW OF FINDINGS")
