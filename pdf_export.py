@@ -900,7 +900,41 @@ def _build_adl_paragraph(adl: dict, styles):
     safe = xml_escape("\n".join(parts)).replace("\n", "<br/>")
     return Paragraph(safe, styles["BodyText"])
 
+def adl_dict_to_plain_text(adl: dict) -> str:
+    """
+    Build plain-text ADL content for Live Preview, mirroring _build_adl_paragraph.
+    Returns empty string if no content.
+    """
+    if not isinstance(adl, dict):
+        return ""
 
+    sev = adl.get("severity", -1)
+    try:
+        sev = int(sev)
+    except Exception:
+        sev = -1
+
+    items = adl.get("items") or []
+    if not isinstance(items, list):
+        items = []
+
+    notes = (adl.get("notes") or "").strip()
+
+    if sev == -1 and not items and not notes:
+        return ""
+
+    parts = []
+    if sev != -1:
+        parts.append(f"ADL Overall Impact Severity: {sev} — {SEVERITY_LABELS.get(sev, '')}".strip())
+
+    clean_items = [str(x).strip() for x in items if str(x).strip()]
+    if clean_items:
+        parts.append("Activities of Daily Living: " + ", ".join(clean_items))
+
+    if notes:
+        parts.append("Notes: " + notes)
+
+    return "\n".join(parts)
 
 def build_objectives_flowables(objectives_struct: dict, styles, doc_width: float, *, include_adl: bool = True):
 

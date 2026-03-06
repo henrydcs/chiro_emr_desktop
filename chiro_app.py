@@ -538,6 +538,36 @@ class App(tk.Tk):
                             runs.append(("\n\n", None))
                         runs.extend(subj_runs)
 
+                # 3a. Functional Status / ADLs (mirrors PDF: after Subjectives, before Objectives)
+                if hasattr(self, "objectives_page") and self.objectives_page is not None:
+                    try:
+                        from pdf_export import adl_dict_to_plain_text
+                        obj_struct = self.objectives_page.to_dict() or {}
+                        gs = obj_struct.get("global") or {}
+                        adl = gs.get("adl") or {}
+                        adl_text = adl_dict_to_plain_text(adl)
+                        if adl_text.strip():
+                            if runs:
+                                runs.append(("\n\n", None))
+                            runs.append(("Functional Status\n", "H_BOLD"))
+                            runs.append(("\n", None))
+                            runs.append((adl_text.strip() + "\n\n", None))
+                    except Exception:
+                        pass
+
+                # 3b. Family / Social History (mirrors PDF: after Functional Status, before Objectives)
+                if hasattr(self, "family_social_page") and self.family_social_page is not None:
+                    try:
+                        fs_text = (self.family_social_page.get_value() or "").strip()
+                        if fs_text:
+                            if runs:
+                                runs.append(("\n\n", None))
+                            runs.append(("FAMILY / SOCIAL HISTORY\n", "H_BOLD"))
+                            runs.append(("\n", None))
+                            runs.append((fs_text + "\n\n", None))
+                    except Exception:
+                        pass                              
+
                 # 4. Objectives (mirrors PDF: OBJECTIVES section — between Subjectives and ROF)
                 if hasattr(self, "objectives_page") and self.objectives_page is not None:
                     try:
