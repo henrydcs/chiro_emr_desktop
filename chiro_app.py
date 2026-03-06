@@ -49,6 +49,7 @@ from doc_vault_page import upsert_vault_file
 from patient_storage import new_patient_id, get_patient_root, find_patient_root
 from tk_docs_page import TkDocsPage
 from pdf_export import REPORTLAB_OK, build_combined_pdf
+from pdf_export import diagnosis_struct_to_live_preview_runs
 from master_save import MasterSaveController
 from config import (
     UI_PAGES,
@@ -592,18 +593,18 @@ class App(tk.Tk):
                         runs.extend(rof_runs)
 
                 # 6. Assessment (mirrors PDF: ASSESSMENT section)
-                dx_text = ""
                 if hasattr(self, "diagnosis_page") and self.diagnosis_page is not None:
                     try:
-                        dx_text = (self.diagnosis_page.get_value() or "").strip()
+                        dx_struct = self.diagnosis_page.to_dict()
+                        assessment_runs = diagnosis_struct_to_live_preview_runs(dx_struct)
+                        if assessment_runs:
+                            if runs:
+                                runs.append(("\n\n", None))
+                            runs.append(("ASSESSMENT\n", "H_BOLD"))
+                            runs.append(("\n", None))
+                            runs.extend(assessment_runs)
                     except Exception:
-                        dx_text = ""
-                if dx_text:
-                    if runs:
-                        runs.append(("\n\n", None))
-                    runs.append(("ASSESSMENT\n", "H_BOLD"))
-                    runs.append(("\n", None))
-                    runs.append((dx_text + "\n\n", None))
+                        pass
 
             except Exception as e:
                 print("refresh_live_preview error:", e)
