@@ -212,7 +212,8 @@ def _auto_text_from_block(block: dict) -> str:
     parts = [base]
     if tenderness:
         parts.append(tenderness)
-    parts.append(pain_line)
+    if scale.lower() != "select":
+        parts.append(pain_line)
     return "\n\n".join(p for p in parts if p.strip())
 
 

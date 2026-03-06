@@ -123,14 +123,7 @@ class DescriptorBlock:
             ttk.Radiobutton(
                 switch, text="Patient Points To", value="points",
                 variable=self.view_var, command=self._apply_view
-            ).pack(side="left")
-            ttk.Radiobutton(
-                switch, text="Therapy Only", value="therapy",
-                variable=self.view_var, command=self._apply_view
-            ).pack(side="left", padx=(12, 0))
-
-
-
+            ).pack(side="left", padx=(12, 0))           
 
             # -------------------------------
             # Three section frames
@@ -300,12 +293,7 @@ class DescriptorBlock:
             self.frame.grid_rowconfigure(2, weight=1)  # Only narrative expands
 
         elif mode == "points":
-            self.points_frame.grid()
-
-        elif mode == "therapy":
-            # ✅ CRITICAL: block should NOT consume full vertical space
-            self._set_frame_fill(False)
-            # nothing shown inside this block
+            self.points_frame.grid()        
 
         if callable(getattr(self, "on_mode_change", None)):
             self.on_mode_change(self.block_index, mode)

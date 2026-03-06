@@ -273,10 +273,23 @@ class SubjectivesPage(ttk.Frame):
         """
         runs = []
         therapy = self.build_therapy_paragraph().strip()
-        if therapy:
+
+        # Check if any block has auto content (mirrors PDF: region blocks)
+        has_block_content = any(
+            (b.get_auto_generated_text() or "").strip() for b in self.blocks
+        )
+        user_narratives = [(b.get_narrative() or "").strip() for b in self.blocks]
+        user_narratives = [t for t in user_narratives if t]
+
+        # Show Subjectives heading if we have ANY subjectives content (mirrors PDF)
+        has_any_subjectives = bool(therapy or has_block_content or user_narratives)
+        if has_any_subjectives:
             runs.append(("Subjectives\n", "H_BOLD"))
             runs.append(("\n", None))
+
+        if therapy:
             runs.append((therapy + "\n\n", None))
+
         for b in self.blocks:
             auto = (b.get_auto_generated_text() or "").strip()
             if auto:
@@ -286,13 +299,13 @@ class SubjectivesPage(ttk.Frame):
                     runs.append((label + "\n", "H_BOLD"))
                     runs.append(("\n", None))
                 runs.append((auto + "\n\n", None))
+
         # Narrative text box: last in subjectives, one line of space before (mirrors PDF user_narratives)
-        user_narratives = [(b.get_narrative() or "").strip() for b in self.blocks]
-        user_narratives = [t for t in user_narratives if t]
         if user_narratives:
             combined = "\n\n".join(user_narratives)
             runs.append(("\n", None))
             runs.append((combined + "\n\n", None))
+
         return runs
 
     
@@ -335,7 +348,7 @@ class SubjectivesPage(ttk.Frame):
         top.pack(fill="x", padx=10, pady=(10, 6))
 
         ttk.Button(top, text="Add Block", command=self._add_block).pack(side="left")
-        ttk.Button(top, text="Reset Subjectives", command=self._confirm_reset).pack(side="left", padx=(8, 0))
+        ttk.Button(top, text="Reset All Subjectives", command=self._confirm_reset).pack(side="left", padx=(8, 0))
         ttk.Button(top, text="New Therapy Only Home", command=self._go_therapy_only_home).pack(side="left", padx=(8, 0))
 
         # Row of block navigation buttons
