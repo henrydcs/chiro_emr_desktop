@@ -1204,26 +1204,233 @@ def build_objectives_flowables(objectives_struct: dict, styles, doc_width: float
                 out.append(rom_notes)
 
             out.append(Spacer(1, 0.14 * inch))
-
-            
-            
-
-
-            # hoi_struct = payload.get("hoi") or {}
-
-            # out.extend(build_objectives_flowables(objective_struct, styles, doc_width))
-            # out.extend(build_rof_flowables(hoi_struct, styles))
-            # out.extend(build_hoi_flowables(hoi_struct, styles, doc_width, include_rof=False))
-
-
-
-
-            #out.append(Spacer(1, 0.06 * inch))
-
-
+                                   
     return out if printed_any else []
 
+def objectives_struct_to_live_preview_runs(objectives_struct: dict, *, include_adl: bool = True) -> list[tuple[str, str | None]]:
+    """
+    Build Live Preview runs from objectives_struct, mirroring PDF structure.
+    Returns [(chunk, tag), ...] with tag "H_BOLD" for headings.
+    """
+    runs: list[tuple[str, str | None]] = []
+    objectives_struct = objectives_struct or {}
+    global_struct = objectives_struct.get("global") or {}
+    if not isinstance(global_struct, dict):
+        global_struct = {}
 
+    def add_section(heading: str, body: str):
+        if not body.strip():
+            return
+        runs.append((heading + "\n", "H_BOLD"))
+        runs.append(("\n", None))
+        runs.append((body.strip() + "\n\n", None))
+
+    # Vitals
+    vitals = global_struct.get("vitals") or {}
+    if isinstance(vitals, dict):
+        fields = [("BP:", "bp"), ("Pulse:", "pulse"), ("Resp:", "resp"), ("Temp:", "temp"),
+                  ("Height:", "height"), ("Weight:", "weight"), ("SpO₂:", "spo2")]
+        pairs = []
+        for label, key in fields:
+            val = _clean_val(vitals.get(key, ""))
+            if val:
+                pairs.append(f"{label} {val}")
+        if pairs:
+            lines = [" ".join(pairs[i:i+4]) for i in range(0, len(pairs), 4)]
+            body = "\n".join(lines)
+            vit_notes = _clean_val(vitals.get("notes"))
+            if vit_notes:
+                body += "\n\nNotes: " + vit_notes
+            add_section("Vitals", body)
+
+    # Posture
+    posture = global_struct.get("posture") or {}
+    if isinstance(posture, dict):
+        lines = []
+        for label, key in [("Shoulder Levels", "shoulder_levels"), ("Kyphosis (T/S)", "kyphosis_ts"),
+                           ("Forward Head Posture (C/S)", "forward_head_cs"), ("Lordosis (L/S)", "lordosis_ls")]:
+            val = _clean_val(posture.get(key))
+            if val:
+                lines.append(f"{label}: {val}")
+        if lines:
+            body = "\n".join(lines)
+            pos_notes = _clean_val(posture.get("notes"))
+            if pos_notes:
+                body += "\n\nNotes: " + pos_notes
+            add_section("Posture", body)
+
+    # Spinal Palpatory Inspection (sublux)
+    sublux = global_struct.get("sublux") or {}
+    if isinstance(sublux, dict):
+        regions = sublux.get("regions") or {}
+        region_names = {"CS": "Cervical Spine", "TS": "Thoracic Spine", "LS": "Lumbar Spine"}
+        selected = [region_names[k] for k, v in regions.items() if bool(v) and k in region_names]
+        levels = sublux.get("levels") or {}
+        level_parts = []
+        for lv in sorted(levels.keys(), key=lambda x: ({"C": 0, "T": 1, "L": 2}.get((x or "")[0:1].upper(), 9), int((x or "0")[1:] or 0))):
+            st = levels.get(lv) or {}
+            piece = lv
+            listing = (st.get("listing") or "").strip()
+            if listing and listing != "(none)":
+                piece += f" {listing}"
+            motion = st.get("motion") or []
+            motion_clean = [str(x).strip() for x in motion if str(x).strip()]
+            if motion_clean:
+                piece += " MR: " + ", ".join(motion_clean)
+            level_parts.append(piece)
+        if selected or level_parts:
+            lines = []
+            if selected:
+                lines.append("Restricted joint motion consistent with segmental dysfunction was noted in the " + _join_with_and(selected) + ".")
+            if level_parts:
+                lines.append(" ".join(level_parts))
+            body = "\n".join(lines)
+            sx_notes = _clean_val(sublux.get("notes"))
+            if sx_notes:
+                body += "\n\nNotes: " + sx_notes
+            add_section("Spinal Palpatory Inspection", body)
+
+    # Grip Strength
+    grip = global_struct.get("grip") or {}
+    if isinstance(grip, dict):
+        left = _clean_val(grip.get("left"))
+        right = _clean_val(grip.get("right"))
+        compare = _clean_val(grip.get("compare"))
+        if left or right or compare:
+            parts = []
+            if left:
+                parts.append(f"Left: {left}")
+            if right:
+                parts.append(f"Right: {right}")
+            if compare:
+                parts.append(f"Compare: {compare}")
+            body = "\n".join(parts)
+            grip_notes = _clean_val(grip.get("notes"))
+            if grip_notes:
+                body += "\n\nNotes: " + grip_notes
+            add_section("Grip Strength (Jamar)", body)
+
+    # Region blocks
+    blocks = objectives_struct.get("blocks") or []
+    if isinstance(blocks, list):
+        grouped: dict[str, list[dict]] = {}
+        order: list[str] = []
+        for b in blocks:
+            if not isinstance(b, dict):
+                continue
+            code = (b.get("region") or "").strip() or "(none)"
+            if code not in grouped:
+                grouped[code] = []
+                order.append(code)
+            grouped[code].append(b)
+
+        for code in order:
+            region_blocks = grouped.get(code, [])
+            if not region_blocks:
+                continue
+            label = _pretty_region(code)
+            if not label:
+                continue
+            region_title = _region_group_name(label)
+            tag = _region_tag(code)
+
+            palp_left_all, palp_right_all = [], []
+            ortho_left_all, ortho_right_all = [], []
+            for b in region_blocks:
+                findings = _collect_objectives_findings(b)
+                pL, pR = findings["PALPATION"]
+                oL, oR = findings["ORTHOPEDIC EXAM"]
+                palp_left_all.append(pL)
+                palp_right_all.append(pR)
+                ortho_left_all.append(oL)
+                ortho_right_all.append(oR)
+
+            def merge_findings(lsts):
+                seen = set()
+                out = []
+                for L in lsts:
+                    for item in L:
+                        key = (item[0], item[1]) if len(item) >= 2 else (item[0],)
+                        if key not in seen:
+                            seen.add(key)
+                            out.append(item)
+                return out
+
+            palp_left = merge_findings(palp_left_all)
+            palp_right = merge_findings(palp_right_all)
+            ortho_left = merge_findings(ortho_left_all)
+            ortho_right = merge_findings(ortho_right_all)
+
+            try:
+                rom_merged = _merge_rom_struct(region_blocks) or {}
+            except Exception:
+                rom_merged = {}
+            rom_merged = {m: st for m, st in (rom_merged or {}).items()
+                         if int((st or {}).get("l_sev", -1)) != -1 or int((st or {}).get("r_sev", -1)) != -1}
+
+            def first_note(region_blocks, key):
+                for bb in region_blocks:
+                    txt = _clean_val(bb.get(key, ""))
+                    if txt:
+                        return txt
+                return ""
+
+            palp_notes = first_note(region_blocks, "palpation_notes")
+            ortho_notes = first_note(region_blocks, "ortho_notes")
+            rom_notes = first_note(region_blocks, "rom_notes")
+
+            has_any = bool(palp_left or palp_right or palp_notes or ortho_left or ortho_right or ortho_notes or rom_merged or rom_notes)
+            if not has_any:
+                continue
+
+            runs.append((region_title + "\n", "H_BOLD"))
+            runs.append(("\n", None))
+
+            if palp_left or palp_right or palp_notes:
+                runs.append((f"SOFT TISSUE PALPATION {tag}\n", "H_BOLD"))
+                if palp_left or palp_right:
+                    for i in range(max(len(palp_left), len(palp_right), 1)):
+                        lstr = f"{palp_left[i][0]}: {palp_left[i][1]}" if i < len(palp_left) else ""
+                        rstr = f"{palp_right[i][0]}: {palp_right[i][1]}" if i < len(palp_right) else ""
+                        runs.append((f"LEFT: {lstr}  |  RIGHT: {rstr}\n", None))
+                if palp_notes:
+                    runs.append((f"Notes: {palp_notes}\n\n", None))
+
+            if ortho_left or ortho_right or ortho_notes:
+                runs.append((f"ORTHOPEDIC EXAM {tag}\n", "H_BOLD"))
+                if ortho_left or ortho_right:
+                    for i in range(max(len(ortho_left), len(ortho_right), 1)):
+                        lstr = f"{ortho_left[i][0]}: {ortho_left[i][1]}" if i < len(ortho_left) else ""
+                        rstr = f"{ortho_right[i][0]}: {ortho_right[i][1]}" if i < len(ortho_right) else ""
+                        runs.append((f"LEFT: {lstr}  |  RIGHT: {rstr}\n", None))
+                if ortho_notes:
+                    runs.append((f"Notes: {ortho_notes}\n\n", None))
+
+            if rom_merged or rom_notes:
+                runs.append((f"RANGE OF MOTION {tag}\n", "H_BOLD"))
+                REGION_ROM_MOTIONS = {
+                    "CS": ["Flexion", "Extension", "Lateral Flexion", "Rotation"],
+                    "TS": ["Flexion", "Extension", "Lateral Flexion", "Rotation"],
+                    "LS": ["Flexion", "Extension", "Lateral Flexion", "Rotation"],
+                    "R_SHOULDER": ["Flexion", "Extension", "Abduction", "Adduction", "Internal Rotation", "External Rotation"],
+                    "L_SHOULDER": ["Flexion", "Extension", "Abduction", "Adduction", "Internal Rotation", "External Rotation"],
+                    "BL_SHOULDER": ["Flexion", "Extension", "Abduction", "Adduction", "Internal Rotation", "External Rotation"],
+                }
+                motions = REGION_ROM_MOTIONS.get(code, ["Flexion", "Extension", "Lateral Flexion", "Rotation"])
+                for m in motions:
+                    st = (rom_merged or {}).get(m) or {}
+                    l_sev = int(st.get("l_sev", -1))
+                    r_sev = int(st.get("r_sev", -1))
+                    if l_sev != -1 or r_sev != -1:
+                        l_txt = SEVERITY_LABELS.get(l_sev, "") if l_sev != -1 else ""
+                        r_txt = SEVERITY_LABELS.get(r_sev, "") if r_sev != -1 else ""
+                        runs.append((f"{m}: L={l_txt or '-'} R={r_txt or '-'}\n", None))
+                if rom_notes:
+                    runs.append((f"Notes: {rom_notes}\n\n", None))
+
+            runs.append(("\n", None))
+
+    return runs
 
 # =======================================================
 # Header / Canvas

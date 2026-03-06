@@ -538,21 +538,22 @@ class App(tk.Tk):
                             runs.append(("\n\n", None))
                         runs.extend(subj_runs)
 
-                # 3. Objectives (mirrors PDF: OBJECTIVES section)
-                obj_text = ""
+                # 4. Objectives (mirrors PDF: OBJECTIVES section — between Subjectives and ROF)
                 if hasattr(self, "objectives_page") and self.objectives_page is not None:
                     try:
-                        obj_text = (getattr(self.objectives_page, "get_value", lambda: "")() or "").strip()
+                        from pdf_export import objectives_struct_to_live_preview_runs
+                        obj_struct = self.objectives_page.to_dict() or {}
+                        obj_runs = objectives_struct_to_live_preview_runs(obj_struct)
+                        if obj_runs:
+                            if runs:
+                                runs.append(("\n\n", None))
+                            runs.append(("OBJECTIVES\n", "H_BOLD"))
+                            runs.append(("\n", None))
+                            runs.extend(obj_runs)
                     except Exception:
-                        obj_text = ""
-                if obj_text:
-                    if runs:
-                        runs.append(("\n\n", None))
-                    runs.append(("OBJECTIVES\n", "H_BOLD"))
-                    runs.append(("\n", None))
-                    runs.append((obj_text + "\n\n", None))
+                        pass
 
-                # 4. Review of Findings (ROF only — after Objectives, before Assessment)
+                # 5. Review of Findings (ROF only — after Objectives, before Assessment)
                 if hasattr(self.hoi_page, "get_live_preview_runs_rof"):
                     rof_runs = self.hoi_page.get_live_preview_runs_rof() or []
                     if rof_runs:
@@ -560,7 +561,7 @@ class App(tk.Tk):
                             runs.append(("\n\n", None))
                         runs.extend(rof_runs)
 
-                # 5. Assessment (mirrors PDF: ASSESSMENT section)
+                # 6. Assessment (mirrors PDF: ASSESSMENT section)
                 dx_text = ""
                 if hasattr(self, "diagnosis_page") and self.diagnosis_page is not None:
                     try:
