@@ -606,6 +606,47 @@ class App(tk.Tk):
                     except Exception:
                         pass
 
+                # 7. Plan of Care (mirrors PDF: PLAN OF CARE section)
+                if hasattr(self, "plan_page") and self.plan_page is not None:
+                    try:
+                        from plan_pdf import plan_struct_to_live_preview_runs
+                        plan_struct = self.plan_page.get_struct()
+                        work_recs = ""
+                        if hasattr(self, "diagnosis_page") and self.diagnosis_page is not None:
+                            dx_struct = self.diagnosis_page.to_dict() or {}
+                            wp = (dx_struct.get("work_plan") or "").strip()
+                            if wp and wp != "(select)":
+                                work_mapping = {
+                                    "Full Duty (No Restrictions)":
+                                        "Return to work full duty with no restrictions.",
+                                    "Modified Duty (Work Restrictions)":
+                                        "Recommend modified duty with appropriate work restrictions.",
+                                    "Off Work / TTD (Temporary Total Disability)":
+                                        "Recommend the patient remain off work at this time (TTD) pending clinical improvement and re-evaluation.",
+                                    "Off Work (Work Status Note Only)":
+                                        "Work status note provided; patient advised to remain off work at this time as clinically indicated.",
+                                    "Work Restrictions Pending Re-evaluation":
+                                        "Work restrictions are pending re-evaluation at the next visit based on treatment response.",
+                                    "Disability Note Requested":
+                                        "Disability documentation requested; provide as clinically appropriate based on examination findings.",
+                                    "Return to Work Note Requested":
+                                        "Return-to-work documentation requested; provide based on current work status and clinical findings.",
+                                    "FMLA / Leave Documentation Requested":
+                                        "FMLA/leave documentation requested; provide as clinically appropriate.",
+                                    "Referral for Work Capacity Evaluation":
+                                        "Recommend referral for a work capacity evaluation to better define functional limitations and work restrictions.",
+                                }
+                                work_recs = work_mapping.get(wp, wp)
+                        plan_runs = plan_struct_to_live_preview_runs(plan_struct, work_recs=work_recs)
+                        if plan_runs:
+                            if runs:
+                                runs.append(("\n\n", None))
+                            runs.append(("PLAN OF CARE\n", "H_BOLD"))
+                            runs.append(("\n", None))
+                            runs.extend(plan_runs)
+                    except Exception:
+                        pass
+
             except Exception as e:
                 print("refresh_live_preview error:", e)
                 runs = []
