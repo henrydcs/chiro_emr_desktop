@@ -634,7 +634,19 @@ class HOIPage(ttk.Frame):
 
         return runs
 
+    def get_live_preview_runs_beginning(self):
+        """Returns runs for Initial/Re-Exam/Final only (beginning of Live Preview)."""
+        mode = _clean(self.rof_mode_var.get()) or "ROF"
+        if mode not in ("Initial", "Re-Exam", "Final"):
+            return []
+        return self.get_live_preview_runs()
 
+    def get_live_preview_runs_rof(self):
+        """Returns runs for ROF only (after Objectives, before Assessment)."""
+        mode = _clean(self.rof_mode_var.get()) or "ROF"
+        if mode != "ROF":
+            return []
+        return self.get_live_preview_runs()
     
     def _bind_wheel_to_widget(self, widget, *, yview_func=None, xview_func=None):
         """

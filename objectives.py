@@ -1703,9 +1703,9 @@ class ObjectivesPage(ttk.Frame):
 
 
     def show_blocks(self):
-        self.block_container.tkraise()
-
-
+        self.block_container.tkraise()        
+    
+    
     def _build_ui(self):
         top = ttk.Frame(self)
         top.pack(fill="x", padx=10, pady=(10, 0))

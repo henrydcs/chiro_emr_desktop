@@ -507,21 +507,65 @@ class App(tk.Tk):
                 return
 
             # Build runs
+            # Build runs in PDF order: Beginning (Initial/Re-Exam/Final) → Subjectives → Objectives → ROF → Assessment
             runs = []
             try:
-                if hasattr(self.hoi_page, "get_live_preview_runs"):
-                    runs = self.hoi_page.get_live_preview_runs() or []
-                else:
-                    s = self.hoi_page.get_live_preview_text()
-                    if s:
-                        runs = [(s, None)]
-                # Append subjectives auto-generated content
+                # 1. Beginning: Initial / Re-Exam / Final (HPI, Status Update, Final Visit Summary)
+                if hasattr(self.hoi_page, "get_live_preview_runs_beginning"):
+                    beginning_runs = self.hoi_page.get_live_preview_runs_beginning() or []
+                    if beginning_runs:
+                        runs.extend(beginning_runs)
+                elif hasattr(self.hoi_page, "get_live_preview_runs"):
+                    # Fallback: if new methods don't exist, use old behavior for beginning only when not ROF
+                    all_rof = self.hoi_page.get_live_preview_runs() or []
+                    mode = (getattr(self.hoi_page, "rof_mode_var", None) or type("", (), {"get": lambda: "ROF"})()).get()
+                    if all_rof and (mode or "").strip() not in ("ROF", ""):
+                        runs.extend(all_rof)
+
+                # 2. Subjectives
                 if hasattr(self, "subjectives_page") and self.subjectives_page is not None:
                     subj_runs = self.subjectives_page.get_live_preview_runs()
                     if subj_runs:
                         if runs:
                             runs.append(("\n\n", None))
                         runs.extend(subj_runs)
+
+                # 3. Objectives (mirrors PDF: OBJECTIVES section)
+                obj_text = ""
+                if hasattr(self, "objectives_page") and self.objectives_page is not None:
+                    try:
+                        obj_text = (getattr(self.objectives_page, "get_value", lambda: "")() or "").strip()
+                    except Exception:
+                        obj_text = ""
+                if obj_text:
+                    if runs:
+                        runs.append(("\n\n", None))
+                    runs.append(("OBJECTIVES\n", "H_BOLD"))
+                    runs.append(("\n", None))
+                    runs.append((obj_text + "\n\n", None))
+
+                # 4. Review of Findings (ROF only — after Objectives, before Assessment)
+                if hasattr(self.hoi_page, "get_live_preview_runs_rof"):
+                    rof_runs = self.hoi_page.get_live_preview_runs_rof() or []
+                    if rof_runs:
+                        if runs:
+                            runs.append(("\n\n", None))
+                        runs.extend(rof_runs)
+
+                # 5. Assessment (mirrors PDF: ASSESSMENT section)
+                dx_text = ""
+                if hasattr(self, "diagnosis_page") and self.diagnosis_page is not None:
+                    try:
+                        dx_text = (self.diagnosis_page.get_value() or "").strip()
+                    except Exception:
+                        dx_text = ""
+                if dx_text:
+                    if runs:
+                        runs.append(("\n\n", None))
+                    runs.append(("ASSESSMENT\n", "H_BOLD"))
+                    runs.append(("\n", None))
+                    runs.append((dx_text + "\n\n", None))
+
             except Exception as e:
                 print("refresh_live_preview error:", e)
                 runs = []
