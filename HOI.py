@@ -4,7 +4,7 @@ from __future__ import annotations
 import tkinter as tk
 from tkinter import ttk, messagebox
 
-from HOIpdf import build_hoi_flowables
+from HOIpdf import build_hoi_flowables, _strip_auto_tag
 
 from scrollframe import ScrollFrame
 
@@ -647,6 +647,22 @@ class HOIPage(ttk.Frame):
         if mode != "ROF":
             return []
         return self.get_live_preview_runs()
+
+    def get_live_preview_runs_moi(self):
+        """
+        Returns MOI (Mechanism of Injury) runs for Live Preview.
+        Same content as PDF: moi_var text with [AUTO:MOI] stripped.
+        Position: after History of Present Illness, before Subjectives.
+        """
+        raw = (self.moi_var.get() or "").strip()
+        moi_text = _strip_auto_tag(raw)
+        if not moi_text:
+            return []
+        runs = []
+        runs.append(("Mechanism of Injury (MOI):\n", "H_BOLD"))
+        runs.append(("\n", None))
+        runs.append((moi_text + "\n\n", None))
+        return runs    
     
     def _bind_wheel_to_widget(self, widget, *, yview_func=None, xview_func=None):
         """

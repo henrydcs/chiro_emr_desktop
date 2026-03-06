@@ -522,7 +522,15 @@ class App(tk.Tk):
                     if all_rof and (mode or "").strip() not in ("ROF", ""):
                         runs.extend(all_rof)
 
-                # 2. Subjectives
+                # 2. HOI History (MOI) — after History of Present Illness, before Subjectives
+                if hasattr(self.hoi_page, "get_live_preview_runs_moi"):
+                    moi_runs = self.hoi_page.get_live_preview_runs_moi() or []
+                    if moi_runs:
+                        if runs:
+                            runs.append(("\n\n", None))
+                        runs.extend(moi_runs)
+
+                # 3. Subjectives
                 if hasattr(self, "subjectives_page") and self.subjectives_page is not None:
                     subj_runs = self.subjectives_page.get_live_preview_runs()
                     if subj_runs:
@@ -1364,7 +1372,14 @@ class App(tk.Tk):
         self.hoi_page = HOIPage(self.content, self.schedule_autosave)
         self.after(50, self.request_live_preview_refresh)
 
-        self.subjectives_page = SubjectivesPage(self.content, self.schedule_autosave, app=self)
+        def _subjectives_on_change():
+            self.schedule_autosave()
+            try:
+                if hasattr(self, "hoi_page") and self.hoi_page is not None:
+                    self.hoi_page._regen_moi_now()
+            except Exception:
+                pass
+        self.subjectives_page = SubjectivesPage(self.content, _subjectives_on_change, app=self)
         self.family_social_page = TextPage(self.content, "Family/Social History", self.schedule_autosave)
         self.objectives_page = ObjectivesPage(self.content, self.schedule_autosave)
         self.diagnosis_page = DiagnosisPage(self.content, self.schedule_autosave)
@@ -1977,6 +1992,12 @@ class App(tk.Tk):
             self.plan_page.load_struct(plan)
         else:
             self.plan_page.load_struct({"plan_text": str(plan or ""), "auto_enabled": False})
+                # Regen MOI so regions sentence includes subjectives (HOI loads before subjectives)
+        try:
+            if hasattr(self, "hoi_page") and self.hoi_page is not None:
+                self.hoi_page._regen_moi_now()
+        except Exception:
+            pass
 
     def apply_template_to_current_exam(self, template_dict: dict):
         """
