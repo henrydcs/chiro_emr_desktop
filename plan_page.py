@@ -972,6 +972,7 @@ class PlanPage(ttk.Frame):
             "98941: Spinal, 3-4 regions",
             "98942: Spinal, 5 regions",
             "98943: Extraspinal",
+            "0000: No CMT Today",
         ]
 
         cmt_combo = ttk.Combobox(frame, textvariable=self.current_cmt_code, values=cmt_options, state="readonly", width=50)
