@@ -400,7 +400,7 @@ class SubjectivesPage(ttk.Frame):
         self.content.columnconfigure(0, weight=1)
 
         # Therapy Only Home area: minimal content + back button
-                # Therapy Only Home area: Back button + Therapy Only block (same logic as radio view)
+        # Therapy Only Home area: Back button + Therapy Only block (same logic as radio view)
         therapy_home_top = ttk.Frame(self._therapy_only_home_frame)
         therapy_home_top.pack(fill="x", padx=10, pady=(10, 6))
         ttk.Button(
