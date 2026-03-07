@@ -138,12 +138,16 @@ def _has_any_services(d: dict) -> bool:
     services = _services_ctx(d)
     cmt_code = _clean(services.get("cmt_code", ""))
     therapy_data = services.get("therapy_data", {}) or {}
+    exam_code = _clean(services.get("em_code", services.get("exam_code", "")))
+    exam_notes = _clean(services.get("exam_notes", ""))
     if cmt_code:
         return True
     if isinstance(therapy_data, dict):
         for _, v in therapy_data.items():
             if isinstance(v, dict) and v:
                 return True
+    if exam_code or exam_notes:
+        return True
     return False
 
 
@@ -226,7 +230,8 @@ def _build_services_flowables(d: dict, B) -> list:
 
     has_cmt = bool(cmt_code)
     has_therapy = isinstance(therapy_data, dict) and any(isinstance(v, dict) and v for v in therapy_data.values())
-    if not (has_cmt or has_therapy):
+    has_em = bool(exam_code or exam_notes)
+    if not (has_cmt or has_therapy or has_em):
         return []
 
     # --- Styles (indent levels) ---
@@ -413,7 +418,8 @@ def _services_to_plain_text(d: dict) -> str:
     has_therapy = isinstance(therapy_data, dict) and any(
         isinstance(v, dict) and v for v in therapy_data.values()
     )
-    if not (has_cmt or has_therapy):
+    has_em = bool(exam_code or exam_notes)
+    if not (has_cmt or has_therapy or has_em):
         return ""
 
     lines: list[str] = []
