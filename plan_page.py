@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import tkinter as tk
 from tkinter import ttk
+from scrollframe import ScrollFrame
 
 AUTO_PLAN_TAG = "[AUTO:PLAN]"
 
@@ -230,6 +231,7 @@ class PlanPage(ttk.Frame):
         self.on_change = on_change
 
         self._loading = False
+        self._section_buttons = {}
 
         # optional providers (like HOI): can be set by app
         self._patient_provider = None  # fn -> dict
@@ -274,7 +276,7 @@ class PlanPage(ttk.Frame):
         # E/M (Exam) code + exam notes (no PDF yet)
         # self.current_em_code = tk.StringVar(value="")
         # self.exam_notes = ""  # stored as plain string for now
-
+        
         # UI
         self._build_ui()
         self._wire_triggers()
@@ -421,24 +423,71 @@ class PlanPage(ttk.Frame):
         title = ttk.Label(self, text="PLAN OF CARE", font=("Segoe UI", 14, "bold"))
         title.grid(row=0, column=0, sticky="w", padx=10, pady=(10, 6))
 
-                # Main panels
+        # --- Permanent buttons (like HOI Blocks) ---
         top = ttk.Frame(self)
-        top.grid(row=1, column=0, sticky="ew", padx=10)
+        top.grid(row=1, column=0, sticky="ew", padx=10, pady=(0, 6))
         top.columnconfigure(0, weight=1)
-        top.columnconfigure(1, weight=1)
 
-        left = ttk.Frame(top)
-        left.grid(row=0, column=0, sticky="nsew", padx=(0, 8), pady=6)
-        left.columnconfigure(0, weight=1)
+        ttk.Label(top, text="Plan Sections:").pack(side="left", padx=(0, 8))
 
-        right = ttk.Frame(top)
-        right.grid(row=0, column=1, sticky="nsew", padx=(8, 0), pady=6)
-        right.columnconfigure(0, weight=1)
+        self.block_buttons = ttk.Frame(top)
+        self.block_buttons.pack(side="left", fill="x", expand=True)
 
-                # -----------------------------
-        # TREATMENT (collapsible)
-        # -----------------------------
-        treat_section = CollapsibleSection(left, "Treatment", start_open=True)
+        def add_btn(name):
+            btn = tk.Button(
+                self.block_buttons,
+                text=name,
+                font=("Segoe UI", 10),
+                relief="raised",
+                bd=1,
+                command=lambda n=name: self._show_plan_block(n),
+            )
+            btn.pack(side="left", padx=4)
+            self._section_buttons[name] = btn
+
+        add_btn("Treatment")
+        add_btn("Schedule")
+        add_btn("Regions Treated")
+        add_btn("Services Provided Today")
+        add_btn("Goals")
+        add_btn("Notes")
+        add_btn("Plan Narrative")
+
+        # --- Container (stacked frames, like HOI) ---
+        self.scroll = ScrollFrame(self)
+        self.scroll.grid(row=2, column=0, sticky="nsew", padx=10, pady=(0, 10))
+        self.rowconfigure(2, weight=1)
+
+        self._plan_container = ttk.Frame(self.scroll.content)
+        self._plan_container.pack(fill="both", expand=True)
+        self._plan_container.grid_rowconfigure(0, weight=1)
+        self._plan_container.grid_columnconfigure(0, weight=1)
+
+        self._plan_frames = {
+            "Treatment": self._build_treatment_frame(self._plan_container),
+            "Schedule": self._build_schedule_frame(self._plan_container),
+            "Regions Treated": self._build_regions_frame(self._plan_container),
+            "Services Provided Today": self._build_services_frame(self._plan_container),
+            "Goals": self._build_goals_frame(self._plan_container),
+            "Notes": self._build_notes_frame(self._plan_container),
+            "Plan Narrative": self._build_narrative_frame(self._plan_container),
+        }
+
+        for f in self._plan_frames.values():
+            f.grid(row=0, column=0, sticky="nsew")
+
+        # Show Treatment by default
+        self._show_plan_block("Treatment")
+
+        # enable/disable (other) entries initially
+        self._sync_other_entries()
+
+    def _build_treatment_frame(self, parent):
+        """Treatment / Care types block."""
+        f = ttk.Frame(parent)
+        f.columnconfigure(0, weight=1)
+
+        treat_section = CollapsibleSection(f, "Treatment", start_open=True)
         treat_section.grid(row=0, column=0, sticky="ew", padx=0, pady=(0, 8))
         treat_section.columnconfigure(0, weight=1)
 
@@ -453,43 +502,14 @@ class PlanPage(ttk.Frame):
             cb = ttk.Checkbutton(care_box, text=label, variable=self._care_vars[label])
             cb.grid(row=i, column=0, sticky="w", padx=8, pady=2)
 
-        # -----------------------------
-        # REGIONS TREATED (collapsible)  <-- SIBLING of Treatment
-        # -----------------------------
-        reg_section = CollapsibleSection(left, "Regions Treated", start_open=True)
-        reg_section.grid(row=1, column=0, sticky="ew", padx=0, pady=(0, 8))
-        reg_section.columnconfigure(0, weight=1)
+        return f
 
-        reg_box = reg_section.content
-        reg_box.columnconfigure(0, weight=1)  # regions
-        reg_box.columnconfigure(1, weight=1)  # services column (right side)
+    def _build_schedule_frame(self, parent):
+        """Schedule block (frequency, duration, re-eval, auto-generate, print toggle)."""
+        f = ttk.Frame(parent)
+        f.columnconfigure(0, weight=1)
 
-        # LEFT: regions checkboxes in 2 columns
-        regions_frame = ttk.Frame(reg_box)
-        regions_frame.grid(row=0, column=0, sticky="nsew", padx=(8, 4), pady=8)
-        regions_frame.columnconfigure(0, weight=1)
-        regions_frame.columnconfigure(1, weight=1)
-
-        for i, label in enumerate(self.REGIONS):
-            r = i // 2
-            c = i % 2
-            cb = ttk.Checkbutton(regions_frame, text=label, variable=self._region_vars[label])
-            cb.grid(row=r, column=c, sticky="w", padx=8, pady=2)
-
-        # RIGHT: Services Provided Today (button + scrollable centered summary)
-        services_frame = ttk.Frame(reg_box)
-        services_frame.grid(row=0, column=1, sticky="nsew", padx=(4, 8), pady=8)
-        services_frame.columnconfigure(0, weight=1)
-        services_frame.rowconfigure(1, weight=1)
-
-        self._build_services_ui(services_frame)
-
-
-
-        # -----------------------------
-        # SCHEDULE (collapsible)
-        # -----------------------------
-        sched_section = CollapsibleSection(right, "Schedule", start_open=True)
+        sched_section = CollapsibleSection(f, "Schedule", start_open=True)
         sched_section.grid(row=0, column=0, sticky="ew", padx=0, pady=(0, 8))
         sched_section.columnconfigure(0, weight=1)
 
@@ -531,8 +551,6 @@ class PlanPage(ttk.Frame):
             variable=self.auto_plan_var
         ).pack(side="left")
 
-
-        # PDF schedule toggle button (standalone)
         self._btn_print_schedule = ttk.Button(
             sched_box,
             text="Schedule: ON (PDF)",
@@ -541,35 +559,86 @@ class PlanPage(ttk.Frame):
         self._btn_print_schedule.grid(row=4, column=0, columnspan=4, sticky="w", padx=8, pady=(4, 8))
         self._refresh_print_schedule_btn()
 
+        return f
+    
+    def _build_regions_frame(self, parent):
+        """Regions Treated block (region checkboxes only)."""
+        f = ttk.Frame(parent)
+        f.columnconfigure(0, weight=1)
 
-        # Goals + notes
-        mid = ttk.Frame(self)
-        mid.grid(row=2, column=0, sticky="ew", padx=10)
-        mid.columnconfigure(2, weight=4)
-        mid.columnconfigure(2, weight=1)
+        reg_section = CollapsibleSection(f, "Regions Treated", start_open=True)
+        reg_section.grid(row=0, column=0, sticky="ew", padx=0, pady=(0, 8))
+        reg_section.columnconfigure(0, weight=1)
 
-        goals_box = ttk.Labelframe(mid, text="Goals")
-        goals_box.grid(row=0, column=0, sticky="nsew", padx=(0, 8), pady=6)
+        reg_box = reg_section.content
+        reg_box.columnconfigure(0, weight=1)
+        reg_box.columnconfigure(1, weight=1)
+
+        regions_frame = ttk.Frame(reg_box)
+        regions_frame.grid(row=0, column=0, sticky="nsew", padx=(8, 4), pady=8)
+        regions_frame.columnconfigure(0, weight=1)
+        regions_frame.columnconfigure(1, weight=1)
+
+        for i, label in enumerate(self.REGIONS):
+            r = i // 2
+            c = i % 2
+            cb = ttk.Checkbutton(regions_frame, text=label, variable=self._region_vars[label])
+            cb.grid(row=r, column=c, sticky="w", padx=8, pady=2)
+
+        return f
+    
+    def _build_services_frame(self, parent):
+        """Services Provided Today block (button + summary)."""
+        f = ttk.Frame(parent)
+        f.columnconfigure(0, weight=1)
+        f.rowconfigure(1, weight=1)
+
+        self._build_services_ui(f)
+
+        return f
+    
+    def _build_goals_frame(self, parent):
+        """Goals block."""
+        f = ttk.Frame(parent)
+        f.columnconfigure(0, weight=1)
+
+        goals_box = ttk.Labelframe(f, text="Goals")
+        goals_box.grid(row=0, column=0, sticky="nsew", padx=0, pady=6)
         goals_box.columnconfigure(0, weight=1)
 
         for i, label in enumerate(self.GOALS):
             cb = ttk.Checkbutton(goals_box, text=label, variable=self._goal_vars[label])
             cb.grid(row=i, column=0, sticky="w", padx=8, pady=2)
 
-        notes_box = ttk.Labelframe(mid, text="Notes")
-        notes_box.grid(row=0, column=1, sticky="nsew", padx=(8, 0), pady=6)
+        return f
+    
+    def _build_notes_frame(self, parent):
+        """Notes block (custom notes textbox)."""
+        f = ttk.Frame(parent)
+        f.columnconfigure(0, weight=1)
+        f.rowconfigure(0, weight=1)
+
+        notes_box = ttk.Labelframe(f, text="Notes")
+        notes_box.grid(row=0, column=0, sticky="nsew", padx=0, pady=6)
         notes_box.columnconfigure(0, weight=1)
+        notes_box.rowconfigure(0, weight=1)
 
         self.custom_notes = tk.Text(notes_box, height=10, wrap="word")
         self.custom_notes.grid(row=0, column=0, sticky="nsew", padx=8, pady=8)
 
-        # Narrative (collapsible)
-        narr_section = CollapsibleSection(self, "Plan Narrative", start_open=False)  # collapsed by default
-        narr_section.grid(row=3, column=0, sticky="nsew", padx=10, pady=(6, 12))
+        return f
+    
+    def _build_narrative_frame(self, parent):
+        """Plan Narrative block."""
+        f = ttk.Frame(parent)
+        f.columnconfigure(0, weight=1)
+        f.rowconfigure(0, weight=1)
+
+        narr_section = CollapsibleSection(f, "Plan Narrative", start_open=False)
+        narr_section.grid(row=0, column=0, sticky="nsew", padx=0, pady=(0, 12))
         narr_section.columnconfigure(0, weight=1)
 
-        bottom = narr_section.content  # <-- use this as the container
-
+        bottom = narr_section.content
         bottom.columnconfigure(0, weight=1)
         bottom.rowconfigure(0, weight=1)
 
@@ -581,9 +650,14 @@ class PlanPage(ttk.Frame):
         ttk.Button(btns, text="Regenerate", command=self._regen_plan_now).pack(side="left")
         ttk.Button(btns, text="Clear", command=self._clear_plan_text).pack(side="left", padx=(8, 0))
 
-
-        # enable/disable (other) entries initially
-        self._sync_other_entries()
+        return f
+    
+    def _show_plan_block(self, name: str):
+        """Raise the selected plan block frame (tkRaise pattern, like HOI Blocks)."""
+        if name in self._plan_frames:
+            self._plan_frames[name].tkraise()
+            for key, btn in self._section_buttons.items():
+                btn.configure(font=("Segoe UI", 10, "bold") if key == name else ("Segoe UI", 10))
 
     def _wire_triggers(self):
         def _general_changed(*_):
