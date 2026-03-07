@@ -187,9 +187,6 @@ class SubjectivesPage(ttk.Frame):
         self._therapy_visible = False
 
 
-
-
-
     def _sync_therapy_visibility(self):
         if not self.blocks:
             self._hide_therapy()
@@ -278,11 +275,10 @@ class SubjectivesPage(ttk.Frame):
         has_block_content = any(
             (b.get_auto_generated_text() or "").strip() for b in self.blocks
         )
-        user_narratives = [(b.get_narrative() or "").strip() for b in self.blocks]
-        user_narratives = [t for t in user_narratives if t]
+        has_block_narrative = any((b.get_narrative() or "").strip() for b in self.blocks)
 
         # Show Subjectives heading if we have ANY subjectives content (mirrors PDF)
-        has_any_subjectives = bool(therapy or has_block_content or user_narratives)
+        has_any_subjectives = bool(therapy or has_block_content or has_block_narrative)
         if has_any_subjectives:
             runs.append(("SUBJECTIVES\n", "H_BOLD"))
             runs.append(("\n", None))
@@ -290,8 +286,10 @@ class SubjectivesPage(ttk.Frame):
         if therapy:
             runs.append((therapy + "\n\n", None))
 
+        orphan_narratives = []
         for b in self.blocks:
             auto = (b.get_auto_generated_text() or "").strip()
+            user_narr = (b.get_narrative() or "").strip()
             if auto:
                 region_code = b.region_var.get()
                 label = REGION_LABELS.get(region_code, "")
@@ -299,12 +297,16 @@ class SubjectivesPage(ttk.Frame):
                     runs.append((label + "\n", "H_BOLD"))
                     runs.append(("\n", None))
                 runs.append((auto + "\n\n", None))
+                # This block's textbox prints as last sentence(s) of this body region
+                if user_narr:
+                    runs.append((user_narr + "\n\n", None))
+            elif user_narr:
+                # Block has narrative but no auto (e.g. region is (none))
+                orphan_narratives.append(user_narr)
 
-        # Narrative text box: last in subjectives, one line of space before (mirrors PDF user_narratives)
-        if user_narratives:
-            combined = "\n\n".join(user_narratives)
+        if orphan_narratives:
             runs.append(("\n", None))
-            runs.append((combined + "\n\n", None))
+            runs.append(("\n\n".join(orphan_narratives) + "\n\n", None))
 
         return runs
 

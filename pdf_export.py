@@ -1728,18 +1728,23 @@ def payload_to_exam_sections(payload: dict):
     for b in (subj.get("blocks") or []):
         region = (b.get("region") or "").strip()
         user_text = (b.get("narrative") or "").strip()
+        included_in_narrative = False
 
         if region in REGION_LABELS:
             tokens = tokens_from_subjective_block(b)
             if tokens:
                 auto_text = _auto_text_from_block(b)
                 if auto_text:
+                    # Append this block's textbox as last sentence(s) of this body region block
+                    combined_text = auto_text + ("\n\n" + user_text if user_text else "")
                     narratives.append({
                         "title": REGION_LABELS[region],
-                        "text": auto_text,
+                        "text": combined_text,
                         "tokens": tokens,
                     })
-        if user_text:
+                    included_in_narrative = True
+
+        if user_text and not included_in_narrative:
             user_narratives.append(user_text)
 
     family_social = (soap.get("family_social") or "").strip()
