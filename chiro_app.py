@@ -1200,9 +1200,8 @@ class App(tk.Tk):
         left_root.pack_propagate(False)
 
         right_root = ttk.Frame(main)
-        right_root.pack(side="right", fill="both", expand=True)        
-        
-       
+        right_root.pack(side="right", fill="both", expand=True)      
+               
         # --- Header container (collapsible) ---
         self.header_container = ttk.Frame(left_root)
         self.header_container.pack(fill="x", padx=padx, pady=(padx, 0))

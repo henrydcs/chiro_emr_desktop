@@ -1624,16 +1624,10 @@ def _strip_dx_auto_tag(text: str) -> str:
 def _diagnosis_text_from_struct(dx_struct: dict) -> str:
     """
     Convert DiagnosisPage.to_dict() format into a printable text block.
-    Prefers dx_struct["text"] if present, else builds from blocks.
+    Always builds from blocks (diagnosis section). The "text" field is general notes.
     """
     if not isinstance(dx_struct, dict):
         return ""
-
-    # If the page stored a text box value, use it
-    txt = (dx_struct.get("text") or "").strip()
-    if txt:
-        return _strip_dx_auto_tag(txt)
-
 
     blocks = dx_struct.get("blocks") or []
     if not isinstance(blocks, list) or not blocks:
@@ -1660,7 +1654,6 @@ def _diagnosis_text_from_struct(dx_struct: dict) -> str:
         n += 1
 
     return "\n".join(lines).strip()
-
 
 # =======================================================
 # Subjectives: Therapy Only (checkbox paragraph)
@@ -2271,38 +2264,13 @@ def build_combined_pdf(path: str, payloads: list):
             soap = soap or {}
             dx_struct = soap.get("diagnosis_struct") or {}
 
-            # 1) Prefer dx_struct["text"] if present
+            # Match Live Preview: always build diagnosis from blocks
             if isinstance(dx_struct, dict):
-                t = (dx_struct.get("text") or "").strip()
-                if t:
-                    return _strip_dx_auto_tag(t)
+                dx_text = _diagnosis_text_from_struct(dx_struct)
+                if dx_text:
+                    return dx_text
 
-
-                # 2) Else build from blocks
-                blocks = dx_struct.get("blocks") or []
-                if isinstance(blocks, list) and blocks:
-                    lines = []
-                    n = 1
-                    for b in blocks:
-                        if not isinstance(b, dict):
-                            continue
-                        label = (b.get("dx_label") or "").strip()
-                        code = (b.get("icd10") or "").strip()
-                        edit = (b.get("edit_text") or "").strip()
-
-                        text = edit or label
-                        if not text:
-                            continue
-
-                        lines.append(f"{n}. {text}" + (f" ({code})" if code else ""))
-                        n += 1
-
-                    out = "\n".join(lines).strip()
-                    if out:
-                        return out
-            
-
-            # 3) Fallback to legacy string if struct missing
+            # Fallback for legacy cases that only have soap["diagnosis"] string
             return _strip_dx_auto_tag((soap.get("diagnosis") or "").strip())
 
 

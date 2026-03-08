@@ -16,27 +16,8 @@ def _strip_auto_tag(text: str) -> str:
         lines = lines[:-1]
     return "\n".join(lines).strip()
 
-def set_value(self, text: str):
-    """
-    Backward-compat: allow older cases that only stored soap["diagnosis"] as a string
-    to load into the text box.
-    """
-    self._loading = True
-    try:
-        self._text_is_manual = True  # treat as provider-entered text
-        self._set_text(text or "")
-        # Ensure UI frames reflect state (optional)
-        # self.text_visible.set(True)
-        # self._apply_collapse_states()
-    finally:
-        self._loading = False
-    self._changed()
-
-
-
 def _clean(s: str) -> str:
     return (s or "").strip()
-
 
 # ----------------------------
 # SINGLE unified Dx list (with ICD-10 shown)
@@ -316,10 +297,7 @@ class DiagnosisPage(ttk.Frame):
 
         self._loading = False
         self.blocks: list[DxBlock] = []
-
-        # if provider types in the textbox, stop overwriting until they click rebuild
-        self._text_is_manual = False
-
+        
         # collapse states
         self.blocks_visible = tk.BooleanVar(value=True)
         self.text_visible = tk.BooleanVar(value=False)  # START HIDDEN (requested)
@@ -810,37 +788,14 @@ class DiagnosisPage(ttk.Frame):
             f.grid(row=0, column=0, sticky="nsew")
 
         self.screen_container.rowconfigure(0, weight=1)
-        self.screen_container.columnconfigure(0, weight=1)
-
-        
-
-
-
-
-
-
+        self.screen_container.columnconfigure(0, weight=1)        
         # Top controls
         top = ttk.Frame(self.main_screen)
         top.pack(fill="x", padx=padx, pady=(10, 6))
 
         ttk.Button(top, text="Add Dx", command=self.add_block).pack(side="left")
         ttk.Button(top, text="Reset Dx", command=self._confirm_reset).pack(side="left", padx=(8, 0))
-
-        ttk.Button(
-            top,
-            text="Rebuild Text",
-            command=self.rebuild_text_from_blocks
-        ).pack(side="left", padx=(18, 0))
-
-
-        self.manual_lock_var = tk.BooleanVar(value=False)
-        ttk.Checkbutton(
-            top,
-            text="Lock Text (manual edits)",
-            variable=self.manual_lock_var,
-            command=self._changed
-        ).pack(side="left", padx=(10, 0))
-
+        
         ttk.Button(
             top,
             text="Assessment",
@@ -926,8 +881,7 @@ class DiagnosisPage(ttk.Frame):
         right.grid(row=0, column=1, sticky="nsew", padx=(10, 0))
         right.columnconfigure(0, weight=1)
 
-        # ---- LEFT: Diagnosis Text (editable) ----
-        ttk.Label(left, text="Diagnosis Text (editable):").grid(row=0, column=0, sticky="w", pady=(0, 4))
+        ttk.Label(left, text="Notes (general text):").grid(row=0, column=0, sticky="w", pady=(0, 4))
 
         self.text = tk.Text(left, height=8, wrap="word")
         self.text.grid(row=1, column=0, sticky="nsew", pady=(0, 6))
@@ -1002,7 +956,7 @@ class DiagnosisPage(ttk.Frame):
 
         tip = (
             "Tip: Use ↑/↓ on a diagnosis block to change order. "
-            "Diagnoses will auto-renumber. The text box rebuilds automatically unless you type into it."
+            "Diagnoses will auto-renumber. Notes box is for general use."
         )
         self.tip_label = ttk.Label(self.main_screen, text=tip, foreground="gray")
         # packed in _apply_collapse_states with text_frame visibility
@@ -1093,14 +1047,13 @@ class DiagnosisPage(ttk.Frame):
         b.bind_actions(
             on_change=self._on_blocks_changed,
             on_remove=lambda bb=b: self.remove_block(bb),
-            on_move_up=lambda bb=b: self.move_block(bb, -1),
-            on_move_down=lambda bb=b: self.move_block(bb, +1),
+            on_move_up=lambda bb=b: self.move_block(bb, -1),   # swap: down = move to larger number
+            on_move_down=lambda bb=b: self.move_block(bb, +1), # swap: up = move to smaller number
         )
 
         self.blocks.append(b)
         self._layout_blocks()
         self._on_blocks_changed()
-
 
     def remove_block(self, b: DxBlock):
         if b not in self.blocks:
@@ -1137,33 +1090,12 @@ class DiagnosisPage(ttk.Frame):
         self.grid_area.update_idletasks()
         self._on_blocks_inner_configure()
 
-
-
-    # ---------- text sync ----------
+    
     def _on_blocks_changed(self):
         if self._loading:
             return
-        if not self.manual_lock_var.get():
-            self._text_is_manual = False
-            self.rebuild_text_from_blocks()
         self._changed()
-
-
-    def rebuild_text_from_blocks(self):
-        lines = [b.to_line(i + 1) for i, b in enumerate(self.blocks)]
-        out = "\n".join(lines).strip()
-        if out:
-            out = out + "\n" + AUTO_TAG
-        self._set_text(out)
-        self._text_is_manual = False
-        self._changed()
-
-        # If user clicks rebuild, we can optionally auto-show the box
-        # Comment out if you prefer it to remain hidden:
-        # if not self.text_visible.get():
-        #     self.text_visible.set(True)
-        #     self._apply_collapse_states()
-
+    
     def _set_text(self, s: str):
         self.text.delete("1.0", "end")
         self.text.insert("1.0", s or "")
@@ -1175,8 +1107,6 @@ class DiagnosisPage(ttk.Frame):
     def _on_text_edited(self, _evt=None):
         if self._loading:
             return
-        if self.manual_lock_var.get():
-            self._text_is_manual = True
         self._changed()
 
 
@@ -1194,12 +1124,20 @@ class DiagnosisPage(ttk.Frame):
             return True
         return bool(_clean(self.get_value()))
 
-    def get_value(self) -> str:
-        # If the textbox is supposed to be auto-generated, force it to be correct
-        # right before returning (covers hidden textbox + export edge cases).
-        if not self._loading and not self._text_is_manual:
-            self.rebuild_text_from_blocks()
+    def set_value(self, text: str):
+        """
+        Backward-compat: allow older cases that only stored soap["diagnosis"] as a string
+        to load into the general notes text box.
+        """
+        self._loading = True
+        try:
+            self._set_text(text or "")
+        finally:
+            self._loading = False
+        self._changed()
 
+    def get_value(self) -> str:
+        """Returns the general-purpose notes text (not diagnosis from blocks)."""
         raw = _clean(self.text.get("1.0", "end-1c"))
         return _strip_auto_tag(raw)
 
@@ -1209,8 +1147,7 @@ class DiagnosisPage(ttk.Frame):
         try:
             for b in list(self.blocks):
                 b.destroy()
-            self.blocks.clear()
-            self._text_is_manual = False
+            self.blocks.clear()            
             self._set_text("")
             # ✅ NEW: clear Prognosis / Imaging / Referrals (structured)
             try:
@@ -1277,7 +1214,6 @@ class DiagnosisPage(ttk.Frame):
         return {
             "blocks": [b.to_dict() for b in self.blocks],
             "text": txt,
-            "text_is_manual": self._text_is_manual,
             "assessment_choice": self.assessment_choice_var.get(),
             "assessment_custom": self.assessment_custom_var.get(),
             "causation_choice": self.causation_choice_var.get() if hasattr(self, "causation_choice_var") else "(select)",
@@ -1325,8 +1261,8 @@ class DiagnosisPage(ttk.Frame):
                 b.bind_actions(
                     on_change=self._on_blocks_changed,
                     on_remove=lambda bb=b: self.remove_block(bb),
-                    on_move_up=lambda bb=b: self.move_block(bb, -1),
-                    on_move_down=lambda bb=b: self.move_block(bb, +1),
+                    on_move_up=lambda bb=b: self.move_block(bb, -1),   # swap: down = move to larger number
+                    on_move_down=lambda bb=b: self.move_block(bb, +1), # swap: up = move to smaller number
                 )
 
                 b.from_dict(bd or {})
@@ -1339,8 +1275,6 @@ class DiagnosisPage(ttk.Frame):
 
             self._layout_blocks()
 
-
-            self._text_is_manual = bool(data.get("text_is_manual", False))
             self._set_text(data.get("text") or "")
 
             self.prognosis_var.set(data.get("prognosis") or "(select)")
@@ -1394,11 +1328,7 @@ class DiagnosisPage(ttk.Frame):
                 self._causation_refresh(getattr(self, "_CAUSATION_TEXT_MAP", {}))
             except Exception:
                 pass
-
-            if not _clean(self.get_value()):
-                self._text_is_manual = False
-                self.rebuild_text_from_blocks()
-
+            
             # apply collapse states after loading
             self._apply_collapse_states(startup=True)
 
