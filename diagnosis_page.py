@@ -4,6 +4,8 @@ from __future__ import annotations
 import tkinter as tk
 from tkinter import ttk, messagebox
 
+from scrollframe import ScrollFrame
+
 AUTO_TAG = "[AUTO:DX]"
 
 def _strip_auto_tag(text: str) -> str:
@@ -437,323 +439,6 @@ class DiagnosisPage(ttk.Frame):
 
         self._changed()        
 
-    def _build_assessment_screen(self, parent, padx=10):
-            # Header row with Back button
-            hdr = ttk.Frame(parent)
-            hdr.pack(fill="x", padx=padx, pady=(10, 6))
-
-            ttk.Button(hdr, text="← Back", command=self.show_main_screen).pack(side="left")
-            ttk.Label(hdr, text="Assessment Statement", font=("Segoe UI", 12, "bold")).pack(side="left", padx=(10, 0))
-
-            ttk.Separator(parent).pack(fill="x", padx=padx, pady=(6, 10))
-
-            body = ttk.Frame(parent)
-            body.pack(fill="both", expand=True, padx=padx, pady=(0, 10))
-            body.columnconfigure(0, weight=1)
-
-            # Vars
-            if not hasattr(self, "assessment_choice_var"):
-                self.assessment_choice_var = tk.StringVar(value="(select)")
-            if not hasattr(self, "assessment_custom_var"):
-                self.assessment_custom_var = tk.StringVar(value="")
-
-            ASSESSMENT_STMT_CHOICES = [
-                "(select)",
-                "Standard exam / evaluation day",
-                "Therapy-only visit",
-                "Re-exam / progress visit",
-                "Discharge / final visit",
-                "Custom (free text)",
-            ]
-
-            ASSESSMENT_STMT_TEXT = {
-                "Standard exam / evaluation day":
-                    "Clinical findings are consistent with the diagnoses listed below based on the patient’s history and objective examination.",
-                "Therapy-only visit":
-                    "The patient was seen for continuation of therapeutic treatment per the established plan of care. No re-examination was performed at this visit.",
-                "Re-exam / progress visit":
-                    "Findings were reviewed and treatment response assessed. The diagnoses listed below remain consistent with the patient’s presentation at this visit.",
-                "Discharge / final visit":
-                    "The patient was seen for final assessment and disposition. Diagnoses and clinical status were reviewed, and ongoing recommendations are documented below.",
-            }
-
-            ttk.Label(body, text="Choose statement type:").grid(row=0, column=0, sticky="w")
-
-            cb = ttk.Combobox(
-                body,
-                textvariable=self.assessment_choice_var,
-                values=ASSESSMENT_STMT_CHOICES,
-                state="readonly",
-                width=44,
-            )
-            cb.grid(row=1, column=0, sticky="ew", pady=(4, 10))
-            cb.bind("<<ComboboxSelected>>", lambda e: self._assessment_screen_refresh(ASSESSMENT_STMT_TEXT))
-
-            # Preview label
-            self.assess_preview = ttk.Label(body, text="", wraplength=700, justify="left", foreground="gray")
-            self.assess_preview.grid(row=2, column=0, sticky="w", pady=(0, 10))
-
-            # Custom entry (shown/hidden)
-            self.assess_custom_row = ttk.Frame(body)
-            self.assess_custom_row.grid(row=3, column=0, sticky="ew")
-            self.assess_custom_row.columnconfigure(0, weight=1)
-
-            ttk.Label(self.assess_custom_row, text="Custom statement:").grid(row=0, column=0, sticky="w")
-            ent = ttk.Entry(self.assess_custom_row, textvariable=self.assessment_custom_var)
-            ent.grid(row=1, column=0, sticky="ew", pady=(4, 0))
-            self.assessment_custom_var.trace_add("write", lambda *_: self._changed())
-
-            # Start hidden until Custom is selected
-            self.assess_custom_row.grid_remove()
-
-            # Initial refresh
-            self._assessment_screen_refresh(ASSESSMENT_STMT_TEXT)
-
-    def _build_employment_screen(self, parent, padx=10):
-        # Optional: clear screen if you ever rebuild it
-        for child in parent.winfo_children():
-            child.destroy()
-
-        hdr = ttk.Frame(parent)
-        hdr.pack(fill="x", padx=padx, pady=(10, 6))
-
-        ttk.Button(hdr, text="← Diagnosis", command=self.show_main_screen).pack(side="left")
-        ttk.Button(hdr, text="← Assessment", command=self.show_assessment_screen).pack(side="left", padx=(8, 0))
-        ttk.Label(hdr, text="Employment / Work Status", font=("Segoe UI", 12, "bold")).pack(side="left", padx=(12, 0))
-
-        ttk.Separator(parent).pack(fill="x", padx=padx, pady=(6, 10))
-
-        body = ttk.Frame(parent)
-        body.pack(fill="both", expand=True, padx=padx, pady=(0, 10))
-        body.columnconfigure(0, weight=1)
-
-        # Vars
-        if not hasattr(self, "employment_status_var"):
-            self.employment_status_var = tk.StringVar(value="(select)")
-        if not hasattr(self, "work_plan_var"):
-            self.work_plan_var = tk.StringVar(value="(select)")
-        if not hasattr(self, "employment_notes_var"):
-            self.employment_notes_var = tk.StringVar(value="")
-        if not hasattr(self, "employment_other_var"):
-            self.employment_other_var = tk.StringVar(value="")
-
-        # Choices
-        if not hasattr(self, "employment_status_choices"):
-            self.employment_status_choices = [
-                "(select)",
-                "Employed Full-Time",
-                "Employed Part-Time",
-                "Self-Employed",
-                "Unemployed",
-                "a Student",
-                "Retired",
-                "a Homemaker",
-                "Disabled / Unable to Work",
-                "on a Leave of Absence",
-                "Other (free text)",
-            ]
-
-        work_plan_choices = [
-            "(select)",  # ✅ do not print
-            "Full Duty (No Restrictions)",
-            "Modified Duty (Work Restrictions)",
-            "Off Work / TTD (Temporary Total Disability)",
-            "Off Work (Work Status Note Only)",
-            "Work Restrictions Pending Re-evaluation",
-            "Disability Note Requested",
-            "Return to Work Note Requested",
-            "FMLA / Leave Documentation Requested",
-            "Referral for Work Capacity Evaluation",
-        ]
-
-        # --- Two dropdowns side-by-side ---
-        row = ttk.Frame(body)
-        row.grid(row=0, column=0, sticky="ew")
-        row.columnconfigure(0, weight=1)
-        row.columnconfigure(1, weight=1)
-
-        left = ttk.Frame(row)
-        left.grid(row=0, column=0, sticky="ew", padx=(0, 10))
-        left.columnconfigure(0, weight=1)
-
-        right = ttk.Frame(row)
-        right.grid(row=0, column=1, sticky="ew", padx=(10, 0))
-        right.columnconfigure(0, weight=1)
-
-        ttk.Label(left, text="Current employment status:").grid(row=0, column=0, sticky="w")
-        self.employment_cb = ttk.Combobox(
-            left,
-            textvariable=self.employment_status_var,
-            values=self.employment_status_choices,
-            state="readonly",
-        )
-        self.employment_cb.grid(row=1, column=0, sticky="ew", pady=(4, 0))
-        self.employment_cb.bind("<<ComboboxSelected>>", lambda e: self._changed())
-
-        ttk.Label(right, text="Work restrictions / disability plan:").grid(row=0, column=0, sticky="w")
-        self.work_plan_cb = ttk.Combobox(
-            right,
-            textvariable=self.work_plan_var,
-            values=work_plan_choices,
-            state="readonly",
-        )
-        self.work_plan_cb.grid(row=1, column=0, sticky="ew", pady=(4, 0))
-        self.work_plan_cb.bind("<<ComboboxSelected>>", lambda e: self._changed())
-
-        # --- Optional "Other employment status" line ---
-        self.employment_other_row = ttk.Frame(body)
-        self.employment_other_row.grid(row=1, column=0, sticky="ew", pady=(10, 0))
-        self.employment_other_row.columnconfigure(0, weight=1)
-
-        ttk.Label(self.employment_other_row, text="Other employment status:").grid(row=0, column=0, sticky="w")
-        ttk.Entry(self.employment_other_row, textvariable=self.employment_other_var).grid(
-            row=1, column=0, sticky="ew", pady=(4, 0)
-        )
-        self.employment_other_var.trace_add("write", lambda *_: self._changed())
-        self.employment_other_row.grid_remove()
-
-        def _refresh_other_visibility(*_):
-            if (self.employment_status_var.get() or "").strip() == "Other (free text)":
-                self.employment_other_row.grid()
-            else:
-                self.employment_other_row.grid_remove()
-            self._changed()
-
-        self.employment_status_var.trace_add("write", _refresh_other_visibility)
-        _refresh_other_visibility()
-
-        # --- Notes box (bottom) ---
-        ttk.Label(body, text="Additional notes (optional):").grid(row=2, column=0, sticky="w", pady=(14, 4))
-
-        self.employment_notes = tk.Text(body, height=5, wrap="word")
-        self.employment_notes.grid(row=3, column=0, sticky="nsew")
-        body.rowconfigure(3, weight=1)
-
-        # Load existing notes into Text
-        self.employment_notes.delete("1.0", "end")
-        self.employment_notes.insert("1.0", self.employment_notes_var.get() or "")
-
-        def _sync_notes(*_):
-            try:
-                txt = self.employment_notes.get("1.0", "end-1c")
-                self.employment_notes_var.set(txt)
-            except Exception:
-                pass
-            self._changed()
-
-        self.employment_notes.bind("<KeyRelease>", lambda e: _sync_notes())
-        self.employment_notes.bind("<<Paste>>", lambda e: parent.after(1, _sync_notes))
-        self.employment_notes.bind("<<Cut>>", lambda e: parent.after(1, _sync_notes))
-        
-        
-    def _build_causation_screen(self, parent, padx=10):
-        # Optional: clear if rebuilt
-        for child in parent.winfo_children():
-            child.destroy()
-
-        hdr = ttk.Frame(parent)
-        hdr.pack(fill="x", padx=padx, pady=(10, 6))
-
-        ttk.Button(hdr, text="← Diagnosis", command=self.show_main_screen).pack(side="left")
-        ttk.Button(hdr, text="← Assessment", command=self.show_assessment_screen).pack(side="left", padx=(8, 0))
-        ttk.Button(hdr, text="← Employment", command=self.show_employment_screen).pack(side="left", padx=(8, 0))
-
-        ttk.Label(hdr, text="Causation Statement", font=("Segoe UI", 12, "bold")).pack(side="left", padx=(12, 0))
-
-        ttk.Separator(parent).pack(fill="x", padx=padx, pady=(6, 10))
-
-        body = ttk.Frame(parent)
-        body.pack(fill="both", expand=True, padx=padx, pady=(0, 10))
-        body.columnconfigure(0, weight=1)
-
-        # Vars
-        if not hasattr(self, "causation_choice_var"):
-            self.causation_choice_var = tk.StringVar(value="(select)")
-        if not hasattr(self, "causation_custom_var"):
-            self.causation_custom_var = tk.StringVar(value="")
-        if not hasattr(self, "causation_notes_var"):
-            self.causation_notes_var = tk.StringVar(value="")
-
-        CAUSATION_CHOICES = [
-            "(select)",  # ✅ do not print
-            "Causally related (WDM certainty)",
-            "Clinically consistent with reported mechanism (conservative)",
-            "Aggravation of pre-existing condition",
-            "Not causally related",
-            "Unable to determine at this time",
-            "Custom (free text)",
-        ]
-
-        CAUSATION_TEXT = {
-            "Causally related (WDM certainty)":
-                "Within a reasonable degree of medical certainty, the patient’s diagnosed conditions are causally related to the reported mechanism of injury.",
-            "Clinically consistent with reported mechanism (conservative)":
-                "The patient’s presentation and examination findings are clinically consistent with the reported mechanism of injury.",
-            "Aggravation of pre-existing condition":
-                "The current condition represents an aggravation of a pre-existing condition, as supported by the patient’s history and current clinical findings.",
-            "Not causally related":
-                "Based on the available history and examination findings, the diagnosed conditions are not causally related to the reported mechanism of injury.",
-            "Unable to determine at this time":
-                "Causation cannot be determined at this time based on the available information; additional history, records, and/or diagnostic testing may be required.",
-        }
-
-        ttk.Label(body, text="Select causation statement:").grid(row=0, column=0, sticky="w")
-        cb = ttk.Combobox(
-            body,
-            textvariable=self.causation_choice_var,
-            values=CAUSATION_CHOICES,
-            state="readonly",
-            width=54,
-        )
-        cb.grid(row=1, column=0, sticky="ew", pady=(4, 10))
-        cb.bind("<<ComboboxSelected>>", lambda e: self._causation_refresh(CAUSATION_TEXT))
-
-        # Preview
-        self.causation_preview = ttk.Label(body, text="", wraplength=760, justify="left", foreground="gray")
-        self.causation_preview.grid(row=2, column=0, sticky="w", pady=(0, 10))
-
-        # Custom row (hidden unless Custom)
-        self.causation_custom_row = ttk.Frame(body)
-        self.causation_custom_row.grid(row=3, column=0, sticky="ew")
-        self.causation_custom_row.columnconfigure(0, weight=1)
-
-        ttk.Label(self.causation_custom_row, text="Custom causation statement:").grid(row=0, column=0, sticky="w")
-        ttk.Entry(self.causation_custom_row, textvariable=self.causation_custom_var).grid(
-            row=1, column=0, sticky="ew", pady=(4, 0)
-        )
-        self.causation_custom_var.trace_add("write", lambda *_: self._changed())
-        self.causation_custom_row.grid_remove()
-        
-        # --- Notes section ---
-        ttk.Label(body, text="Additional causation notes (optional):").grid(
-            row=4, column=0, sticky="w", pady=(14, 4)
-        )
-
-        self.causation_notes = tk.Text(body, height=5, wrap="word")
-        self.causation_notes.grid(row=5, column=0, sticky="nsew")
-        body.rowconfigure(5, weight=1)
-
-        # Load existing value
-        self.causation_notes.delete("1.0", "end")
-        self.causation_notes.insert("1.0", self.causation_notes_var.get() or "")
-
-        def _sync_causation_notes(*_):
-            try:
-                txt = self.causation_notes.get("1.0", "end-1c")
-                self.causation_notes_var.set(txt)
-            except Exception:
-                pass
-            self._changed()
-
-        self.causation_notes.bind("<KeyRelease>", lambda e: _sync_causation_notes())
-        self.causation_notes.bind("<<Paste>>", lambda e: parent.after(1, _sync_causation_notes))
-        self.causation_notes.bind("<<Cut>>", lambda e: parent.after(1, _sync_causation_notes))
-
-        # Keep preset map for refresh during load
-        self._CAUSATION_TEXT_MAP = CAUSATION_TEXT
-
-        self._causation_refresh(CAUSATION_TEXT)
-        
     def _causation_refresh(self, preset_map: dict[str, str]):
         choice = (getattr(self, "causation_choice_var", None).get() or "").strip()
 
@@ -769,46 +454,315 @@ class DiagnosisPage(ttk.Frame):
 
         self._changed()
 
+    def _show_dx_block(self, name: str):
+        """Raise the selected section frame and update button styling."""
+        if name not in self._dx_frames:
+            return
+        self._dx_frames[name].tkraise()
+        for n, btn in self._section_buttons.items():
+            if n == name:
+                btn.configure(relief="sunken", font=("Segoe UI", 10, "bold"))
+            else:
+                btn.configure(relief="raised", font=("Segoe UI", 10))
+
+    def _build_assessment_frame(self, parent, padx=10) -> ttk.Frame:
+        """Build Assessment section frame (no back button)."""
+        fr = ttk.Frame(parent)
+        body = ttk.Frame(fr)
+        body.pack(fill="both", expand=True, padx=padx, pady=(10, 10))
+        body.columnconfigure(0, weight=1)
+
+        if not hasattr(self, "assessment_choice_var"):
+            self.assessment_choice_var = tk.StringVar(value="(select)")
+        if not hasattr(self, "assessment_custom_var"):
+            self.assessment_custom_var = tk.StringVar(value="")
+
+        ASSESSMENT_STMT_CHOICES = [
+            "(select)", "Standard exam / evaluation day", "Therapy-only visit",
+            "Re-exam / progress visit", "Discharge / final visit", "Custom (free text)",
+        ]
+        self.ASSESSMENT_STMT_TEXT = {
+            "Standard exam / evaluation day":
+                "Clinical findings are consistent with the diagnoses listed below based on the patient's history and objective examination.",
+            "Therapy-only visit":
+                "The patient was seen for continuation of therapeutic treatment per the established plan of care. No re-examination was performed at this visit.",
+            "Re-exam / progress visit":
+                "Findings were reviewed and treatment response assessed. The diagnoses listed below remain consistent with the patient's presentation at this visit.",
+            "Discharge / final visit":
+                "The patient was seen for final assessment and disposition. Diagnoses and clinical status were reviewed, and ongoing recommendations are documented below.",
+        }
+
+        ttk.Label(body, text="Choose statement type:").grid(row=0, column=0, sticky="w")
+        cb = ttk.Combobox(body, textvariable=self.assessment_choice_var, values=ASSESSMENT_STMT_CHOICES, state="readonly", width=44)
+        cb.grid(row=1, column=0, sticky="ew", pady=(4, 10))
+        cb.bind("<<ComboboxSelected>>", lambda e: self._assessment_screen_refresh(self.ASSESSMENT_STMT_TEXT))
+
+        self.assess_preview = ttk.Label(body, text="", wraplength=700, justify="left", foreground="gray")
+        self.assess_preview.grid(row=2, column=0, sticky="w", pady=(0, 10))
+
+        self.assess_custom_row = ttk.Frame(body)
+        self.assess_custom_row.grid(row=3, column=0, sticky="ew")
+        self.assess_custom_row.columnconfigure(0, weight=1)
+        ttk.Label(self.assess_custom_row, text="Custom statement:").grid(row=0, column=0, sticky="w")
+        ttk.Entry(self.assess_custom_row, textvariable=self.assessment_custom_var).grid(row=1, column=0, sticky="ew", pady=(4, 0))
+        self.assessment_custom_var.trace_add("write", lambda *_: self._changed())
+        self.assess_custom_row.grid_remove()
+
+        self._assessment_screen_refresh(self.ASSESSMENT_STMT_TEXT)
+        return fr
+
+    def _build_causation_frame(self, parent, padx=10) -> ttk.Frame:
+        """Build Causation section frame (no back button)."""
+        fr = ttk.Frame(parent)
+        body = ttk.Frame(fr)
+        body.pack(fill="both", expand=True, padx=padx, pady=(10, 10))
+        body.columnconfigure(0, weight=1)
+
+        if not hasattr(self, "causation_choice_var"):
+            self.causation_choice_var = tk.StringVar(value="(select)")
+        if not hasattr(self, "causation_custom_var"):
+            self.causation_custom_var = tk.StringVar(value="")
+        if not hasattr(self, "causation_notes_var"):
+            self.causation_notes_var = tk.StringVar(value="")
+
+        CAUSATION_CHOICES = [
+            "(select)", "Causally related (WDM certainty)", "Clinically consistent with reported mechanism (conservative)",
+            "Aggravation of pre-existing condition", "Not causally related", "Unable to determine at this time", "Custom (free text)",
+        ]
+        CAUSATION_TEXT = {
+            "Causally related (WDM certainty)":
+                "Within a reasonable degree of medical certainty, the patient's diagnosed conditions are causally related to the reported mechanism of injury.",
+            "Clinically consistent with reported mechanism (conservative)":
+                "The patient's presentation and examination findings are clinically consistent with the reported mechanism of injury.",
+            "Aggravation of pre-existing condition":
+                "The current condition represents an aggravation of a pre-existing condition, as supported by the patient's history and current clinical findings.",
+            "Not causally related":
+                "Based on the available history and examination findings, the diagnosed conditions are not causally related to the reported mechanism of injury.",
+            "Unable to determine at this time":
+                "Causation cannot be determined at this time based on the available information; additional history, records, and/or diagnostic testing may be required.",
+        }
+        self._CAUSATION_TEXT_MAP = CAUSATION_TEXT
+
+        ttk.Label(body, text="Select causation statement:").grid(row=0, column=0, sticky="w")
+        cb = ttk.Combobox(body, textvariable=self.causation_choice_var, values=CAUSATION_CHOICES, state="readonly", width=54)
+        cb.grid(row=1, column=0, sticky="ew", pady=(4, 10))
+        cb.bind("<<ComboboxSelected>>", lambda e: self._causation_refresh(CAUSATION_TEXT))
+
+        self.causation_preview = ttk.Label(body, text="", wraplength=760, justify="left", foreground="gray")
+        self.causation_preview.grid(row=2, column=0, sticky="w", pady=(0, 10))
+
+        self.causation_custom_row = ttk.Frame(body)
+        self.causation_custom_row.grid(row=3, column=0, sticky="ew")
+        self.causation_custom_row.columnconfigure(0, weight=1)
+        ttk.Label(self.causation_custom_row, text="Custom causation statement:").grid(row=0, column=0, sticky="w")
+        ttk.Entry(self.causation_custom_row, textvariable=self.causation_custom_var).grid(row=1, column=0, sticky="ew", pady=(4, 0))
+        self.causation_custom_var.trace_add("write", lambda *_: self._changed())
+        self.causation_custom_row.grid_remove()
+
+        ttk.Label(body, text="Additional causation notes (optional):").grid(row=4, column=0, sticky="w", pady=(14, 4))
+        self.causation_notes = tk.Text(body, height=5, wrap="word")
+        self.causation_notes.grid(row=5, column=0, sticky="nsew")
+        body.rowconfigure(5, weight=1)
+
+        self.causation_notes.delete("1.0", "end")
+        self.causation_notes.insert("1.0", self.causation_notes_var.get() or "")
+
+        def _sync_causation_notes(*_):
+            try:
+                self.causation_notes_var.set(self.causation_notes.get("1.0", "end-1c"))
+            except Exception:
+                pass
+            self._changed()
+
+        self.causation_notes.bind("<KeyRelease>", lambda e: _sync_causation_notes())
+        self.causation_notes.bind("<<Paste>>", lambda e: parent.after(1, _sync_causation_notes))
+        self.causation_notes.bind("<<Cut>>", lambda e: parent.after(1, _sync_causation_notes))
+
+        self._causation_refresh(CAUSATION_TEXT)
+        return fr
+
+    def _build_prognosis_frame(self, parent, padx=10) -> ttk.Frame:
+        """Build Prognosis section frame."""
+        fr = ttk.Frame(parent)
+        pro_box = ttk.Labelframe(fr, text="Prognosis")
+        pro_box.pack(fill="both", expand=True, padx=padx, pady=(10, 10))
+        pro_box.columnconfigure(0, weight=1)
+
+        self.prognosis_cb = ttk.Combobox(pro_box, textvariable=self.prognosis_var, values=PROGNOSIS_CHOICES, state="readonly")
+        self.prognosis_cb.grid(row=0, column=0, sticky="ew", padx=8, pady=8)
+        self.prognosis_cb.bind("<<ComboboxSelected>>", lambda e: self._changed())
+        return fr
+
+    def _build_imaging_frame(self, parent, padx=10) -> ttk.Frame:
+        """Build Imaging section frame."""
+        fr = ttk.Frame(parent)
+        img_box = ttk.Labelframe(fr, text="Imaging Recommendations")
+        img_box.pack(fill="both", expand=True, padx=padx, pady=(10, 10))
+        img_box.columnconfigure(0, weight=1)
+
+        img_row = ttk.Frame(img_box)
+        img_row.grid(row=0, column=0, sticky="ew", padx=8, pady=(8, 4))
+        img_row.columnconfigure(0, weight=1)
+        img_row.columnconfigure(1, weight=1)
+
+        self.img_mod_var = tk.StringVar(value="(select)")
+        self.img_part_var = tk.StringVar(value="(select)")
+
+        ttk.Combobox(img_row, textvariable=self.img_mod_var, values=IMAGING_MODALITIES, state="readonly").grid(row=0, column=0, sticky="ew", padx=(0, 6))
+        ttk.Combobox(img_row, textvariable=self.img_part_var, values=IMAGING_PARTS, state="readonly").grid(row=0, column=1, sticky="ew", padx=(6, 0))
+
+        img_btns = ttk.Frame(img_box)
+        img_btns.grid(row=1, column=0, sticky="w", padx=8, pady=(0, 6))
+        ttk.Button(img_btns, text="Add", command=self._add_imaging_rec).pack(side="left")
+        ttk.Button(img_btns, text="Remove Selected", command=self._remove_imaging_rec).pack(side="left", padx=(8, 0))
+
+        self.imaging_list = tk.Listbox(img_box, height=4)
+        self.imaging_list.grid(row=2, column=0, sticky="ew", padx=8, pady=(0, 8))
+        return fr
+
+    def _build_referrals_frame(self, parent, padx=10) -> ttk.Frame:
+        """Build Referrals section frame."""
+        fr = ttk.Frame(parent)
+        ref_box = ttk.Labelframe(fr, text="Referrals")
+        ref_box.pack(fill="both", expand=True, padx=padx, pady=(10, 10))
+        ref_box.columnconfigure(0, weight=1)
+
+        self.ref_var = tk.StringVar(value="(select)")
+        ttk.Combobox(ref_box, textvariable=self.ref_var, values=REFERRAL_CHOICES, state="readonly").grid(row=0, column=0, sticky="ew", padx=8, pady=(8, 4))
+
+        ref_btns = ttk.Frame(ref_box)
+        ref_btns.grid(row=1, column=0, sticky="w", padx=8, pady=(0, 6))
+        ttk.Button(ref_btns, text="Add", command=self._add_referral).pack(side="left")
+        ttk.Button(ref_btns, text="Remove Selected", command=self._remove_referral).pack(side="left", padx=(8, 0))
+
+        self.ref_list = tk.Listbox(ref_box, height=4)
+        self.ref_list.grid(row=2, column=0, sticky="ew", padx=8, pady=(0, 8))
+        return fr
+
+    def _build_employment_frame(self, parent, padx=10) -> ttk.Frame:
+        """Build Current Work Stats section frame (no back button)."""
+        fr = ttk.Frame(parent)
+        body = ttk.Frame(fr)
+        body.pack(fill="both", expand=True, padx=padx, pady=(10, 10))
+        body.columnconfigure(0, weight=1)
+
+        if not hasattr(self, "employment_status_var"):
+            self.employment_status_var = tk.StringVar(value="(select)")
+        if not hasattr(self, "work_plan_var"):
+            self.work_plan_var = tk.StringVar(value="(select)")
+        if not hasattr(self, "employment_notes_var"):
+            self.employment_notes_var = tk.StringVar(value="")
+        if not hasattr(self, "employment_other_var"):
+            self.employment_other_var = tk.StringVar(value="")
+
+        if not hasattr(self, "employment_status_choices"):
+            self.employment_status_choices = [
+                "(select)", "Employed Full-Time", "Employed Part-Time", "Self-Employed", "Unemployed",
+                "a Student", "Retired", "a Homemaker", "Disabled / Unable to Work", "on a Leave of Absence", "Other (free text)",
+            ]
+        work_plan_choices = [
+            "(select)", "Full Duty (No Restrictions)", "Modified Duty (Work Restrictions)",
+            "Off Work / TTD (Temporary Total Disability)", "Off Work (Work Status Note Only)",
+            "Work Restrictions Pending Re-evaluation", "Disability Note Requested", "Return to Work Note Requested",
+            "FMLA / Leave Documentation Requested", "Referral for Work Capacity Evaluation",
+        ]
+
+        row = ttk.Frame(body)
+        row.grid(row=0, column=0, sticky="ew")
+        row.columnconfigure(0, weight=1)
+        row.columnconfigure(1, weight=1)
+        left_col = ttk.Frame(row)
+        left_col.grid(row=0, column=0, sticky="ew", padx=(0, 10))
+        left_col.columnconfigure(0, weight=1)
+        right_col = ttk.Frame(row)
+        right_col.grid(row=0, column=1, sticky="ew", padx=(10, 0))
+        right_col.columnconfigure(0, weight=1)
+
+        ttk.Label(left_col, text="Current employment status:").grid(row=0, column=0, sticky="w")
+        self.employment_cb = ttk.Combobox(left_col, textvariable=self.employment_status_var, values=self.employment_status_choices, state="readonly")
+        self.employment_cb.grid(row=1, column=0, sticky="ew", pady=(4, 0))
+        self.employment_cb.bind("<<ComboboxSelected>>", lambda e: self._changed())
+
+        ttk.Label(right_col, text="Work restrictions / disability plan:").grid(row=0, column=0, sticky="w")
+        self.work_plan_cb = ttk.Combobox(right_col, textvariable=self.work_plan_var, values=work_plan_choices, state="readonly")
+        self.work_plan_cb.grid(row=1, column=0, sticky="ew", pady=(4, 0))
+        self.work_plan_cb.bind("<<ComboboxSelected>>", lambda e: self._changed())
+
+        self.employment_other_row = ttk.Frame(body)
+        self.employment_other_row.grid(row=1, column=0, sticky="ew", pady=(10, 0))
+        self.employment_other_row.columnconfigure(0, weight=1)
+        ttk.Label(self.employment_other_row, text="Other employment status:").grid(row=0, column=0, sticky="w")
+        ttk.Entry(self.employment_other_row, textvariable=self.employment_other_var).grid(row=1, column=0, sticky="ew", pady=(4, 0))
+        self.employment_other_var.trace_add("write", lambda *_: self._changed())
+        self.employment_other_row.grid_remove()
+
+        def _refresh_other_visibility(*_):
+            if (self.employment_status_var.get() or "").strip() == "Other (free text)":
+                self.employment_other_row.grid()
+            else:
+                self.employment_other_row.grid_remove()
+            self._changed()
+
+        self.employment_status_var.trace_add("write", _refresh_other_visibility)
+        _refresh_other_visibility()
+
+        ttk.Label(body, text="Additional notes (optional):").grid(row=2, column=0, sticky="w", pady=(14, 4))
+        self.employment_notes = tk.Text(body, height=5, wrap="word")
+        self.employment_notes.grid(row=3, column=0, sticky="nsew")
+        body.rowconfigure(3, weight=1)
+
+        self.employment_notes.delete("1.0", "end")
+        self.employment_notes.insert("1.0", self.employment_notes_var.get() or "")
+
+        def _sync_notes(*_):
+            try:
+                self.employment_notes_var.set(self.employment_notes.get("1.0", "end-1c"))
+            except Exception:
+                pass
+            self._changed()
+
+        self.employment_notes.bind("<KeyRelease>", lambda e: _sync_notes())
+        self.employment_notes.bind("<<Paste>>", lambda e: parent.after(1, _sync_notes))
+        self.employment_notes.bind("<<Cut>>", lambda e: parent.after(1, _sync_notes))
+        return fr
+
     # ---------- UI ----------
     def _build_ui(self):
         padx = 10
 
         
 
-        # ✅ Screen container (stacked frames)
-        self.screen_container = ttk.Frame(self)
-        self.screen_container.pack(fill="both", expand=True)
+        self.main_screen = ttk.Frame(self)
+        self.main_screen.pack(fill="both", expand=True)
 
-        self.main_screen = ttk.Frame(self.screen_container)
-        self.assess_screen = ttk.Frame(self.screen_container)
-        self.employment_screen = ttk.Frame(self.screen_container)
-        self.causation_screen = ttk.Frame(self.screen_container)                    
-        
-        for f in (self.main_screen, self.assess_screen, self.employment_screen, self.causation_screen):
-            f.grid(row=0, column=0, sticky="nsew")
-
-        self.screen_container.rowconfigure(0, weight=1)
-        self.screen_container.columnconfigure(0, weight=1)        
         # Top controls
         top = ttk.Frame(self.main_screen)
         top.pack(fill="x", padx=padx, pady=(10, 6))
 
         ttk.Button(top, text="Add Dx", command=self.add_block).pack(side="left")
         ttk.Button(top, text="Reset Dx", command=self._confirm_reset).pack(side="left", padx=(8, 0))
-        
-        ttk.Button(
-            top,
-            text="Assessment",
-            command=self.show_assessment_screen
-        ).pack(side="left", padx=(8, 0))
 
-        ttk.Button(
-            top,
-            text="Work Status",
-            command=self.show_employment_screen
-        ).pack(side="left", padx=(8, 0))
+        self._section_buttons = {}
+        ttk.Label(top, text="Sections:").pack(side="left", padx=(18, 8))
 
-        ttk.Button(top, text="Causation", command=self.show_causation_screen).pack(side="left", padx=(8, 0))
+        block_btns = ttk.Frame(top)
+        block_btns.pack(side="left", fill="x", expand=True)
+
+        def _add_dx_btn(name):
+            btn = tk.Button(
+                block_btns, text=name, font=("Segoe UI", 10),
+                relief="raised", bd=1,
+                command=lambda n=name: self._show_dx_block(n),
+            )
+            btn.pack(side="left", padx=4)
+            self._section_buttons[name] = btn
+
+        _add_dx_btn("Assessment")
+        _add_dx_btn("Causation")
+        _add_dx_btn("Prognosis")
+        _add_dx_btn("Imaging")
+        _add_dx_btn("Referrals")
+        _add_dx_btn("Current Work Stats")
 
         # Collapse toggles (right side)
         self.toggle_blocks_btn = ttk.Button(top, text="Hide Blocks", command=self._toggle_blocks)
@@ -880,6 +834,7 @@ class DiagnosisPage(ttk.Frame):
         right = ttk.Frame(self.text_area)
         right.grid(row=0, column=1, sticky="nsew", padx=(10, 0))
         right.columnconfigure(0, weight=1)
+        right.rowconfigure(0, weight=1)
 
         ttk.Label(left, text="Notes (general text):").grid(row=0, column=0, sticky="w", pady=(0, 4))
 
@@ -894,65 +849,25 @@ class DiagnosisPage(ttk.Frame):
         self.text.bind("<<Cut>>", lambda e: self.after(1, self._on_text_edited))
         self.text.bind("<<Modified>>", self._on_text_modified)
 
-        # ---- RIGHT: Prognosis ----
-        pro_box = ttk.Labelframe(right, text="Prognosis")
-        pro_box.grid(row=0, column=0, sticky="ew", pady=(0, 10))
-        pro_box.columnconfigure(0, weight=1)
+        # ---- RIGHT: tkRaise container (6 stacked frames) ----
+        self._dx_container = ttk.Frame(right)
+        self._dx_container.grid(row=0, column=0, sticky="nsew")
+        self._dx_container.grid_rowconfigure(0, weight=1)
+        self._dx_container.grid_columnconfigure(0, weight=1)
 
-        self.prognosis_cb = ttk.Combobox(
-            pro_box,
-            textvariable=self.prognosis_var,
-            values=PROGNOSIS_CHOICES,
-            state="readonly"
-        )
-        self.prognosis_cb.grid(row=0, column=0, sticky="ew", padx=8, pady=8)
-        self.prognosis_cb.bind("<<ComboboxSelected>>", lambda e: self._changed())
+        self._dx_frames = {
+            "Assessment": self._build_assessment_frame(self._dx_container, padx),
+            "Causation": self._build_causation_frame(self._dx_container, padx),
+            "Prognosis": self._build_prognosis_frame(self._dx_container, padx),
+            "Imaging": self._build_imaging_frame(self._dx_container, padx),
+            "Referrals": self._build_referrals_frame(self._dx_container, padx),
+            "Current Work Stats": self._build_employment_frame(self._dx_container, padx),
+        }
 
-        # ---- RIGHT: Imaging ----
-        img_box = ttk.Labelframe(right, text="Imaging Recommendations")
-        img_box.grid(row=1, column=0, sticky="ew", pady=(0, 10))
-        img_box.columnconfigure(0, weight=1)
+        for fr in self._dx_frames.values():
+            fr.grid(row=0, column=0, sticky="nsew")
 
-        img_row = ttk.Frame(img_box)
-        img_row.grid(row=0, column=0, sticky="ew", padx=8, pady=(8, 4))
-        img_row.columnconfigure(0, weight=1)
-        img_row.columnconfigure(1, weight=1)
-
-        self.img_mod_var = tk.StringVar(value="(select)")
-        self.img_part_var = tk.StringVar(value="(select)")
-
-        ttk.Combobox(img_row, textvariable=self.img_mod_var, values=IMAGING_MODALITIES, state="readonly").grid(
-            row=0, column=0, sticky="ew", padx=(0, 6)
-        )
-        ttk.Combobox(img_row, textvariable=self.img_part_var, values=IMAGING_PARTS, state="readonly").grid(
-            row=0, column=1, sticky="ew", padx=(6, 0)
-        )
-
-        img_btns = ttk.Frame(img_box)
-        img_btns.grid(row=1, column=0, sticky="w", padx=8, pady=(0, 6))
-        ttk.Button(img_btns, text="Add", command=self._add_imaging_rec).pack(side="left")
-        ttk.Button(img_btns, text="Remove Selected", command=self._remove_imaging_rec).pack(side="left", padx=(8, 0))
-
-        self.imaging_list = tk.Listbox(img_box, height=4)
-        self.imaging_list.grid(row=2, column=0, sticky="ew", padx=8, pady=(0, 8))
-
-        # ---- RIGHT: Referrals ----
-        ref_box = ttk.Labelframe(right, text="Referrals")
-        ref_box.grid(row=2, column=0, sticky="ew")
-        ref_box.columnconfigure(0, weight=1)
-
-        self.ref_var = tk.StringVar(value="(select)")
-        ttk.Combobox(ref_box, textvariable=self.ref_var, values=REFERRAL_CHOICES, state="readonly").grid(
-            row=0, column=0, sticky="ew", padx=8, pady=(8, 4)
-        )
-
-        ref_btns = ttk.Frame(ref_box)
-        ref_btns.grid(row=1, column=0, sticky="w", padx=8, pady=(0, 6))
-        ttk.Button(ref_btns, text="Add", command=self._add_referral).pack(side="left")
-        ttk.Button(ref_btns, text="Remove Selected", command=self._remove_referral).pack(side="left", padx=(8, 0))
-
-        self.ref_list = tk.Listbox(ref_box, height=4)
-        self.ref_list.grid(row=2, column=0, sticky="ew", padx=8, pady=(0, 8))
+        self._show_dx_block("Assessment")
 
         tip = (
             "Tip: Use ↑/↓ on a diagnosis block to change order. "
@@ -960,25 +875,6 @@ class DiagnosisPage(ttk.Frame):
         )
         self.tip_label = ttk.Label(self.main_screen, text=tip, foreground="gray")
         # packed in _apply_collapse_states with text_frame visibility
-
-        self._build_assessment_screen(self.assess_screen, padx=padx)
-        self._build_employment_screen(self.employment_screen, padx=padx)
-        self._build_causation_screen(self.causation_screen, padx=padx)
-
-        # ✅ start on main screen
-        self.main_screen.tkraise()
-        
-    def show_causation_screen(self):
-        self.causation_screen.tkraise()
-
-    def show_employment_screen(self):
-        self.employment_screen.tkraise()
-    
-    def show_assessment_screen(self):
-        self.assess_screen.tkraise()
-
-    def show_main_screen(self):
-        self.main_screen.tkraise()
 
 
     def _apply_collapse_states(self, startup: bool = False):
@@ -1312,6 +1208,9 @@ class DiagnosisPage(ttk.Frame):
                 self.employment_other_var.set(data.get("employment_other") or "")
                 self.work_plan_var.set(data.get("work_plan") or "(select)")
                 self.employment_notes_var.set(data.get("employment_notes") or "")
+                if hasattr(self, "employment_notes"):
+                    self.employment_notes.delete("1.0", "end")
+                    self.employment_notes.insert("1.0", self.employment_notes_var.get() or "")
             except Exception:
                 pass
 
