@@ -53,7 +53,6 @@ from pdf_export import diagnosis_struct_to_live_preview_runs
 from master_save import MasterSaveController
 from config import (
     UI_PAGES,
-    EXAMS,
     EXAM_COLORS,
     REGION_LABELS,
     SETTINGS_PATH,
@@ -87,8 +86,8 @@ except Exception:
 
 EXAM_INDEX_FILENAME = "_exam_index.json"
 
-# Keep config.EXAMS as your base list
-BASE_EXAMS = list(EXAMS)
+# No base exams; only dynamic exams (Initial 1, Re-Exam 1, etc.)
+EMPTY_EXAMS: list[str] = []
 
 
 # Template category configuration: filesystem-safe slugs + human-readable labels
@@ -249,16 +248,16 @@ class App(tk.Tk):
 
         self.provider_var = tk.StringVar(value=PROVIDER_NAME)
 
-        self.current_exam = tk.StringVar(value="Initial")
+        self.current_exam = tk.StringVar(value="")
         self.current_page = tk.StringVar(value="HOI History")
 
-        self.exams: list[str] = list(BASE_EXAMS)  # dynamic exam list (Initial, Re-Exam 1, ROF 1, etc.)
+        self.exams: list[str] = list(EMPTY_EXAMS)  # dynamic exam list (Initial 1, Re-Exam 1, ROF 1, etc.)
 
         self._autosave_after_id = None
         self.current_case_path: str | None = None
         self._loading = False
 
-        self.last_exam_pdf_paths = {e: "" for e in EXAMS}
+        self.last_exam_pdf_paths: dict[str, str] = {}
         self.last_all_exams_pdf_path = ""
 
         self._mousewheel_target = None
@@ -699,11 +698,11 @@ class App(tk.Tk):
         self.exam_buttons.clear()
 
         # Ensure current patient’s dynamic exams are loaded if we have a patient
-        # (only do this once patient info exists; otherwise keep BASE_EXAMS)
+        # (only do this once patient info exists; otherwise keep EMPTY_EXAMS)
         if self.get_current_patient_root():
             self.exams = self._load_dynamic_exams_for_patient()
         else:
-            self.exams = list(BASE_EXAMS)
+            self.exams = list(EMPTY_EXAMS)
 
         # Recreate buttons (insert before the + buttons, which we pack on the right)
         for exam in self.exams:
@@ -1818,18 +1817,19 @@ class App(tk.Tk):
 
     def _load_dynamic_exams_for_patient(self) -> list[str]:
         """
-        Returns patient-specific exam list if index exists, else BASE_EXAMS.
+        Returns patient-specific exam list from _exam_index.json.
+        Returns empty list if no index or invalid; no base exams are injected.
         """
         p = self._exam_index_path()
         if not p or not os.path.exists(p):
-            return list(BASE_EXAMS)
+            return list(EMPTY_EXAMS)
 
         try:
             with open(p, "r", encoding="utf-8") as f:
                 data = json.load(f) or {}
             lst = data.get("exams") or []
             if not isinstance(lst, list):
-                return list(BASE_EXAMS)
+                return list(EMPTY_EXAMS)
 
             # normalize + de-dupe but preserve order
             out = []
@@ -1844,14 +1844,9 @@ class App(tk.Tk):
                 seen.add(k)
                 out.append(s)
 
-            # Always ensure BASE_EXAMS exist (so you never lose core tabs)
-            for b in BASE_EXAMS:
-                if b.lower() not in seen:
-                    out.insert(len(out), b)
-
             return out
         except Exception:
-            return list(BASE_EXAMS)
+            return list(EMPTY_EXAMS)
 
     def _save_dynamic_exams_for_patient(self):
         p = self._exam_index_path()
@@ -1963,7 +1958,7 @@ class App(tk.Tk):
         pdf_map = settings.get("last_exam_pdfs", {})
         if isinstance(pdf_map, dict):
             if not hasattr(self, "exams") or not self.exams:
-                self.exams = list(BASE_EXAMS)
+                self.exams = list(EMPTY_EXAMS)
 
             for exam in self.exams:
                 self.last_exam_pdf_paths[exam] = pdf_map.get(exam, "") or ""
@@ -2588,7 +2583,7 @@ class App(tk.Tk):
         self.status_var.set(f"{self.current_exam.get()} cleared (not deleted on disk).")
 
     def reset_entire_form(self):
-        if not messagebox.askyesno("RESET ENTIRE FORM", "Clear EVERYTHING (patient info + all sections) and return to Initial?"):
+        if not messagebox.askyesno("RESET ENTIRE FORM", "Clear EVERYTHING (patient info + all sections) and start blank?\n\nYou can add exams with + Initial, + Re-Exam, etc."):
             return
         self.reset_entire_form_ui_only()
 
@@ -2603,7 +2598,8 @@ class App(tk.Tk):
             self.claim_var.set("")
             self.provider_var.set("")
 
-            self.current_exam.set("Initial")
+            first_exam = self.exams[0] if self.exams else ""
+            self.current_exam.set(first_exam)
             self._refresh_exam_button_styles()
 
             self.clear_exam_content_only()
@@ -2813,7 +2809,7 @@ class App(tk.Tk):
             # Restore prior UI state as best as possible
             try:
                 # Go back to the original exam if we can
-                if orig_exam in EXAMS:
+                if orig_exam in self.exams:
                     self.current_exam.set(orig_exam)
                     self._refresh_exam_button_styles()
 

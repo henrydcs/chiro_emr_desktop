@@ -17,7 +17,7 @@ from HOIpdf import build_rof_flowables
 
 from config import (
     LOGO_PATH, CLINIC_NAME, CLINIC_ADDR, CLINIC_PHONE_FAX,
-    EXAMS, REGION_LABELS
+    REGION_LABELS
 )
 from utils import normalize_mmddyyyy, today_mmddyyyy, build_sentence
 

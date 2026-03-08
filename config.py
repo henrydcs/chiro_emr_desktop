@@ -55,7 +55,7 @@ UI_PAGES = [
 ]
 
 # ----------------- EXAMS -----------------
-EXAMS = ["Initial", "Re-Exam", "Review of Findings", "Final Exam"]
+EXAMS = []  # No base exams; all exams are dynamic (Initial 1, Re-Exam 1, etc.)
 
 EXAM_COLORS = {
     "Initial": {"bg": "#E3F2FD", "accent": "#1E88E5"},
