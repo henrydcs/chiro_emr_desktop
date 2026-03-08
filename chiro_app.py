@@ -59,7 +59,7 @@ from config import (
     AUTOSAVE_DEBOUNCE_MS,
     LOGO_PATH, PROVIDER_NAME, CLINIC_NAME, CLINIC_ADDR, CLINIC_PHONE_FAX,
     YEAR_CASES_ROOT, NEXT_YEAR_CASES_ROOT, BASE_DIR,
-    PATIENT_SUBDIR_EXAMS, PATIENT_SUBDIR_PDFS,
+    PATIENT_SUBDIR_EXAMS, PATIENT_SUBDIR_PDFS, EXAM_INDEX_SUBDIR,
 )
 from paths import get_data_dir
 
@@ -1806,22 +1806,40 @@ class App(tk.Tk):
                 btn.configure(style="TButton")
 
 
+    # In the config import (around line 62), add:
+    #   EXAM_INDEX_SUBDIR,
+
+    # Then update _exam_index_path() (lines 1809-1816) to:
     def _exam_index_path(self) -> str | None:
         patient_root = self.get_current_patient_root()
         if not patient_root:
             return None
         ensure_patient_dirs(patient_root)
-        exams_dir = os.path.join(patient_root, PATIENT_SUBDIR_EXAMS)
-        os.makedirs(exams_dir, exist_ok=True)
-        return os.path.join(exams_dir, EXAM_INDEX_FILENAME)
+        index_dir = os.path.join(patient_root, EXAM_INDEX_SUBDIR)  # or use EXAM_INDEX_SUBDIR
+        os.makedirs(index_dir, exist_ok=True)
+        return os.path.join(index_dir, EXAM_INDEX_FILENAME)
 
     def _load_dynamic_exams_for_patient(self) -> list[str]:
         """
         Returns patient-specific exam list from _exam_index.json.
+        Checks index_exam_number/ first, then exams/ (legacy). Migrates if found in legacy.
         Returns empty list if no index or invalid; no base exams are injected.
         """
-        p = self._exam_index_path()
-        if not p or not os.path.exists(p):
+        patient_root = self.get_current_patient_root()
+        if not patient_root:
+            return list(EMPTY_EXAMS)
+
+        ensure_patient_dirs(patient_root)
+        exams_dir = os.path.join(patient_root, PATIENT_SUBDIR_EXAMS)
+        index_dir = os.path.join(patient_root, EXAM_INDEX_SUBDIR)
+        os.makedirs(index_dir, exist_ok=True)
+
+        # Try new location first, then legacy (exams/)
+        primary_path = os.path.join(index_dir, EXAM_INDEX_FILENAME)
+        legacy_path = os.path.join(exams_dir, EXAM_INDEX_FILENAME)
+
+        p = primary_path if os.path.isfile(primary_path) else legacy_path
+        if not p or not os.path.isfile(p):
             return list(EMPTY_EXAMS)
 
         try:
@@ -1843,6 +1861,14 @@ class App(tk.Tk):
                     continue
                 seen.add(k)
                 out.append(s)
+
+            # Migrate from legacy to new location
+            if p == legacy_path and out:
+                try:
+                    with open(primary_path, "w", encoding="utf-8") as f:
+                        json.dump({"exams": out}, f, indent=2)
+                except Exception:
+                    pass
 
             return out
         except Exception:

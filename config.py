@@ -42,7 +42,6 @@ SETTINGS_PATH: Path = get_data_dir() / "_app_settings.json"
 
 AUTOSAVE_DEBOUNCE_MS = 600
 
-
 # ----------------- NAV / UI PAGES -----------------
 # IMPORTANT: Define PAGES only ONCE (do NOT redefine later), or you will overwrite HOI History.
 UI_PAGES = [
@@ -208,4 +207,5 @@ PATIENT_SUBDIR_IMAGING = "imaging"
 PATIENT_SUBDIR_ATTORNEY = "attorney"
 PATIENT_SUBDIR_BILLING = "billing"
 PATIENT_SUBDIR_MESSAGES = "messages"
+EXAM_INDEX_SUBDIR = "index_exam_number"  # Where _exam_index.json lives (patient_info, exams, etc.)
 
