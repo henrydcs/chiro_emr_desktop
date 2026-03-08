@@ -8,10 +8,7 @@ from HOIpdf import build_hoi_flowables, _strip_auto_tag
 
 from scrollframe import ScrollFrame
 
-
-
 AUTO_MOI_TAG = "[AUTO:MOI]"
-
 
 def _clean(s: str) -> str:
     return (s or "").strip()
@@ -24,7 +21,6 @@ def _join_with_and(items: list[str]) -> str:
     if len(items) == 2:
         return f"{items[0]} and {items[1]}"
     return ", ".join(items[:-1]) + ", and " + items[-1]
-
 
 def _dedupe_preserve_order(items):
     seen = set()
@@ -152,10 +148,6 @@ class ROFImagingBlock(ttk.Frame):
         ent_date.pack(side="left", padx=(6, 0))
         ent_date.bind("<KeyRelease>", lambda e: self._changed())
 
-
-
-
-
         # Row 2: parts
         row2 = ttk.Frame(outer)
         row2.pack(fill="x", pady=(8, 0))
@@ -205,8 +197,6 @@ class ROFImagingBlock(ttk.Frame):
 
         lb.bind("<Enter>", _enable)
         lb.bind("<Leave>", _disable)
-
-
 
     def set_number(self, n: int):
         self.index = n
@@ -265,9 +255,6 @@ class ROFImagingBlock(ttk.Frame):
                         self.parts_listbox.selection_set(i)
             except Exception:
                 pass
-
-
-
 
 # ----------------------------
 # Imaging block (multi-select types + multi-select body parts)
@@ -554,7 +541,6 @@ class HOIPage(ttk.Frame):
 
         return f
 
-
     def _on_rof_input_mode_changed(self):
         if self._loading:
             return
@@ -596,8 +582,6 @@ class HOIPage(ttk.Frame):
                 self._rof_imaging_wrap.pack_forget()
 
         self._on_rof_struct_changed()
-
-
 
     def get_live_preview_runs(self):
         runs = []
@@ -926,7 +910,6 @@ class HOIPage(ttk.Frame):
             "Furthermore, {detail} were completed{date_clause}."),
         ]
 
-
         for idx, key in enumerate(grouped_order):
             facility, city = key
             items = grouped.get(key) or []
@@ -975,10 +958,7 @@ class HOIPage(ttk.Frame):
 
         final = " ".join([c for c in chunks if _clean(c)])
         self._set_rof_auto_text(final)
-
-
-    
-    
+        
     def _ensure_period(self, s: str) -> str:
         s = (s or "").strip()
         if not s:
@@ -1072,11 +1052,7 @@ class HOIPage(ttk.Frame):
 
         self.intro_event_options = ["incident", "accident", "event", "injury"]
         self.intro_event_word_var = tk.StringVar(value=self.intro_event_options[0])
-
-
-        #print("HOIPage INIT id:", id(self))       
-
-                # ----------------
+       
         # ROF / Status Update (new structured ROF block)
         # ----------------
         self.rof_mode_var = tk.StringVar(value="Initial")  # Initial / Re-Exam / ROF / Final
@@ -1091,7 +1067,6 @@ class HOIPage(ttk.Frame):
             value="a physical examination including orthopedic, neurological, and functional assessments as clinically indicated"
         )
         self.eval_consent_var = tk.BooleanVar(value=True)
-
         
         # Facilities (edit this list anytime)
         self.ROF_FACILITIES = [
@@ -1120,13 +1095,10 @@ class HOIPage(ttk.Frame):
         self.rof_imaging_blocks: list[ROFImagingBlock] = []
         self.max_rof_blocks = 4
 
-
         #Notes for Type of Injury
         self.course_notes_var = tk.StringVar(value="")  # type.course_notes (new)
 
         self.rof_input_mode_var = tk.StringVar(value="Structured")  # "Structured" or "Text/Write"
-
-
         
         # Optional providers
         self._regions_provider = None
@@ -1231,13 +1203,8 @@ class HOIPage(ttk.Frame):
             self.aa_patient_side_var, self.aa_resembles_var,
             self.sf_circumstance_var, self.sf_landing_var,
             self.db_location_var, self.db_severity_var,
-            self.auto_moi_var,
-            
-            #self.intro_event_word_var.trace_add("write", lambda *_: self._on_rof_struct_changed())
-
-            #self.rof_mode_var,
-            #self.rof_imaging_date_var,
-            #self.rof_include_city_var,
+            self.auto_moi_var,           
+           
         ]
 
         # --- main MOI regen drivers ---
@@ -1251,10 +1218,7 @@ class HOIPage(ttk.Frame):
 
         self.eval_consent_var.trace_add("write", lambda *_: self._on_rof_struct_changed())
 
-
-
-                # -------------------------
-        # ROF traces (DO NOT route through _on_struct_changed)
+                
         # -------------------------
         # Mode + Entry changes must re-layout the UI first
         for v in (self.rof_mode_var, self.rof_input_mode_var):
@@ -1262,8 +1226,6 @@ class HOIPage(ttk.Frame):
 
         # Manual paragraph can just regen
         self.rof_manual_paragraph_var.trace_add("write", lambda *_: self._on_rof_struct_changed())
-
-
 
         autosave_only = [
             self.moi_var,
@@ -1290,7 +1252,6 @@ class HOIPage(ttk.Frame):
 
         self._regen_moi_now()
         self._changed()
-
 
     # ---------------- Text widget sync ----------------
     def _bind_text_to_var(self, widget: tk.Text, var: tk.StringVar, *, is_moi: bool = False):
@@ -1469,9 +1430,7 @@ class HOIPage(ttk.Frame):
 
         reports = self._reports(first)
         states = self._states(first)
-
-        # -------------------------
-       # -------------------------
+        
         # PARAGRAPH 1 – ACCIDENT / MECHANISM
         # -------------------------
         if injury == "Auto Accident":
@@ -1525,9 +1484,7 @@ class HOIPage(ttk.Frame):
                 parts.append(self._ensure_period(typed_course))
 
             p1 = " ".join(parts)
-
-
-        # -------------------------
+        
         # PARAGRAPH 2 – MEDICAL
         # -------------------------
         medical_parts: list[str] = []
@@ -1567,11 +1524,8 @@ class HOIPage(ttk.Frame):
 
 
         p2 = " ".join([x for x in medical_parts if _clean(x)])
-
-        # -------------------------
-        # PARAGRAPH 3 – COURSE & REGIONS
-        # -------------------------
         
+        # PARAGRAPH 3 – COURSE & REGIONS              
         
         course = _clean(self.course_var.get()).lower()
         regions = self._injured_regions_from_provider()
@@ -1586,14 +1540,7 @@ class HOIPage(ttk.Frame):
                 "The patient reports injuries to the following area or body regions: "
                 + _join_with_and(regions) + "."
             )
-
-
-        # ✅ NEW: typed course notes (final sentence of this paragraph area)
-        #typed_course = _clean(self.course_notes_var.get())
-        #if typed_course:
-            #p3_parts.append(self._ensure_period(typed_course))
-
-
+        
         p3 = " ".join([x for x in p3_parts if _clean(x)])
 
         # -------------------------
@@ -1653,8 +1600,6 @@ class HOIPage(ttk.Frame):
             btn.pack(side="left", padx=4)
             self._section_buttons[name] = btn
 
-
-
         add_btn("History of Injury")
         add_btn("Date of Injury")
         add_btn("Type of Injury")
@@ -1663,7 +1608,7 @@ class HOIPage(ttk.Frame):
         add_btn("Diagnostics")
         add_btn("Review of Findings")
 
-                # container
+        # container
         # ✅ Wrap everything below the top buttons in a vertical ScrollFrame
         self.scroll = ScrollFrame(self)
         self.scroll.pack(fill="both", expand=True, padx=padx, pady=(0, 10))
@@ -1672,8 +1617,6 @@ class HOIPage(ttk.Frame):
         self.container.pack(fill="both", expand=True)
         self.container.grid_rowconfigure(0, weight=1)
         self.container.grid_columnconfigure(0, weight=1)
-
-
         self.frames = {
             "History of Injury": self._build_history_block(self.container),
             "Date of Injury": self._build_doi_block(self.container),
@@ -1697,8 +1640,6 @@ class HOIPage(ttk.Frame):
                 btn.configure(font=("Segoe UI", 10, "bold") if key == name else ("Segoe UI", 10))
 
             self._changed()
-
-
 
     # ---------------- Blocks ----------------
     def _build_history_block(self, parent):
@@ -1823,7 +1764,6 @@ class HOIPage(ttk.Frame):
         txt_course.grid(row=2, column=0, columnspan=2, sticky="ew", padx=8, pady=(0, 8))
         txt_course.insert("1.0", self.course_notes_var.get() or "")
         self._bind_text_to_var(txt_course, self.course_notes_var)
-
 
         def update_type_panels(*_):
             t = self.injury_type_var.get()
@@ -1965,8 +1905,6 @@ class HOIPage(ttk.Frame):
                 #command=self._on_rof_input_mode_changed,
             ).pack(side="left", padx=(10, 0))
 
-
-
         ttk.Label(top, text="   |   Entry:").pack(side="left", padx=(14, 0))
 
         ttk.Radiobutton(
@@ -1985,9 +1923,8 @@ class HOIPage(ttk.Frame):
             #command=self._on_rof_input_mode_changed,
         ).pack(side="left", padx=(8, 0))
 
-        # =========================
-        # Two wraps (toggle visibility)
-        # =========================
+        
+        # Two wraps (toggle visibility)        
         structured_wrap = ttk.Frame(f)
         structured_wrap.pack(fill="both", expand=True, padx=10, pady=(0, 8))
         self._rof_structured_wrap = structured_wrap
@@ -1995,9 +1932,8 @@ class HOIPage(ttk.Frame):
         text_wrap = ttk.Frame(f)
         self._rof_text_wrap = text_wrap  # not packed until Text/Write is active
 
-        # =========================
-        # INTRO structured panel (Initial / Re-Exam / Final)
-        # =========================
+        
+        # INTRO structured panel (Initial / Re-Exam / Final)        
         intro_wrap = ttk.Frame(structured_wrap)
         self._intro_structured_wrap = intro_wrap
         intro_wrap.pack(fill="x", pady=(0, 8))
@@ -2011,9 +1947,8 @@ class HOIPage(ttk.Frame):
         self._rof_imaging_wrap = rof_imaging_wrap
         rof_imaging_wrap.pack(fill="both", expand=True)   # it will be hidden/shown by mode
 
-        # =========================
-        # STRUCTURED area (controls + imaging)
-        # =========================
+        
+        # STRUCTURED area (controls + imaging)        
         row_ctrls = ttk.Frame(rof_imaging_wrap)
         row_ctrls.pack(fill="x", pady=(0, 6))
 
@@ -2067,9 +2002,8 @@ class HOIPage(ttk.Frame):
         if not self.rof_imaging_blocks:
             self._add_rof_block()
 
-        # =========================
-        # TEXT/WRITE area
-        # =========================
+        
+        # TEXT/WRITE area        
         ttk.Label(text_wrap, text="Manual findings paragraph (you type):").pack(anchor="w", padx=10, pady=(0, 4))
         txt_manual = tk.Text(text_wrap, height=12, wrap="word")
         txt_manual.pack(fill="both", expand=True, padx=10, pady=(0, 10))
@@ -2091,7 +2025,6 @@ class HOIPage(ttk.Frame):
 
             self._on_rof_struct_changed()
 
-
         txt_manual.bind("<KeyRelease>", _rof_manual_changed)
         txt_manual.bind("<FocusOut>", _rof_manual_changed)
         txt_manual.bind("<<Paste>>", lambda e: self.after(1, _rof_manual_changed))
@@ -2102,30 +2035,20 @@ class HOIPage(ttk.Frame):
         self._regen_rof_now()
         return f
 
-
-
-
     # ---------------- Export ----------------
     def to_dict(self) -> dict:
         self._flush_all_text_widgets()
 
         # ✅ FORCE ROF flush (bulletproof)
         if self._rof_manual_text is not None and self._rof_manual_text.winfo_exists():
-            self.rof_manual_paragraph_var.set(self._rof_manual_text.get("1.0", "end-1c"))
-       
-
-        #print("ROF manual widget preview:", self._rof_manual_text.get("1.0","end-1c")[:80] if self._rof_manual_text else None)
-        #print("ROF manual var preview:", (self.rof_manual_paragraph_var.get() or "")[:80])
-        #print("ROF blocks:", [b.get_selected() for b in (self.rof_imaging_blocks or [])])
-
-
+            self.rof_manual_paragraph_var.set(self._rof_manual_text.get("1.0", "end-1c"))     
+        
         imaging_blocks_struct = [b.to_dict() for b in self.imaging_blocks] if self.imaging_blocks else []
 
         # ✅ REVIEW OF FINDINGS (NEW STRUCTURED)
         rof_blocks_struct = [b.to_dict() for b in self.rof_imaging_blocks] if self.rof_imaging_blocks else []
 
-        # ----------------------------------
-        # Resolve correct manual paragraph by mode
+       
         # (This is what the PDF prints)
         # ----------------------------------
         mode = (self.rof_mode_var.get() or "").strip()
@@ -2138,7 +2061,6 @@ class HOIPage(ttk.Frame):
         }
 
         manual_paragraph = (manual_map.get(mode) or "").strip()
-
 
         return {
             "active_block": self.active_block.get(),
@@ -2240,8 +2162,6 @@ class HOIPage(ttk.Frame):
             )
             self.eval_consent_var.set(bool(intro.get("consent", True)))
 
-
-
             # rebuild ROF imaging blocks
             for b in list(self.rof_imaging_blocks):
                 try:
@@ -2256,8 +2176,7 @@ class HOIPage(ttk.Frame):
                     self._add_rof_block(from_dict=bd or {})
             else:
                 # ensure at least one empty block exists
-                self._add_rof_block()
-           
+                self._add_rof_block()           
 
             if self._rof_manual_text is not None and self._rof_manual_text.winfo_exists():
                 try:
@@ -2442,9 +2361,8 @@ class HOIPage(ttk.Frame):
                     pass
             self.imaging_blocks.clear()
 
-            # =========================
-            # ✅ INSERT ROF RESET HERE
-            # =========================
+            
+            # ✅ INSERT ROF RESET HERE            
             self.rof_mode_var.set("ROF")  
             self.rof_input_mode_var.set("Structured")   # ✅ ADD   
             self.rof_also_print_var.set(False)
@@ -2456,9 +2374,6 @@ class HOIPage(ttk.Frame):
 
             self.rof_auto_paragraph_var.set("")
             self.rof_manual_paragraph_var.set("")
-
-
-
 
             for b in list(self.rof_imaging_blocks):
                 try:
@@ -2474,9 +2389,8 @@ class HOIPage(ttk.Frame):
         if self._imaging_blocks_row is not None:
             self._add_imaging_block()
 
-        # =========================
-        # ✅ ADD THIS RIGHT AFTER imaging block recreation
-        # =========================
+        
+        # ✅ ADD THIS RIGHT AFTER imaging block recreation        
         if self._rof_blocks_row is not None:
             self._add_rof_block()
 

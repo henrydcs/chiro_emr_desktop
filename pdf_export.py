@@ -14,7 +14,6 @@ from reportlab.lib import colors
 from reportlab.lib.styles import getSampleStyleSheet
 from HOIpdf import build_rof_flowables
 
-
 from config import (
     LOGO_PATH, CLINIC_NAME, CLINIC_ADDR, CLINIC_PHONE_FAX,
     REGION_LABELS
@@ -35,8 +34,7 @@ try:
     from reportlab.lib.utils import ImageReader
     REPORTLAB_OK = True
 except ModuleNotFoundError:
-    REPORTLAB_OK = False
-   
+    REPORTLAB_OK = False   
 
 _RE_REEXAM = re.compile(r"^\s*Re-Exam\s+\d+\s*$", re.IGNORECASE)
 _RE_ROF    = re.compile(r"^\s*Review of Findings\s+\d+\s*$", re.IGNORECASE)
@@ -85,10 +83,7 @@ def pdf_exam_label(exam_name: str) -> str:
     # ✅ NEW: Chiropractic Treatment Note (no numbering)
     if s.lower().startswith("chiro visit"):
         return "Chiropractic Treatment Note"    
-    return s
-    
-
-
+    return s    
 
 def _join_with_and(items: list[str]) -> str:
     items = [s.strip() for s in (items or []) if s and s.strip()]
@@ -132,8 +127,6 @@ def _referral_sentence(dx_struct: dict) -> str:
     joined = _join_with_and(parts)
     return f"Referrals: {joined}." if joined else ""
 
-
-
 # =======================================================
 # Subjectives: "semi-bold" token markup
 # =======================================================
@@ -149,7 +142,6 @@ def _dedupe_preserve_order(items: list[str]) -> list[str]:
         seen.add(key)
         out.append((s or "").strip())
     return out
-
 
 def tokens_from_subjective_block(block: dict) -> list[str]:
     block = block or {}
@@ -244,7 +236,6 @@ def semibold_markup(text: str, tokens: list[str]) -> str:
         escaped = pattern.sub(repl, escaped)
 
     return escaped
-
 
 # =======================================================
 # Objectives: structured rendering helpers
@@ -408,7 +399,6 @@ def _region_group_name(label: str) -> str:
 
     # Everything else is a joint — DO NOT append "Spine"
     return label
-
 
 
 def _region_tag(code: str) -> str:
@@ -941,7 +931,6 @@ def build_objectives_flowables(objectives_struct: dict, styles, doc_width: float
     rom_merged = {}
     rom_notes = None
 
-
     out = []
     objectives_struct = objectives_struct or {}
     printed_any = False
@@ -956,12 +945,10 @@ def build_objectives_flowables(objectives_struct: dict, styles, doc_width: float
         sublux_para = _build_sublux_paragraph(sublux, styles)
         sublux_notes = _notes_paragraph(_clean_val(sublux.get("notes")), styles)
 
-
         adl_para = None
         if include_adl:
             adl = global_struct.get("adl") or {}
             adl_para = _build_adl_paragraph(adl, styles)
-
 
         vit_tbl = _build_vitals_table(vitals, doc_width)
         pos_para = _build_posture_paragraph(posture, styles)
@@ -973,9 +960,7 @@ def build_objectives_flowables(objectives_struct: dict, styles, doc_width: float
 
         if vit_tbl or pos_para or grip_para or adl_para or vit_notes or pos_notes or grip_notes or sublux_para or sublux_notes:
 
-            printed_any = True
-            # out.append(Paragraph("<b>VITALS / INSPECTION</b>", styles["Heading3"]))
-            # out.append(Spacer(1, 0.08 * inch))
+            printed_any = True            
 
             if vit_tbl or vit_notes:
                 out.append(Paragraph("<b>Vitals</b>", styles["Heading4"]))
@@ -1007,8 +992,6 @@ def build_objectives_flowables(objectives_struct: dict, styles, doc_width: float
                     out.append(sublux_notes)
                 out.append(Spacer(1, 0.12 * inch))
 
-
-
             if grip_para or grip_notes:
                 out.append(Paragraph("<b>Grip Strength (Jamar)</b>", styles["Heading4"]))
                 out.append(Spacer(1, 0.05 * inch))
@@ -1017,9 +1000,8 @@ def build_objectives_flowables(objectives_struct: dict, styles, doc_width: float
                 if grip_notes:
                     out.append(Spacer(1, 0.10 * inch))
                     out.append(grip_notes)
-                out.append(Spacer(1, 0.12 * inch))         
+                out.append(Spacer(1, 0.12 * inch))        
            
-
             out.append(Spacer(1, 0.06 * inch))
 
     # ---------- REGION BLOCKS ----------
@@ -1093,7 +1075,6 @@ def build_objectives_flowables(objectives_struct: dict, styles, doc_width: float
         }
         rom_has_findings = bool(rom_merged)
 
-
         palp_notes = _notes_paragraph(first_note(region_blocks, "palpation_notes"), styles)
         ortho_notes = _notes_paragraph(first_note(region_blocks, "ortho_notes"), styles)
         rom_notes = _notes_paragraph(first_note(region_blocks, "rom_notes"), styles)
@@ -1132,7 +1113,7 @@ def build_objectives_flowables(objectives_struct: dict, styles, doc_width: float
                 out.append(ortho_notes)
             out.append(Spacer(1, 0.14 * inch))
 
-                   # ---------- ROM (dynamic boxed cells: 2 columns, N rows) ----------
+        # ---------- ROM (dynamic boxed cells: 2 columns, N rows) ----------
         if rom_merged or rom_notes:
             out.append(Paragraph(f"<b>RANGE OF MOTION {xml_escape(tag)}</b>", styles["Heading3"]))
             out.append(Spacer(1, 0.05 * inch))
@@ -1704,8 +1685,6 @@ def therapy_paragraph_from_subjectives(subj: dict) -> tuple[str, list[str]]:
     s2 = f"The patient also feels symptoms in the {_join_with_and(others)}."
     return (s1 + " " + s2), selected
 
-
-
 # =======================================================
 # Payload parsing
 # =======================================================
@@ -1804,12 +1783,7 @@ def _employment_current_status_paragraph(dx_struct: dict, styles):
             lines.append(f"The patient is {other}")
         else:
             lines.append(f"The patient is {status}")
-
-    # You can choose whether work_plan belongs here too.
-    # I’d keep it here IF it reflects CURRENT status (e.g., Off work / TTD).
-    #if work_plan and work_plan != "(select)":
-        #lines.append(f"Current Work Status: {work_plan}")
-
+   
     if notes:
         lines.append(f"Notes: {notes}")
 
@@ -1979,9 +1953,7 @@ def _causation_paragraph(dx_struct: dict, styles):
 # PDF builder
 # =======================================================
 def build_combined_pdf(path: str, payloads: list):
-    styles = getSampleStyleSheet()
-    #styles["Heading2"].spaceBefore = 8
-    #styles["Heading2"].spaceAfter = 5
+    styles = getSampleStyleSheet()    
 
     rom_motion = ParagraphStyle(
         name="ROMMotion",
@@ -2137,16 +2109,7 @@ def build_combined_pdf(path: str, payloads: list):
         hoi_flow = build_hoi_flowables(hoi_struct, styles, doc_width)
         if hoi_flow:
             story.extend(hoi_flow)
-            story.append(Spacer(1, 0.12 * inch))
-
-        # manual = _hoi_manual_text_for_exam(exam_name, hoi_struct)
-        # if manual:
-        #     story.append(Paragraph("<b>Additional Notes</b>", styles["Heading3"]))
-        #     story.append(Spacer(1, 0.06 * inch))
-        #     safe = xml_escape(manual).replace("\n\n", "<br/><br/>").replace("\n", "<br/>")
-        #     story.append(Paragraph(safe, styles["BodyText"]))
-        #     story.append(Spacer(1, 0.12 * inch))
-
+            story.append(Spacer(1, 0.12 * inch))        
 
         # Subjectives
         story.append(Paragraph("<b>SUBJECTIVES</b>", styles["Heading2"]))
@@ -2222,13 +2185,7 @@ def build_combined_pdf(path: str, payloads: list):
             story.append(Paragraph(safe_fs, styles["BodyText"]))
 
             story.append(Spacer(1, 0.12 * inch))
-
-
-
-        # Objectives
-        # story.append(Paragraph("<b>Objectives</b>", styles["Heading2"]))
-        # story.append(Spacer(1, 0.10 * inch))
-
+        
         # Objectives
         obj_flow = build_objectives_flowables(objectives_struct, styles, doc_width)
 
@@ -2274,7 +2231,6 @@ def build_combined_pdf(path: str, payloads: list):
             return _strip_dx_auto_tag((soap.get("diagnosis") or "").strip())
 
 
-
         # Diagnosis / Plan
         def add_section(title: str, content: str):
             story.append(Paragraph(f"<b>{xml_escape(title)}</b>", styles["Heading3"]))
@@ -2290,10 +2246,7 @@ def build_combined_pdf(path: str, payloads: list):
             story.append(Spacer(1, 0.14 * inch))
 
         dx_text = _dx_text_from_soap(soap)
-
-        # print("Heading2 spaceAfter:", styles["Heading2"].spaceAfter)
-        # print("Heading2 spaceBefore:", styles["Heading2"].spaceBefore)
-        
+                
         # ================================
         # ASSESSMENT SECTION
         # ================================
@@ -2308,8 +2261,7 @@ def build_combined_pdf(path: str, payloads: list):
 
         if assessment_para:
             story.append(assessment_para)
-            story.append(Spacer(1, 0.10 * inch))
-        
+            story.append(Spacer(1, 0.10 * inch))        
 
         story.append(Spacer(1, 0.14 * inch))
 
@@ -2326,12 +2278,8 @@ def build_combined_pdf(path: str, payloads: list):
             'BoldBody',
             parent=styles['BodyText'],
             fontName='Helvetica-Bold'
-        )
-        
-        # dx_struct = soap.get("diagnosis_struct") or {}
-        
-        
-                       
+        )               
+                               
         prog = (dx_struct.get("prognosis") or "").strip()
         if prog and prog != "(select)":
             if prog.lower() == "guarded":
@@ -2365,7 +2313,6 @@ def build_combined_pdf(path: str, payloads: list):
             story.append(Spacer(1, 0.04 * inch))
             story.append(emp_current_para)
             story.append(Spacer(1, 0.10 * inch))
-
 
         # ✅ Plan (structured PDF rendering)
         dx_struct = soap.get("diagnosis_struct") or {}
@@ -2402,14 +2349,8 @@ def build_combined_pdf(path: str, payloads: list):
             story.extend(plan_flow)
             story.append(Spacer(1, 0.14 * inch))
         else:
-            add_section("Plan", "")
-            
-        
-
-        # story.append(Spacer(1, 0.18 * inch))
-        # story.append(Paragraph("Provider Signature: ________________________________", styles["Normal"]))
-        
-        
+            add_section("Plan", "")          
+                               
         provider = ((payload.get("patient") or {}).get("provider") or "").strip()
 
         sig_block = [

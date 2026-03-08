@@ -1,7 +1,6 @@
 # subjectives.py
 import tkinter as tk
 from tkinter import ttk, messagebox
-
 from ui_blocks import DescriptorBlock
 from config import REGION_LABELS
 
@@ -29,7 +28,6 @@ def join_with_and(items: list[str]) -> str:
     if len(items) == 2:
         return f"{items[0]} and {items[1]}"
     return ", ".join(items[:-1]) + f", and {items[-1]}"
-
 
 
 class SubjectivesPage(ttk.Frame):
@@ -145,32 +143,7 @@ class SubjectivesPage(ttk.Frame):
             self._therapy_loading = False
 
         if callable(self.on_change_callback):
-            self.on_change_callback()
-
-
-    # def _on_therapy_toggle(self, name):
-    #     # Current checked items (in your fixed order)
-    #     selected = [p for p in THERAPY_BODY_PARTS if self.therapy_vars[p].get()]
-
-    #     # If everything is empty -> fresh state
-    #     if not selected:
-    #         self._therapy_main = None
-    #         if callable(self.on_change_callback):
-    #             self.on_change_callback()
-    #         return
-
-    #     # If we have a main but it's no longer checked, clear it
-    #     if self._therapy_main and self._therapy_main not in selected:
-    #         self._therapy_main = None
-
-    #     # If no main yet, set it to the FIRST checked (fixed order)
-    #     if self._therapy_main is None:
-    #         self._therapy_main = selected[0]
-
-    #     if callable(self.on_change_callback):
-    #         self.on_change_callback()
-
-
+            self.on_change_callback()    
 
     
     def _show_therapy(self):
@@ -327,7 +300,6 @@ class SubjectivesPage(ttk.Frame):
     def _go_back_to_subjectives(self):
         """Switch back to regular Subjectives view."""
         self._subjectives_frame.tkraise()
-
     
     # ---------- UI ----------
     def _build_ui(self):
@@ -392,8 +364,7 @@ class SubjectivesPage(ttk.Frame):
             self._therapy_frame.grid_columnconfigure(c, weight=1)
 
         # Start hidden
-        self._therapy_visible = False
-       
+        self._therapy_visible = False       
 
         # Container where blocks live (stacked with grid, like your main app pages)
         self.content = ttk.Frame(_host)
@@ -521,8 +492,7 @@ class SubjectivesPage(ttk.Frame):
             self.on_change_callback,
             on_mode_change=self._on_block_mode_change
         )
-        self._wire_block_therapy_hooks(block) 
-        
+        self._wire_block_therapy_hooks(block)         
 
         block.frame.grid(row=0, column=0, sticky="nsew")  # stack all blocks in same cell
 
@@ -593,7 +563,6 @@ class SubjectivesPage(ttk.Frame):
         }
         
 
-
     def from_dict(self, data: dict):
         blocks = (data or {}).get("blocks") or []
 
@@ -634,9 +603,7 @@ class SubjectivesPage(ttk.Frame):
         if not self.blocks:
             self._add_block()
         else:
-            self.show_block(0)
-            
-
+            self.show_block(0)            
 
         therapy_state = (data or {}).get("therapy_only") or {}
 
@@ -659,11 +626,8 @@ class SubjectivesPage(ttk.Frame):
             self._therapy_main = self._therapy_order[0] if self._therapy_order else None
 
         finally:
-            self._therapy_loading = False
-
-       
+            self._therapy_loading = False       
         
-
         self._refresh_nav_buttons()
         self._sync_therapy_visibility()   # ✅ force correct show/hide on load
         self.on_change_callback()

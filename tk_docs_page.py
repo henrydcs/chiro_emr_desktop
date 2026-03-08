@@ -1,6 +1,5 @@
 # tk_docs_page.py
 from __future__ import annotations
-
 import json
 import os
 import tkinter as tk
@@ -131,7 +130,6 @@ class TkDocsPage(ttk.Frame):
         self.canvas.bind("<Leave>", _clear_target)
         self.inner.bind("<Leave>", _clear_target)
 
-
         # --- global wheel capture so scrolling works over buttons too ---
 
         def _is_descendant(widget, ancestor) -> bool:
@@ -149,40 +147,7 @@ class TkDocsPage(ttk.Frame):
                 return False
             if not w:
                 return False
-            return _is_descendant(w, self)
-
-        # def _wheel_global(event):
-        #     if not self.winfo_viewable():
-        #         return
-        #     if not _pointer_over_this_page(event):
-        #         return
-
-        #     if getattr(event, "delta", 0):
-        #         steps = int(-1 * (event.delta / 120)) or (-1 if event.delta > 0 else 1)
-        #         self.canvas.yview_scroll(steps, "units")
-        #         return "break"
-
-        # def _wheel_linux_up(event):
-        #     if not self.winfo_viewable():
-        #         return
-        #     if not _pointer_over_this_page(event):
-        #         return
-        #     self.canvas.yview_scroll(-1, "units")
-        #     return "break"
-
-        # def _wheel_linux_down(event):
-        #     if not self.winfo_viewable():
-        #         return
-        #     if not _pointer_over_this_page(event):
-        #         return
-        #     self.canvas.yview_scroll(1, "units")
-        #     return "break"
-
-        # bind globally so buttons don't block scroll
-        # self.bind_all("<MouseWheel>", _wheel_global, add="+")
-        # self.bind_all("<Button-4>", _wheel_linux_up, add="+")
-        # self.bind_all("<Button-5>", _wheel_linux_down, add="+")
-
+            return _is_descendant(w, self)        
 
         # hover tracking (mouse move) — use ONLY this (delete _on_inner_motion binding)
         self.inner.bind("<Motion>", self._on_motion, "+")
@@ -190,24 +155,14 @@ class TkDocsPage(ttk.Frame):
         self.inner.bind("<Leave>", self._on_leave, "+")
         self.canvas.bind("<Leave>", self._on_leave, "+")
 
-
         # resize behaviors
         self.inner.bind("<Configure>", self._on_inner_configure)
-        self.canvas.bind("<Configure>", self._on_canvas_configure)
-
-        # --- mousewheel: Docs owns scrolling, stop App.bind_all from stealing it ---
-    
-
+        self.canvas.bind("<Configure>", self._on_canvas_configure)            
 
         self._last_hover_key = None
 
-
-
-
         self._rows: list[ttk.Button] = []
-
         
-
 
     def _on_motion(self, event):
         if not self.on_hover_exam:
@@ -270,23 +225,8 @@ class TkDocsPage(ttk.Frame):
 
     def _on_canvas_configure(self, e):
         # keep inner width same as canvas width
-        self.canvas.itemconfigure(self.inner_id, width=e.width)    
-
-    # def _on_mousewheel(self, event):
-    #     if event.delta == 0:
-    #         return "break"
-    #     steps = int(-1 * (event.delta / 120)) or (-1 if event.delta > 0 else 1)
-    #     self.canvas.yview_scroll(steps, "units")
-    #     return "break"  # <- STOP bubbling to App.bind_all
-
-    # def _on_mousewheel_linux_up(self, _event):
-    #     self.canvas.yview_scroll(-1, "units")
-    #     return "break"
-
-    # def _on_mousewheel_linux_down(self, _event):
-    #     self.canvas.yview_scroll(1, "units")
-    #     return "break"
-
+        self.canvas.itemconfigure(self.inner_id, width=e.width)   
+    
 
     def _clear(self):
         for w in self.inner.winfo_children():
@@ -368,7 +308,6 @@ class TkDocsPage(ttk.Frame):
             b._date_str = date_str
 
             self._rows.append(b)
-
 
         # force scrollregion update
         self.update_idletasks()

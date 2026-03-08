@@ -1,10 +1,8 @@
 # master_save.py
 from __future__ import annotations
-
 import os
 from contextlib import contextmanager
 from tkinter import messagebox
-
 from utils import safe_slug
 from config import PATIENT_SUBDIR_PDFS
 
@@ -27,10 +25,8 @@ class MasterSaveController:
 
     def __init__(self, app):
         self.app = app
-
-    # -----------------------------
-    # Popup silencing (safe)
-    # -----------------------------
+    
+    # Popup silencing (safe)    
     @contextmanager
     def _silence_info_warning(self):
         """
@@ -48,10 +44,8 @@ class MasterSaveController:
         finally:
             messagebox.showinfo = orig_showinfo
             messagebox.showwarning = orig_showwarning
-
-    # -----------------------------
-    # PDF cleanup to prevent duplicates
-    # -----------------------------
+    
+    # PDF cleanup to prevent duplicates    
     def _remove_existing_exam_pdfs(self, patient_root: str) -> int:
         """
         Deletes existing PDFs for the CURRENT exam in patient_root/pdfs/.
@@ -81,10 +75,8 @@ class MasterSaveController:
             pass
 
         return deleted
-
-    # -----------------------------
-    # Main action
-    # -----------------------------
+            
+    # Main action    
     def run(self):
         app = self.app
         exam = (app.current_exam.get() or "").strip() or "Exam"

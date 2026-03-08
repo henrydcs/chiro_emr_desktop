@@ -1,13 +1,9 @@
 # objectives.py
 import tkinter as tk
 from tkinter import ttk, messagebox
-
 from config import REGION_OPTIONS, REGION_LABELS, REGION_MUSCLES
 
-
-# -----------------------------
 # Severity scale (0-9)
-# -----------------------------
 SEVERITY_LABELS = {
     0: "Within Normal Levels",
     1: "Minimum",
@@ -25,7 +21,6 @@ SEVERITY_VALUES = list(range(10))
 POSTURE_LEVELS = ["(none)", "Normal/Level", "Left high", "Right high"]
 POSTURE_SEVERITY = ["(none)", "Mild", "Moderate", "Severe"]
 LORDOSIS_LEVELS = ["(none)", "Normal", "Decreased", "Increased"]
-
 
 # -----------------------------
 # Region-specific Ortho + ROM
@@ -123,7 +118,6 @@ def _region_group_name(label: str) -> str:
         return label
     return f"{label} Spine"
 
-
 def _region_tag(code: str) -> str:
     c = (code or "").strip()
     mapping = {
@@ -157,8 +151,6 @@ def _region_tag(code: str) -> str:
     }
 
     return mapping.get(c, c if c and c != "(none)" else "")
-
-
 
 # -----------------------------
 # Toggleable Radiobutton group (TTK-safe)
@@ -198,7 +190,6 @@ class ToggleRadioGroup(ttk.Frame):
             self.on_change()
 
         return "break"
-
 
 # -----------------------------
 # Collapsible auto-growing notes
@@ -342,7 +333,6 @@ class CollapsibleAutoNotes(ttk.Frame):
         self._load_var_into_text()
         self._apply_open_state()
 
-
 # -----------------------------
 # Palpation row:
 # Left severity + centered label + Right severity
@@ -423,8 +413,6 @@ class PalpationCompactRow(ttk.Frame):
         self.l_sev.set(int(data.get("l_sev", -1)))
         self.r_sev.set(int(data.get("r_sev", -1)))
 
-
-
 # -----------------------------
 # Orthopedic row:
 # Left: (-1 none / 0 Neg / 1 Pos)  label  Right: (-1 / 0 / 1)
@@ -481,7 +469,6 @@ class LROrthoRow(ttk.Frame):
     def set_state(self, data: dict):
         self.l_res.set(int(data.get("l_res", -1)))
         self.r_res.set(int(data.get("r_res", -1)))
-
 
 # -----------------------------
 # ROM row:
@@ -601,7 +588,6 @@ class LRROMRow(ttk.Frame):
         if self.disable_right:
             self._set_right_enabled(False)
 
-
 # -----------------------------
 # Global (Vitals / Inspection) panel
 # - collapsible
@@ -654,9 +640,7 @@ class VitalsInspectionPanel(ttk.Frame):
             "CS": tk.BooleanVar(value=False),
             "TS": tk.BooleanVar(value=False),
             "LS": tk.BooleanVar(value=False),
-        }
-
-        
+        }        
 
         # Grip (one line)
         self.grip_left_var = tk.StringVar(value="")
@@ -728,15 +712,11 @@ class VitalsInspectionPanel(ttk.Frame):
 
         self.container.update_idletasks()
 
-
-
-
         self._build_vitals_panel()
         self._build_posture_panel()
         self._build_sublux_panel()
         self._build_grip_panel()
         self._build_adl_panel()  # ✅ NEW
-
 
         self._apply_open_state()
 
@@ -935,8 +915,6 @@ class VitalsInspectionPanel(ttk.Frame):
         )
 
         self.sublux_preview.grid(row=5, column=0, sticky="w")
-
-
 
     def _build_grip_row(self, f):
         ttk.Label(f, text="Left:").grid(row=0, column=0, sticky="e", padx=(0, 4), pady=2)
@@ -1174,7 +1152,6 @@ class VitalsInspectionPanel(ttk.Frame):
             (self.adl_notes_var.get() or "").strip()
         )
 
-
         return vitals_any or posture_any or sublux_any or grip_any or adl_any
 
     def to_dict(self) -> dict:
@@ -1270,9 +1247,6 @@ class VitalsInspectionPanel(ttk.Frame):
             except Exception:
                 pass
 
-
-
-
         g = data.get("grip") or {}
         self.grip_left_var.set(g.get("left", ""))
         self.grip_right_var.set(g.get("right", ""))
@@ -1295,8 +1269,6 @@ class VitalsInspectionPanel(ttk.Frame):
             var.set(label in selected)
 
         self.adl_notes_var.set(adl.get("notes", ""))
-
-
         self._apply_open_state()
 
     def reset(self):
@@ -1353,8 +1325,6 @@ class VitalsInspectionPanel(ttk.Frame):
 
         self._apply_open_state()
         self._changed()
-
-
 
 # -----------------------------
 # One Objectives Block (region-specific)
@@ -1416,8 +1386,6 @@ class ObjectivesBlock(ttk.Frame):
 
         self.palp_notes_widget.tkraise()
 
-
-
     def _build_header(self):
         hdr = ttk.Frame(self)
         hdr.pack(fill="x", padx=10, pady=(10, 6))
@@ -1455,7 +1423,6 @@ class ObjectivesBlock(ttk.Frame):
         # ✅ Notes area directly under radios (next section)
         self._build_notes_area()
 
-
     def _build_section_frames(self):
         self.section_container = ttk.Frame(self)
         self.section_container.pack(fill="both", expand=True, padx=10, pady=(0, 10))
@@ -1492,7 +1459,6 @@ class ObjectivesBlock(ttk.Frame):
             ttk.Label(self.rom_frame, text="Select a region.").pack(anchor="w", padx=10, pady=10)
             return
 
-
         # Palpation rows
         palp_items = REGION_MUSCLES.get(code, []) or []
         if palp_items:
@@ -1512,7 +1478,6 @@ class ObjectivesBlock(ttk.Frame):
                 row=0, column=0, sticky="w", padx=10, pady=10
             )
 
-
         # Ortho rows
         ortho_items = REGION_ORTHO_TESTS.get(code, []) or []
         if ortho_items:
@@ -1522,11 +1487,7 @@ class ObjectivesBlock(ttk.Frame):
                 self.ortho_rows[item] = row
         else:
             ttk.Label(self.ortho_frame, text="(No orthopedic tests configured)").pack(anchor="w", padx=10, pady=10)
-
-        # Ortho notes
-        # ortho_notes = CollapsibleAutoNotes(self.ortho_frame, "Orthopedic Notes", self.ortho_notes_var, on_change=self._changed)
-        # ortho_notes.pack(fill="x", padx=10, pady=(10, 8))
-
+        
         # ROM rows
         rom_items = REGION_ROM_MOTIONS.get(code, []) or []
         if rom_items:
@@ -1541,12 +1502,7 @@ class ObjectivesBlock(ttk.Frame):
                 row.pack(fill="x", padx=10, pady=3)
                 self.rom_rows[item] = row
         else:
-            ttk.Label(self.rom_frame, text="(No ROM list configured)").pack(anchor="w", padx=10, pady=10)
-
-
-        # ROM notes
-        # rom_notes = CollapsibleAutoNotes(self.rom_frame, "ROM Notes", self.rom_notes_var, on_change=self._changed)
-        # rom_notes.pack(fill="x", padx=10, pady=(10, 8))
+            ttk.Label(self.rom_frame, text="(No ROM list configured)").pack(anchor="w", padx=10, pady=10)        
 
     def _show_section(self, which: str):
         if which == "Vitals / Inspection":
@@ -1571,8 +1527,6 @@ class ObjectivesBlock(ttk.Frame):
             # fallback
             self.palp_frame.tkraise()
             self.palp_notes_widget.tkraise()
-
-
 
     def _on_region_change(self):
         self._rebuild_for_region()
@@ -1655,7 +1609,6 @@ class ObjectivesBlock(ttk.Frame):
         for name, row in self.rom_rows.items():
             if isinstance(rom.get(name), dict):
                 row.set_state(rom[name])
-
         
         self.palp_notes_var.set(data.get("palpation_notes", ""))
         self.ortho_notes_var.set(data.get("ortho_notes", ""))
@@ -1674,7 +1627,6 @@ class ObjectivesBlock(ttk.Frame):
         self.ortho_notes_var.set("")
         self.rom_notes_var.set("")
         self._rebuild_for_region()
-
 
 # -----------------------------
 # Objectives Page (Global + Blocks)
@@ -1700,7 +1652,6 @@ class ObjectivesPage(ttk.Frame):
             self.global_panel._show_active()
         except Exception:
             pass
-
 
     def show_blocks(self):
         self.block_container.tkraise()        
@@ -1776,8 +1727,6 @@ class ObjectivesPage(ttk.Frame):
         self.active_index = index
         self._handle_change()
 
-
-
     def _handle_change(self):
         if callable(self.on_change_callback):
             self.on_change_callback()
@@ -1828,7 +1777,7 @@ class ObjectivesPage(ttk.Frame):
     def reset(self):
         if not messagebox.askyesno("Reset Objectives", "Are you sure you want to clear ALL objectives?"):
             return
-
+            
         self.global_panel.reset()
 
         for b in self.blocks:

@@ -7,7 +7,6 @@ from pathlib import Path
 #DEFAULT_DATA_DIR = r"C:\EMR_Data\EMR"
 DEFAULT_DATA_DIR = r"C:\EMR_Data\HOME"
 
-
 def get_data_dir() -> Path:
     """
     Returns the base PHI-safe data directory.
@@ -37,21 +36,17 @@ def get_data_dir() -> Path:
 
     return base
 
-
 def patients_dir() -> Path:
     """Root folder for patient/case data"""
     return get_data_dir() / "patients"
-
 
 def exports_dir() -> Path:
     """Root folder for generated PDFs"""
     return get_data_dir() / "exports"
 
-
 def uploads_dir() -> Path:
     """Root folder for imaging and document uploads"""
     return get_data_dir() / "uploads"
-
 
 def db_dir() -> Path:
     """Root folder for SQLite databases"""

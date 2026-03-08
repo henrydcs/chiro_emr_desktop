@@ -1,11 +1,8 @@
 # plan_pdf.py
 from __future__ import annotations
-
 from xml.sax.saxutils import escape as xml_escape
-
 from reportlab.lib.units import inch
 from reportlab.lib.styles import ParagraphStyle
-
 from reportlab.lib.styles import ParagraphStyle, getSampleStyleSheet
 from reportlab.lib.enums import TA_LEFT
 
@@ -27,14 +24,12 @@ def _should_print_schedule_pdf(d: dict) -> bool:
         return True
 
 
-
 def _clean(s: str) -> str:
     return (s or "").strip()
 
 
 def _list_or_empty(x):
     return x if isinstance(x, (list, tuple)) else []
-
 
 # =========================================================
 # Services Provided Today helpers (for PDF)
@@ -233,12 +228,7 @@ def _build_services_flowables(d: dict, B) -> list:
     has_em = bool(exam_code or exam_notes)
     if not (has_cmt or has_therapy or has_em):
         return []
-
-    # --- Styles (indent levels) ---
-    # 0: Services Provided Today
-    # 1: Chiropractic CMT / Modalities
-    # 2: Adjustment Codes / Modality Code
-    # 3: Segments / body parts
+    
     H0 = ParagraphStyle(
         "SvcH0", parent=B, fontName="Helvetica-Bold", fontSize=11, leading=12,
         spaceBefore=6, spaceAfter=6, leftIndent=0
@@ -272,9 +262,7 @@ def _build_services_flowables(d: dict, B) -> list:
     # =========================
     if has_cmt:
         story.append(Paragraph("<b>Chiropractic Manipulative Treatment</b>", SUBHEAD))
-
-        # 
-        
+                 
         code_num = _clean(cmt_code.split(":")[0])
         code_desc = _format_cmt_code_label(cmt_code)
 
@@ -282,7 +270,6 @@ def _build_services_flowables(d: dict, B) -> list:
             story.append(
                 Paragraph(
                     f"Adjustment Code: <b>{esc(code_num)}</b> \u2014 {esc(code_desc.replace(f'({code_num})','').strip())}", LINE))
-
 
         # Segments Adjusted
         seg_lines = []

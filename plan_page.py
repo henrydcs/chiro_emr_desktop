@@ -7,7 +7,6 @@ from scrollframe import ScrollFrame
 
 AUTO_PLAN_TAG = "[AUTO:PLAN]"
 
-
 def _clean(s: str) -> str:
     return (s or "").strip()
 
@@ -60,8 +59,6 @@ class CollapsibleSection(ttk.Frame):
         else:
             self._btn.configure(text="▼")
             self.content.grid()
-
-
 
 class PlanPage(ttk.Frame):
     """
@@ -225,7 +222,6 @@ class PlanPage(ttk.Frame):
         self._notify_change()
 
 
-
     def __init__(self, parent, on_change=None):
         super().__init__(parent)
         self.on_change = on_change
@@ -380,14 +376,10 @@ class PlanPage(ttk.Frame):
                 fn()
             except Exception:
                 pass
-
         
-        self._notify_change()
-        #self._clear_plan_text()
+        self._notify_change()       
         
-
-
-
+    
     def _refresh_print_schedule_btn(self):
         """
         Makes the button look/feel like a toggle.
@@ -399,7 +391,6 @@ class PlanPage(ttk.Frame):
             self._btn_print_schedule.configure(text=txt)
         except Exception:
             pass
-
 
     # ---------------- providers ----------------
     def set_patient_provider(self, fn):
@@ -1310,8 +1301,6 @@ class PlanPage(ttk.Frame):
             "Bilateral Ankles/Feet", "Right Ankle/Foot", "Left Ankle/Foot",
         ]
 
-
-
         active_therapy_vars = {}
 
         for part in body_parts:
@@ -1470,9 +1459,7 @@ class PlanPage(ttk.Frame):
             self.current_cmt_notes.set(services.get("cmt_notes", "") or "") 
             self.current_em_code.set(services.get("em_code", "") or "")
             self.exam_notes_var.set(services.get("exam_notes", "") or "")
-            self.therapy_data = services.get("therapy_data", {}) or {}
-            
-
+            self.therapy_data = services.get("therapy_data", {}) or {}            
 
             self._sync_other_entries()
         finally:
@@ -1482,7 +1469,6 @@ class PlanPage(ttk.Frame):
             self.update_services_summary_labels()
         except Exception:
             pass
-
 
         # If auto is enabled and plan is blank or auto-tagged, regen
         if self.auto_plan_var.get():

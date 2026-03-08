@@ -9,7 +9,6 @@ import tkinter as tk
 from tkinter import ttk, filedialog, messagebox
 from send2trash import send2trash
 
-
 # Vault folder names (inside patient root)
 VAULT_FOLDERS = [
     "attorney",

@@ -3,8 +3,6 @@ import os
 from pathlib import Path
 from paths import get_data_dir, patients_dir
 
-
-
 from env_config import get_env
 
 PROVIDER_NAME = get_env("PROVIDER_NAME", "")
@@ -12,15 +10,12 @@ CLINIC_NAME = get_env("CLINIC_NAME", "Default Clinic Name")
 CLINIC_ADDR = get_env("CLINIC_ADDR", "")
 CLINIC_PHONE_FAX = get_env("CLINIC_PHONE_FAX", "")
 
-
-
 # ----------------- PROJECT ROOT -----------------
 BASE_DIR = os.path.dirname(__file__)
 
 # ----------------- ASSETS -----------------
 ASSETS_DIR = os.path.join(BASE_DIR, "assets")
 LOGO_PATH = os.path.join(ASSETS_DIR, "clinic_logo.png")  # PNG
-
 
 # ----------------- CASE STORAGE (PHI-safe, external) -----------------
 ACTIVE_YEAR = 2026

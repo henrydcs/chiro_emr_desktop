@@ -5,11 +5,6 @@ import os
 import tkinter as tk
 from tkinter import ttk, messagebox
 
-
-#"alerts": {"red_flags": ["Progressive neuro deficits", "Night pain not relieved by rest"],"rapport": ["Likes fishing", "Has 2 kids", "Works night shift"], "conversation_prompts": ["Ask about the new puppy", "Follow up on hiking trip"]}
-
-
-
 def _clean(s: str) -> str:
     return (s or "").strip()
 
@@ -114,10 +109,7 @@ class AlertsPopup(tk.Toplevel):
             start_row = 2
         else:
             start_row = 0
-
-        # ✅ responsive columns (choose one)
-        # root.columnconfigure(0, weight=1)
-        # root.columnconfigure(1, weight=1)
+       
 
         root.columnconfigure(0, weight=1)  # red flags narrower
         root.columnconfigure(1, weight=2)  # rapport wider
@@ -125,11 +117,7 @@ class AlertsPopup(tk.Toplevel):
         # ✅ responsive rows
         root.rowconfigure(start_row + 0, weight=1)
         root.rowconfigure(start_row + 1, weight=1)
-
-        # (REMOVE these — they break start_row responsiveness)
-        # root.rowconfigure(0, weight=1)
-        # root.rowconfigure(1, weight=1)
-
+        
         # LEFT: Red flags
         lf = ttk.LabelFrame(root, text="Red flags / watch-outs")
         lf.grid(row=start_row + 0, column=0, sticky="nsew", padx=(0, 6), pady=(0, 6))

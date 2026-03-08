@@ -3,13 +3,11 @@
 import tkinter as tk
 from tkinter import ttk
 import re
-
 from config import (
     PAIN_DESCRIPTORS, RADIC_SYMPTOMS, RADIC_LOCATIONS,
     REGION_OPTIONS, REGION_LABELS, REGION_MUSCLES
 )
 from utils import build_sentence
-
 
 PAIN_SCALE_OPTIONS = [
     "Select",
@@ -264,7 +262,6 @@ class DescriptorBlock:
             self.frame.grid_configure(sticky=("nsew" if fill else "new"))
         except Exception:
             pass
-
     
     
     def _apply_view(self):
@@ -379,7 +376,6 @@ class DescriptorBlock:
             self.on_change_callback()
 
 
-
     def is_active(self) -> bool:
         return self.region_var.get() in REGION_LABELS
 
@@ -431,10 +427,7 @@ class DescriptorBlock:
         if code == "(none)" or not label:
             if overwrite_if_auto:
                 self.narrative_text.delete("1.0", tk.END)
-            return
-        # Auto content no longer written to narrative_text; it is exposed via
-        # get_auto_generated_text() and shown in Live Preview.
-
+            return        
 
 
     def reset(self):

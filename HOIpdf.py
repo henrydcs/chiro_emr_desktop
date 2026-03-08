@@ -7,10 +7,8 @@ import re
 # Keep this in sync with HOI.py
 AUTO_MOI_TAG = "[AUTO:MOI]"
 
-
 def _clean_text(x) -> str:
     return (x or "").strip()
-
 
 def _get(d: dict, *path, default=""):
     cur = d
@@ -19,7 +17,6 @@ def _get(d: dict, *path, default=""):
             return default
         cur = cur.get(key)
     return cur if cur is not None else default
-
 
 def _strip_auto_tag(text: str) -> str:
     """
@@ -42,12 +39,10 @@ def _format_multiline(text: str) -> str:
     safe = safe.replace("\n\n", "<br/><br/>").replace("\n", "<br/>")
     return safe
 
-
 def _as_list(x):
     if isinstance(x, list):
         return x
     return []
-
 
 def _clean_list(xs):
     return [s.strip() for s in (xs or []) if isinstance(s, str) and s.strip()]
@@ -112,7 +107,6 @@ def _build_imaging_lines(hoi_struct: dict) -> list[str]:
     else:
         lines.append(f"Imaging studies were performed in the form of {type_txt}.")
     return lines
-
 
 def build_rof_flowables(
     hoi_struct: dict,
@@ -193,18 +187,14 @@ def build_hoi_flowables(hoi_struct: dict, styles, doc_width, include_rof: bool =
     if include_rof:
         out.extend(build_rof_flowables(hoi_struct, styles, deny_modes={"ROF", ""}))
 
-    # -------------------------------------------------
-    # History of Injury (existing behavior)
-    # -------------------------------------------------
+    
+    # History of Injury (existing behavior)    
     moi_raw = _clean_text(_get(hoi_struct, "history", "moi", default=""))
     moi_pdf = _strip_auto_tag(moi_raw)
 
     if not moi_pdf:
         return out if out else []
-
-    # out.append(Paragraph("<b>History of Injury</b>", styles["Heading2"]))
-    # out.append(Spacer(1, 0.08 * inch))
-
+    
     out.append(
         KeepTogether(
             [

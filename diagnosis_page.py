@@ -22,10 +22,6 @@ def _clean(s: str) -> str:
     return (s or "").strip()
 
 # ----------------------------
-# SINGLE unified Dx list (with ICD-10 shown)
-# IMPORTANT: Many ICD-10 codes require laterality and/or 7th character;
-# these are "starter defaults" you can edit/expand safely.
-# ----------------------------
 DX_LIST: list[tuple[str, str]] = [
     # Head / neuro
     ("Concussion without loss of consciousness (initial encounter)", "S06.0X0A"),
@@ -280,7 +276,6 @@ class DxBlock(ttk.Frame):
         self.edit_var.set(d.get("edit_text", "") or "")
 
 
-
 class DiagnosisPage(ttk.Frame):
     """
     - Up to 9 Dx blocks laid out in 3 down x 3 across
@@ -413,16 +408,11 @@ class DiagnosisPage(ttk.Frame):
             if 0 <= i < len(self.referrals):
                 self.referrals.pop(i)
         self._refresh_ref_list()
-        self._changed()
-
-    
+        self._changed()    
     
     def _changed(self):
         if callable(self.on_change_callback):
             self.on_change_callback()
-
-
-
 
     def _assessment_screen_refresh(self, preset_map: dict[str, str]):
         choice = (self.assessment_choice_var.get() or "").strip()
@@ -1123,9 +1113,6 @@ class DiagnosisPage(ttk.Frame):
                 "text_visible": bool(self.text_visible.get()),
             },
         }
-
-
-
 
     def from_dict(self, data: dict):
         data = data or {}

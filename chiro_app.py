@@ -1305,33 +1305,11 @@ class App(tk.Tk):
             font=("Segoe UI", 10, "bold")
         )
         self.current_doc_label.pack(expand=True, anchor="center")
-
-
-        # Add buttons row tools (right side)style="AddExam.TButton"
-        # self.add_final_btn  = ttk.Button(self.exam_nav, text="+ Final", command=self.add_final, style="AddExam.TButton")
-
-        # self.add_reexam_btn = ttk.Button(
-        #     self.exam_nav,
-        #     text="+ Re-Exam",
-        #     command=self.add_reexam,
-        #     style="AddExam.TButton"
-        # )
-
-        # self.add_rof_btn = ttk.Button(
-        #     self.exam_nav,
-        #     text="+ ROF",
-        #     command=self.add_rof,
-        #     style="AddExam.TButton"
-        # )
+        
         
         # build once
         self._rebuild_exam_nav_buttons()
-
-        # pack add buttons at end
-        #self.add_rof_btn.pack(side="right", padx=(4, 0))
-        #self.add_reexam_btn.pack(side="right", padx=(4, 0))
-        #self.add_final_btn.pack(side="right", padx=(4, 0))
-
+        
         # ✅ Alias so your existing grid code can stay exactly the same:
         info = self.info_frame
 
@@ -1387,27 +1365,7 @@ class App(tk.Tk):
 
         # --- Content container (now inside left pane) ---
         self.content = ttk.Frame(left_root)
-        # --- Working Docs page (Tkraise) ---
-        # self.working_docs_page = ttk.Frame(self.content)
-
-        # Top row inside Working Docs for the + buttons
-        # self.working_docs_addbar = ttk.Frame(self.working_docs_page)
-        # self.working_docs_addbar.pack(fill="x", padx=10, pady=(10, 6))
-
-        # # --- Add Exam buttons live in Working Docs addbar ---
-        # self.add_initial_btn = ttk.Button(self.working_docs_addbar, text="+ Initial", command=self.add_initial, style="AddExam.TButton")
-        # self.add_reexam_btn  = ttk.Button(self.working_docs_addbar, text="+ Re-Exam", command=self.add_reexam, style="AddExam.TButton")
-        # self.add_rof_btn     = ttk.Button(self.working_docs_addbar, text="+ ROF", command=self.add_rof, style="AddExam.TButton")
-        # self.add_final_btn   = ttk.Button(self.working_docs_addbar, text="+ Final", command=self.add_final, style="AddExam.TButton")
-        # self.btn_chiro       = ttk.Button(self.working_docs_addbar, text="+ Chiro Visit", command=self.add_chiro_visit, style="AddExam.TButton")
-
-        # for b in (self.add_initial_btn, self.add_reexam_btn, self.add_rof_btn, self.add_final_btn, self.btn_chiro):
-        #     b.pack(side="left", padx=(0, 6))
-
-
-        # List area for the exam buttons
-        # self.working_docs_list = ttk.Frame(self.working_docs_page)
-        # self.working_docs_list.pack(fill="both", expand=True, padx=10, pady=(0, 10))
+        
 
         self.content.pack(fill="both", expand=True, pady=(10, 0))
         self.content.grid_rowconfigure(0, weight=1)
@@ -1510,33 +1468,15 @@ class App(tk.Tk):
 
         # Now that Working Docs widgets exist, build the exam buttons into it
         self._rebuild_exam_nav_buttons()
-        self._set_current_doc_label()
-
-
-        
-
+        self._set_current_doc_label()        
 
         # Default page now (since HOI History is gone)
-        self.show_page("Subjectives")
-
-               
-
+        self.show_page("Subjectives")               
 
         # Wire HOI providers (this is the critical part for your first-name + regions)
         self.hoi_page.set_regions_provider(self._regions_from_subjectives)
         self.hoi_page.set_patient_provider(self._patient_info_from_demo)
-
-        # self.pages = {
-        #     "HOI History": self.hoi_page,
-        #     "Subjectives": self.subjectives_page,
-        #     "Objectives": self.objectives_page,
-        #     "Diagnosis": self.diagnosis_page,
-        #     "Plan": self.plan_page,
-        #     "Document Vault": self.doc_vault_page,           
-        # }
-
-        # for page in self.pages.values():
-        #     page.grid(row=0, column=0, sticky="nsew")
+       
        
         # Mousewheel routing for Subjectives scroll canvas
         if hasattr(self.subjectives_page, "canvas"):
@@ -1595,11 +1535,7 @@ class App(tk.Tk):
             self.dob_var, self.doi_var,
             self.exam_date_var, self.claim_var, self.provider_var
         ):
-            v.trace_add("write", self._refresh_demo_summary)
-
-        
-
-
+            v.trace_add("write", self._refresh_demo_summary)        
 
     # ---------- Page switching ----------
 
@@ -1750,15 +1686,10 @@ class App(tk.Tk):
                     pass
 
 
-
-
     def switch_exam(self, exam_name: str, force: bool = False):
 
         if (not force) and (exam_name == self.current_exam.get()):
-            return
-
-        #if exam_name == self.current_exam.get():
-            #return
+            return        
 
         self._autosave(force=True)
 
@@ -1804,11 +1735,7 @@ class App(tk.Tk):
                 btn.configure(style="ActiveExam.TButton")
             else:
                 btn.configure(style="TButton")
-
-
-    # In the config import (around line 62), add:
-    #   EXAM_INDEX_SUBDIR,
-
+    
     # Then update _exam_index_path() (lines 1809-1816) to:
     def _exam_index_path(self) -> str | None:
         patient_root = self.get_current_patient_root()
@@ -1884,7 +1811,6 @@ class App(tk.Tk):
         except Exception:
             pass
 
-
     # ---------- Settings ----------
 
     def write_settings(self, settings: dict):
@@ -1931,11 +1857,6 @@ class App(tk.Tk):
             self.first_name_var.get() or "",
         )
         return str(folder)
-
-
-
-
-
 
 
     def compute_exam_path(self, exam_name: str | None = None) -> str | None:
@@ -2015,8 +1936,6 @@ class App(tk.Tk):
 
         # ✅ ONE place to refresh preview (debounced)
         self.request_live_preview_refresh()
-
-
         
 
     def _current_exam_has_content(self) -> bool:
@@ -2529,8 +2448,6 @@ class App(tk.Tk):
         finally:
             self._loading = False
                    
-
-
     # ---------- Reset ----------
 
     def clear_exam_content_only(self):
@@ -2597,9 +2514,7 @@ class App(tk.Tk):
                 })
             except Exception:
                 pass
-
         
-
 
     def reset_current_exam(self):
         if not messagebox.askyesno("Reset Exam", f"Clear ONLY the current exam ({self.current_exam.get()})?"):
