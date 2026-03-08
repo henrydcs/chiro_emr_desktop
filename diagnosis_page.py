@@ -301,8 +301,8 @@ class DiagnosisPage(ttk.Frame):
         self.blocks: list[DxBlock] = []
         
         # collapse states
-        self.blocks_visible = tk.BooleanVar(value=True)
-        self.text_visible = tk.BooleanVar(value=False)  # START HIDDEN (requested)
+        self.blocks_visible = tk.BooleanVar(value=False)
+        self.text_visible = tk.BooleanVar(value=True)  # START HIDDEN (requested)
 
         # --- Prognosis / Imaging / Referrals (structured) ---
         self.prognosis_var = tk.StringVar(value="(select)")
@@ -726,6 +726,41 @@ class DiagnosisPage(ttk.Frame):
         self.employment_notes.bind("<<Cut>>", lambda e: parent.after(1, _sync_notes))
         return fr
 
+    def _build_dx_block_frame(self, parent, padx=10) -> ttk.Frame:
+        """Build Dx Block section frame — diagnosis blocks live here (no extra Notes)."""
+        fr = ttk.Frame(parent)
+        fr.columnconfigure(0, weight=1)
+        fr.rowconfigure(0, weight=1)
+
+        # Diagnosis blocks container (scrollable) — same structure as before, now inside tkRaise
+        self.blocks_frame = ttk.Frame(fr)
+        self.blocks_frame.pack(fill="both", expand=True, padx=padx, pady=(10, 10))
+
+        blocks_container = ttk.Frame(self.blocks_frame)
+        blocks_container.pack(fill="both", expand=True)
+
+        self.blocks_canvas = tk.Canvas(blocks_container, highlightthickness=0)
+        self.blocks_vsb = ttk.Scrollbar(blocks_container, orient="vertical", command=self.blocks_canvas.yview)
+        self.blocks_canvas.configure(yscrollcommand=self.blocks_vsb.set)
+
+        self.blocks_canvas.pack(side="left", fill="both", expand=True)
+        self.blocks_vsb.pack(side="right", fill="y")
+
+        self.blocks_inner = ttk.Frame(self.blocks_canvas)
+        self.blocks_window = self.blocks_canvas.create_window((0, 0), window=self.blocks_inner, anchor="nw")
+
+        self.grid_area = ttk.Frame(self.blocks_inner)
+        self.grid_area.pack(fill="both", expand=True)
+        self.grid_area.columnconfigure(0, weight=1)
+        self.grid_area.columnconfigure(1, weight=1)
+
+        self.blocks_inner.bind("<Configure>", self._on_blocks_inner_configure)
+        self.blocks_canvas.bind("<Configure>", self._on_blocks_canvas_configure)
+        self.blocks_canvas.bind("<Enter>", lambda e: self._bind_blocks_mousewheel(True))
+        self.blocks_canvas.bind("<Leave>", lambda e: self._bind_blocks_mousewheel(False))
+
+        return fr
+    
     # ---------- UI ----------
     def _build_ui(self):
         padx = 10
@@ -757,6 +792,7 @@ class DiagnosisPage(ttk.Frame):
             btn.pack(side="left", padx=4)
             self._section_buttons[name] = btn
 
+        _add_dx_btn("Dx Block")
         _add_dx_btn("Assessment")
         _add_dx_btn("Causation")
         _add_dx_btn("Prognosis")
@@ -766,96 +802,42 @@ class DiagnosisPage(ttk.Frame):
 
         # Collapse toggles (right side)
         self.toggle_blocks_btn = ttk.Button(top, text="Hide Blocks", command=self._toggle_blocks)
-        self.toggle_blocks_btn.pack(side="right")
+        #self.toggle_blocks_btn.pack(side="right")
 
         self.toggle_text_btn = ttk.Button(top, text="Show Text Box", command=self._toggle_text)
         self.toggle_text_btn.pack(side="right", padx=(0, 8))
 
-        ttk.Separator(self.main_screen).pack(fill="x", padx=padx, pady=(6, 10))
+        ttk.Separator(self.main_screen).pack(fill="x", padx=padx, pady=(6, 10))      
 
-        # -------------------------
-        # Blocks grid frame (collapsible)  ✅ NOW SCROLLABLE
-        # -------------------------
-        self.blocks_frame = ttk.Frame(self.main_screen)
-        self.blocks_frame.pack(fill="both", expand=True, padx=padx, pady=(0, 10))
-
-        # Canvas + Scrollbar container
-        blocks_container = ttk.Frame(self.blocks_frame)
-        blocks_container.pack(fill="both", expand=True)
-
-        self.blocks_canvas = tk.Canvas(blocks_container, highlightthickness=0)
-        self.blocks_vsb = ttk.Scrollbar(blocks_container, orient="vertical", command=self.blocks_canvas.yview)
-        self.blocks_canvas.configure(yscrollcommand=self.blocks_vsb.set)
-
-        self.blocks_canvas.pack(side="left", fill="both", expand=True)
-        self.blocks_vsb.pack(side="right", fill="y")
-
-        # Inner frame inside the canvas (this is where your grid goes)
-        self.blocks_inner = ttk.Frame(self.blocks_canvas)
-        self.blocks_window = self.blocks_canvas.create_window((0, 0), window=self.blocks_inner, anchor="nw")
-
-        # ✅ your existing grid area lives inside blocks_inner
-        self.grid_area = ttk.Frame(self.blocks_inner)
-        self.grid_area.pack(fill="both", expand=True)
-
-        # Only need to configure columns for 2-across layout
-        self.grid_area.columnconfigure(0, weight=1)
-        self.grid_area.columnconfigure(1, weight=1)
-
-
-        # Keep scrollregion and width in sync
-        self.blocks_inner.bind("<Configure>", self._on_blocks_inner_configure)
-        self.blocks_canvas.bind("<Configure>", self._on_blocks_canvas_configure)
-
-        # Mousewheel scrolling only when hovering over the diagnosis blocks area
-        self.blocks_canvas.bind("<Enter>", lambda e: self._bind_blocks_mousewheel(True))
-        self.blocks_canvas.bind("<Leave>", lambda e: self._bind_blocks_mousewheel(False))
-
-
-        # -------------------------
-        # -------------------------
+        # -------------------------        # -------------------------
         # Text box frame (collapsible)
         # -------------------------
         self.text_frame = ttk.Frame(self.main_screen)
         # pack later in _apply_collapse_states
 
         # Two-column area inside text_frame
+                # Stacked area: top = tkRaise sections, bottom = Notes
         self.text_area = ttk.Frame(self.text_frame)
         self.text_area.pack(fill="both", expand=True)
 
-        self.text_area.columnconfigure(0, weight=2)  # left (diagnosis text)
-        self.text_area.columnconfigure(1, weight=1)  # right (prognosis/imaging/referrals)
+        self.text_area.columnconfigure(0, weight=1)
+        self.text_area.rowconfigure(0, weight=1)   # tkRaise sections get the space
+        self.text_area.rowconfigure(1, weight=0)   # Notes takes natural height
 
-        left = ttk.Frame(self.text_area)
-        left.grid(row=0, column=0, sticky="nsew", padx=(0, 10))
-        left.columnconfigure(0, weight=1)
-        left.rowconfigure(1, weight=1)
+        # Top: tkRaise container (Dx Block, Assessment, Prognosis, etc.)
+        top_frame = ttk.Frame(self.text_area)
+        top_frame.grid(row=0, column=0, sticky="nsew", pady=(0, 10))
+        top_frame.columnconfigure(0, weight=1)
+        top_frame.rowconfigure(0, weight=1)
 
-        right = ttk.Frame(self.text_area)
-        right.grid(row=0, column=1, sticky="nsew", padx=(10, 0))
-        right.columnconfigure(0, weight=1)
-        right.rowconfigure(0, weight=1)
-
-        ttk.Label(left, text="Notes (general text):").grid(row=0, column=0, sticky="w", pady=(0, 4))
-
-        self.text = tk.Text(left, height=8, wrap="word")
-        self.text.grid(row=1, column=0, sticky="nsew", pady=(0, 6))
-
-        # Reduce font size (optional: tweak)
-        self.text.configure(font=("Segoe UI", 9))
-
-        self.text.bind("<KeyRelease>", self._on_text_edited)
-        self.text.bind("<<Paste>>", lambda e: self.after(1, self._on_text_edited))
-        self.text.bind("<<Cut>>", lambda e: self.after(1, self._on_text_edited))
-        self.text.bind("<<Modified>>", self._on_text_modified)
-
-        # ---- RIGHT: tkRaise container (6 stacked frames) ----
-        self._dx_container = ttk.Frame(right)
+        # ---- tkRaise container (stacked section frames) ----
+        self._dx_container = ttk.Frame(top_frame)
         self._dx_container.grid(row=0, column=0, sticky="nsew")
         self._dx_container.grid_rowconfigure(0, weight=1)
         self._dx_container.grid_columnconfigure(0, weight=1)
 
         self._dx_frames = {
+            "Dx Block": self._build_dx_block_frame(self._dx_container, padx),
             "Assessment": self._build_assessment_frame(self._dx_container, padx),
             "Causation": self._build_causation_frame(self._dx_container, padx),
             "Prognosis": self._build_prognosis_frame(self._dx_container, padx),
@@ -867,7 +849,25 @@ class DiagnosisPage(ttk.Frame):
         for fr in self._dx_frames.values():
             fr.grid(row=0, column=0, sticky="nsew")
 
-        self._show_dx_block("Assessment")
+        self._show_dx_block("Dx Block")
+
+        # Bottom: Notes (general text)
+        notes_frame = ttk.Frame(self.text_area)
+        notes_frame.grid(row=1, column=0, sticky="ew", pady=(10, 0))
+        notes_frame.columnconfigure(0, weight=1)
+        notes_frame.rowconfigure(1, weight=1)
+
+        ttk.Label(notes_frame, text="Notes (general text):").grid(row=0, column=0, sticky="w", pady=(0, 4))
+
+        self.text = tk.Text(notes_frame, height=8, wrap="word")
+        self.text.grid(row=1, column=0, sticky="nsew", pady=(0, 6))
+
+        self.text.configure(font=("Segoe UI", 9))
+
+        self.text.bind("<KeyRelease>", self._on_text_edited)
+        self.text.bind("<<Paste>>", lambda e: self.after(1, self._on_text_edited))
+        self.text.bind("<<Cut>>", lambda e: self.after(1, self._on_text_edited))
+        self.text.bind("<<Modified>>", self._on_text_modified)
 
         tip = (
             "Tip: Use ↑/↓ on a diagnosis block to change order. "
@@ -883,16 +883,11 @@ class DiagnosisPage(ttk.Frame):
         Uses pack_forget()/pack() so it works with your current pack layout.
         """
         padx = 10
+        
+        # Blocks: Dx Block now lives in tkRaise (not toggled here). Button kept for future use.
+        self.toggle_blocks_btn.configure(text="Hide Blocks" if self.blocks_visible.get() else "Show Blocks")
 
-        # Blocks
-        if self.blocks_visible.get():
-            if not self.blocks_frame.winfo_ismapped():
-                self.blocks_frame.pack(fill="x", padx=padx, pady=(0, 10))
-            self.toggle_blocks_btn.configure(text="Hide Blocks")
-        else:
-            if self.blocks_frame.winfo_ismapped():
-                self.blocks_frame.pack_forget()
-            self.toggle_blocks_btn.configure(text="Show Blocks")
+        # Text box
 
         # Text box
         if self.text_visible.get():
@@ -1140,12 +1135,13 @@ class DiagnosisPage(ttk.Frame):
             ui = data.get("ui") or {}
             if "blocks_visible" in ui:
                 self.blocks_visible.set(bool(ui.get("blocks_visible")))
-            if "text_visible" in ui:
-                self.text_visible.set(bool(ui.get("text_visible")))
-            else:
-                # default: start hidden (requested)
-                self.text_visible.set(False)
-
+            # if "text_visible" in ui:
+            #     self.text_visible.set(bool(ui.get("text_visible")))
+            # else:
+            #     # default: start hidden (requested)
+            #     self.text_visible.set(False)
+                        # Always show tkRaise (Assessment, Prognosis, etc.) on load
+            self.text_visible.set(True)
             for b in list(self.blocks):
                 b.destroy()
             self.blocks.clear()
