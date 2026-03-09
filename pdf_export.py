@@ -125,7 +125,7 @@ def _referral_sentence(dx_struct: dict) -> str:
         if p and p != "(select)":
             parts.append(p)
     joined = _join_with_and(parts)
-    return f"Referrals: {joined}." if joined else ""
+    return f"Due to medical necessity, the patient will need to be referred to the following provider(s): {joined}." if joined else ""
 
 # =======================================================
 # Subjectives: "semi-bold" token markup
