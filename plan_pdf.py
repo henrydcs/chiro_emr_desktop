@@ -554,7 +554,7 @@ def plan_struct_to_live_preview_runs(
 
     # Notes
     if notes:
-        add_section("Notes", notes)
+        add_section("Notes", notes) 
 
     # Services Provided Today
     svc_text = _services_to_plain_text(d)
@@ -678,8 +678,8 @@ def build_plan_flowables(plan_struct: dict, styles, *, work_recs: str = "") -> l
     # Notes
     if notes:
         safe = xml_escape(notes).replace("\n", "<br/>")
-        story.append(Paragraph("<b>Notes:</b>", B))
-        story.append(Spacer(1, 4))
+        #story.append(Paragraph("<b></b>", B)) #it used to say Notes between the <b></b>
+        #story.append(Spacer(1, 4))
         story.append(Paragraph(safe, B))
         story.append(Spacer(1, 8))
 
