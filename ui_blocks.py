@@ -94,7 +94,8 @@ class DescriptorBlock:
 
         # initial auto-fill
         self.update_narrative(overwrite_if_auto=True)
-
+    
+    
     def _build_widgets(self, host):
         self._loading_block = True
         try:
@@ -150,13 +151,15 @@ class DescriptorBlock:
 
             # Body region
             ttk.Label(self.descriptor_frame, text="Body region:").grid(row=0, column=0, sticky="w", padx=0, pady=pady)
-            ttk.Combobox(
+            self.region_cb = ttk.Combobox(
                 self.descriptor_frame,
                 textvariable=self.region_var,
                 values=REGION_OPTIONS,
                 state="readonly",
                 width=10
-            ).grid(row=0, column=1, sticky="w", padx=(10, 0), pady=pady)
+            )
+            self._disable_mousewheel_on_cb(self.region_cb)
+            self.region_cb.grid(row=0, column=1, sticky="w", padx=(10, 0), pady=pady)
 
             self.region_label_var = tk.StringVar(value="")
             ttk.Label(self.descriptor_frame, textvariable=self.region_label_var, foreground="gray").grid(
@@ -168,43 +171,51 @@ class DescriptorBlock:
 
             # Primary descriptor
             ttk.Label(self.descriptor_frame, text="Primary pain descriptor:").grid(row=1, column=0, sticky="w", padx=0, pady=pady)
-            ttk.Combobox(
+            self.desc1_cb = ttk.Combobox(
                 self.descriptor_frame,
                 textvariable=self.desc1_var,
-                values=["(none)"] +PAIN_DESCRIPTORS,
+                values=["(none)"] + PAIN_DESCRIPTORS,
                 state="readonly",
                 width=26
-            ).grid(row=1, column=1, columnspan=2, sticky="w", padx=(10, 0), pady=pady)
+            )
+            self._disable_mousewheel_on_cb(self.desc1_cb)
+            self.desc1_cb.grid(row=1, column=1, columnspan=2, sticky="w", padx=(10, 0), pady=pady)
 
             # Secondary descriptor
             ttk.Label(self.descriptor_frame, text="Secondary pain descriptor:").grid(row=2, column=0, sticky="w", padx=0, pady=pady)
-            ttk.Combobox(
+            self.desc2_cb = ttk.Combobox(
                 self.descriptor_frame,
                 textvariable=self.desc2_var,
                 values=["(none)"] + PAIN_DESCRIPTORS,
                 state="readonly",
                 width=26
-            ).grid(row=2, column=1, columnspan=2, sticky="w", padx=(10, 0), pady=pady)
+            )
+            self._disable_mousewheel_on_cb(self.desc2_cb)
+            self.desc2_cb.grid(row=2, column=1, columnspan=2, sticky="w", padx=(10, 0), pady=pady)
 
             # Radiculopathy symptom
             ttk.Label(self.descriptor_frame, text="Radiculopathy symptom:").grid(row=3, column=0, sticky="w", padx=0, pady=pady)
-            ttk.Combobox(
+            self.radic_symptom_cb = ttk.Combobox(
                 self.descriptor_frame,
                 textvariable=self.radic_symptom_var,
                 values=RADIC_SYMPTOMS,
                 state="readonly",
                 width=26
-            ).grid(row=3, column=1, columnspan=2, sticky="w", padx=(10, 0), pady=pady)
+            )
+            self._disable_mousewheel_on_cb(self.radic_symptom_cb)
+            self.radic_symptom_cb.grid(row=3, column=1, columnspan=2, sticky="w", padx=(10, 0), pady=pady)
 
             # Radiculopathy location
             ttk.Label(self.descriptor_frame, text="Radiculopathy location:").grid(row=4, column=0, sticky="w", padx=0, pady=pady)
-            ttk.Combobox(
+            self.radic_location_cb = ttk.Combobox(
                 self.descriptor_frame,
                 textvariable=self.radic_location_var,
                 values=RADIC_LOCATIONS,
                 state="readonly",
                 width=26
-            ).grid(row=4, column=1, columnspan=2, sticky="w", padx=(10, 0), pady=pady)
+            )
+            self._disable_mousewheel_on_cb(self.radic_location_cb)
+            self.radic_location_cb.grid(row=4, column=1, columnspan=2, sticky="w", padx=(10, 0), pady=pady)
 
             # Pain scale
             ttk.Label(self.descriptor_frame, text="Overall pain scale:").grid(row=5, column=0, sticky="w", padx=0, pady=pady)
@@ -215,6 +226,7 @@ class DescriptorBlock:
                 state="readonly",
                 width=26
             )
+            self._disable_mousewheel_on_cb(self.pain_scale_cb)
             self.pain_scale_cb.grid(row=5, column=1, columnspan=2, sticky="w", padx=(10, 0), pady=pady)
             self.pain_scale_cb.bind("<<ComboboxSelected>>", lambda e: self._on_descriptor_change())
 
@@ -251,6 +263,13 @@ class DescriptorBlock:
         finally:
             self._loading_block = False
 
+    def _disable_mousewheel_on_cb(self, cb: ttk.Combobox):
+        # On Windows / most platforms:
+        cb.bind("<MouseWheel>", lambda e: "break")
+        # On some Linux setups:
+        cb.bind("<Button-4>", lambda e: "break")
+        cb.bind("<Button-5>", lambda e: "break")
+    
     def _set_frame_fill(self, fill: bool):
         """
         When fill=False, the block won't consume all vertical space

@@ -1742,7 +1742,7 @@ class App(tk.Tk):
         if not patient_root:
             return None
         ensure_patient_dirs(patient_root)
-        index_dir = os.path.join(patient_root, EXAM_INDEX_SUBDIR)  # or use EXAM_INDEX_SUBDIR
+        index_dir = os.path.join(patient_root, EXAM_INDEX_SUBDIR)  
         os.makedirs(index_dir, exist_ok=True)
         return os.path.join(index_dir, EXAM_INDEX_FILENAME)
 
