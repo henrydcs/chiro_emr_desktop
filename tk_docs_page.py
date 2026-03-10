@@ -27,6 +27,7 @@ class TkDocsPage(ttk.Frame):
         get_exam_path_fn,
         get_fallback_date_fn,
         on_open_exam,
+        on_delete_exam=None,
         on_hover_exam=None,
         on_add_initial=None,
         on_add_reexam=None,
@@ -42,6 +43,7 @@ class TkDocsPage(ttk.Frame):
         self.get_exam_path_fn = get_exam_path_fn
         self.get_fallback_date_fn = get_fallback_date_fn
         self.on_open_exam = on_open_exam
+        self.on_delete_exam = on_delete_exam or (lambda name: None)
         self.on_hover_exam = on_hover_exam
 
 
@@ -161,7 +163,7 @@ class TkDocsPage(ttk.Frame):
 
         self._last_hover_key = None
 
-        self._rows: list[ttk.Button] = []
+        self._rows: list[ttk.Widget] = []
         
 
     def _on_motion(self, event):
@@ -233,6 +235,16 @@ class TkDocsPage(ttk.Frame):
             w.destroy()
         self._rows.clear()
 
+    def _delete_and_refresh(self, exam_name: str):
+        """
+        Call the delete callback in the host app, then refresh the Docs list.
+        """
+        try:
+            self.on_delete_exam(exam_name)
+        finally:
+            # slight delay so any file operations / exam list updates complete
+            self.after(100, self.refresh)
+
     def _exam_date_for(self, exam_name: str) -> datetime:
         """
         Prefer saved exam_date in that exam's JSON; fallback to demographics date.
@@ -287,27 +299,40 @@ class TkDocsPage(ttk.Frame):
 
             is_active = (exam_name == current_exam)
 
-            b = ttk.Button(
-                self.inner,
+            # Row container for: [main button] [Delete]
+            row = ttk.Frame(self.inner)
+            row.pack(fill="x", pady=3)
+
+            # Main button: opens the exam
+            main_btn = ttk.Button(
+                row,
                 text=label,
                 command=lambda e=exam_name: self.on_open_exam(e)
             )
+            main_btn.pack(side="left", fill="x", expand=True)
 
-            b.pack(fill="x", pady=3)
+            # Delete button: calls back into app, then refreshes list
+            del_btn = ttk.Button(
+                row,
+                text="×",
+                width=3,
+                command=lambda e=exam_name: self._delete_and_refresh(e),
+            )
+            del_btn.pack(side="right", padx=(4, 0))
 
             # Apply bold style if active exam
             if is_active:
-                b.configure(style="ActiveExam.TButton")
+                main_btn.configure(style="ActiveExam.TButton")
 
             # scroll targeting
             if self.set_scroll_target_fn:
-                b.bind("<Enter>", lambda _e: self.set_scroll_target_fn(self.canvas), "+")
+                main_btn.bind("<Enter>", lambda _e: self.set_scroll_target_fn(self.canvas), "+")
 
             # metadata storage
-            b._exam_name = exam_name
-            b._date_str = date_str
+            row._exam_name = exam_name
+            row._date_str = date_str
 
-            self._rows.append(b)
+            self._rows.append(row)
 
         # force scrollregion update
         self.update_idletasks()

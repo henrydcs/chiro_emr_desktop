@@ -190,20 +190,29 @@ def launch_new_form():
 
 
 def _next_number(existing: list[str], prefix: str) -> int:
-    # prefix example: "Re-Exam" or "Review of Findings"
+    """
+    Return the smallest positive integer N such that
+    '<prefix> N' is not already used in existing.
+    Example: existing ['Re-Exam 1', 'Re-Exam 3'] -> returns 2.
+    """
     pat = re.compile(
         rf"^\s*{re.escape(prefix)}\s+(\d+)\s*$",
         re.IGNORECASE
     )
-    nums: list[int] = []
+    used = set()
     for name in existing:
         m = pat.match((name or "").strip())
         if m:
             try:
-                nums.append(int(m.group(1)))
+                used.add(int(m.group(1)))
             except Exception:
                 pass
-    return (max(nums) + 1) if nums else 1
+
+    # Find the smallest missing positive integer
+    n = 1
+    while n in used:
+        n += 1
+    return n
 
 
 class App(tk.Tk):
@@ -875,8 +884,127 @@ class App(tk.Tk):
             #self._rebuild_exam_nav_buttons()
 
 
+    def delete_exam(self, exam_name: str):
+        exam_name = (exam_name or "").strip()
+        if not exam_name:
+            return
 
-    
+        # Only allow deleting dynamic exams that exist in the list
+        if exam_name not in self.exams:
+            return
+
+        # Confirm with the user
+        if not messagebox.askyesno(
+            "Delete Exam",
+            f"Delete exam '{exam_name}' and ALL of its associated files?\n\n"
+            "This will remove:\n"
+            "- The exam JSON\n"
+            "- Any PDFs for this exam\n"
+            "- The exam entry in the index file\n\n"
+            "This cannot be undone.\n\n"
+            "Continue?"
+        ):
+            return
+
+        patient_root = self.get_current_patient_root()
+
+        # 1) Delete exam JSON file
+        try:
+            json_path = self.compute_exam_path(exam_name)
+            if json_path and os.path.exists(json_path):
+                os.remove(json_path)
+        except Exception:
+            pass
+
+        # 2) Delete PDFs in patient_root/pdfs/ and in Doc Vault (vault/pdfs)
+        try:
+            if patient_root:
+                exam_slug = safe_slug(exam_name).lower()
+
+                # Main pdfs folder
+                pdf_dir = os.path.join(patient_root, PATIENT_SUBDIR_PDFS)
+                if os.path.isdir(pdf_dir):
+                    for fn in os.listdir(pdf_dir):
+                        low = fn.lower()
+                        # export_current_exam_to_pdf_overwrite uses: "{exam_slug}_<display>_DOB_<dob>_DOI_<doi>.pdf"
+                        if low.endswith(".pdf") and low.startswith(exam_slug + "_"):
+                            try:
+                                os.remove(os.path.join(pdf_dir, fn))
+                            except Exception:
+                                pass
+
+                # Doc Vault pdfs folder (vault/pdfs)
+                vault_dir = os.path.join(patient_root, "vault", "pdfs")
+                if os.path.isdir(vault_dir):
+                    for fn in os.listdir(vault_dir):
+                        low = fn.lower()
+                        # vault name pattern: "<date_slug>__<exam_slug>.pdf"
+                        if low.endswith(f"__{exam_slug}.pdf"):
+                            try:
+                                os.remove(os.path.join(vault_dir, fn))
+                            except Exception:
+                                pass
+        except Exception:
+            pass
+
+        # 3) Remove from in-memory lists/maps
+        try:
+            self.exams = [e for e in self.exams if e != exam_name]
+            # Persist updated exam list into _exam_index.json in index_exam_number/
+            self._save_dynamic_exams_for_patient()
+        except Exception:
+            pass
+
+        try:
+            if hasattr(self, "last_exam_pdf_paths") and isinstance(self.last_exam_pdf_paths, dict):
+                self.last_exam_pdf_paths.pop(exam_name, None)
+        except Exception:
+            pass
+
+        # 4) If we just deleted the current exam, move to another or clear
+        if self.current_exam.get() == exam_name:
+            if self.exams:
+                new_exam = self.exams[-1]  # or self.exams[0]
+                self.current_exam.set(new_exam)
+
+                # Try to load its content if a JSON exists
+                new_path = self.compute_exam_path(new_exam)
+                if new_path and os.path.exists(new_path):
+                    try:
+                        self.load_case_from_path(new_path)
+                    except Exception:
+                        # If loading fails, at least clear the content
+                        self.clear_exam_content_only()
+                        self.current_case_path = None
+            else:
+                # No exams left for this patient
+                self.current_exam.set("")
+                self.clear_exam_content_only()
+                self.current_case_path = None
+
+        # 5) Refresh UI: exam nav + Docs timeline + theme + current doc label
+        try:
+            self._rebuild_exam_nav_buttons()
+        except Exception:
+            pass
+
+        try:
+            self._set_current_doc_label()
+        except Exception:
+            pass
+
+        try:
+            self._apply_exam_color_theme()
+        except Exception:
+            pass
+
+        try:
+            self.tk_docs_page.refresh()
+        except Exception:
+            pass
+
+        self.status_var.set(f"Deleted exam: {exam_name}")
+
     def _toggle_header(self):
         self.header_visible.set(not self.header_visible.get())
         self._apply_header_visibility()
@@ -1436,6 +1564,7 @@ class App(tk.Tk):
             get_exam_path_fn=lambda exam: self.compute_exam_path(exam),
             get_fallback_date_fn=lambda: self.exam_date_var.get(),
             on_open_exam=lambda exam: self.switch_exam(exam),
+            on_delete_exam=lambda exam: self.delete_exam(exam),
             #on_hover_exam=lambda exam, date_str: self._set_current_doc_label(date_str, exam),
             on_add_initial=self.add_initial,
             on_add_reexam=self.add_reexam,
@@ -1513,6 +1642,8 @@ class App(tk.Tk):
         ttk.Button(bottom, text="Open Current Exam PDF", command=self.open_current_exam_pdf).pack(side="left", padx=(6, 0))
         ttk.Button(bottom, text="Export ALL Exams to ONE PDF", command=self.export_all_exams_to_one_pdf).pack(side="left", padx=(14, 0))
         ttk.Button(bottom, text="Open ALL Exams PDF", command=self.open_all_exams_pdf).pack(side="left", padx=(6, 0))
+
+        ttk.Button(bottom, text="Print Exam Counts", command=self.print_exam_counts_for_current_patient).pack(side="left", padx=(8, 0))
 
         ttk.Button(bottom, text="Open New Form", command=launch_new_form).pack(side="right", padx=(0, 8))
         ttk.Button(bottom, text="Reset Exam (current only)", command=self.reset_current_exam).pack(side="right", padx=(0, 8))
@@ -1800,6 +1931,87 @@ class App(tk.Tk):
             return out
         except Exception:
             return list(EMPTY_EXAMS)
+
+    def _classify_exam_type(self, exam_name: str) -> str | None:
+        """
+        Map a dynamic exam name to a logical type.
+
+        Returns one of: "initial", "re_exam", "rof", "chiro", "final", or None.
+        """
+        s = (exam_name or "").strip().lower()
+        if not s:
+            return None
+
+        if s.startswith("initial"):
+            return "initial"
+        if s.startswith("re-exam"):
+            return "re_exam"
+        if s.startswith("review of findings"):
+            return "rof"
+        if s.startswith("chiro visit"):
+            return "chiro"
+        if s.startswith("final"):
+            return "final"
+
+        return None
+    
+    def print_exam_counts_for_current_patient(self) -> None:
+        """
+        Count saved exams for the CURRENT patient by type and print the results to the terminal.
+
+        Types:
+          - Initial
+          - Re-Exam
+          - Review of Findings
+          - Chiro Visit
+          - Final
+
+        Only exams that have a saved JSON file on disk are counted.
+        """
+        patient_root = self.get_current_patient_root()
+        if not patient_root:
+            print("No current patient; cannot count exams.")
+            return
+
+        # Ensure dynamic exam list is up to date for this patient
+        try:
+            if self.get_current_patient_root():
+                self.exams = self._load_dynamic_exams_for_patient()
+        except Exception as e:
+            print(f"Could not load dynamic exams for patient: {e}")
+            return
+
+        counts = {
+            "initial": 0,
+            "re_exam": 0,
+            "rof": 0,
+            "chiro": 0,
+            "final": 0,
+        }
+
+        for exam in (self.exams or []):
+            exam_type = self._classify_exam_type(exam)
+            if not exam_type:
+                continue  # skip unknown types
+
+            # Only count exams that actually have a saved JSON file
+            path = self.compute_exam_path(exam)
+            if not path or not os.path.exists(path):
+                continue
+
+            counts[exam_type] = counts.get(exam_type, 0) + 1
+
+        total = sum(counts.values())
+
+        print("Exam counts for current patient:")
+        print(f"  Initial:        {counts['initial']}")
+        print(f"  Re-Exam:        {counts['re_exam']}")
+        print(f"  Review of Findings: {counts['rof']}")
+        print(f"  Chiro Visit:    {counts['chiro']}")
+        print(f"  Final:          {counts['final']}")
+        print(f"  TOTAL visits:   {total}")    
+    
+    
 
     def _save_dynamic_exams_for_patient(self):
         p = self._exam_index_path()
