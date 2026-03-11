@@ -1828,11 +1828,19 @@ def diagnosis_struct_to_live_preview_runs(dx_struct: dict) -> list[tuple[str, st
         assessment_text = ASSESSMENT_TEXT.get(choice, "")
     if assessment_text:
         runs.append((assessment_text.strip() + "\n\n", None))
+    assessment_notes = (dx_struct.get("assessment_notes") or "").strip()
+    if assessment_notes:
+        runs.append(("\n", None))
+        runs.append((assessment_notes + "\n\n", None))
 
     # Diagnosis
     dx_text = _diagnosis_text_from_struct(dx_struct)
     if dx_text:
         add_section("Diagnosis", dx_text)
+    dx_block_notes = (dx_struct.get("dx_block_notes") or "").strip()
+    if dx_block_notes:
+        runs.append(("\n", None))
+        runs.append((dx_block_notes + "\n\n", None))
 
     # Causation
     CAUSATION_TEXT = {
@@ -1861,6 +1869,10 @@ def diagnosis_struct_to_live_preview_runs(dx_struct: dict) -> list[tuple[str, st
         causation_lines.append(f"Additional Notes: {causation_notes}")
     if causation_lines:
         add_section("Causation", "\n\n".join(causation_lines))
+    causation_general_notes = (dx_struct.get("causation_general_notes") or "").strip()
+    if causation_general_notes:
+        runs.append(("\n", None))
+        runs.append((causation_general_notes + "\n\n", None))
 
     # Prognosis
     prog = (dx_struct.get("prognosis") or "").strip()
@@ -1880,16 +1892,28 @@ def diagnosis_struct_to_live_preview_runs(dx_struct: dict) -> list[tuple[str, st
                 "and reassessed throughout the course of care."
             )
         add_section("Prognosis", prognosis_text)
+    prognosis_notes = (dx_struct.get("prognosis_notes") or "").strip()
+    if prognosis_notes:
+        runs.append(("\n", None))
+        runs.append((prognosis_notes + "\n\n", None))
 
     # Imaging
     img = _imaging_sentence(dx_struct)
     if img:
         add_section("Imaging", img)
+    imaging_notes = (dx_struct.get("imaging_notes") or "").strip()
+    if imaging_notes:
+        runs.append(("\n", None))
+        runs.append((imaging_notes + "\n\n", None))
 
     # Referrals
     ref = _referral_sentence(dx_struct)
     if ref:
         add_section("Referrals", ref)
+    referrals_notes = (dx_struct.get("referrals_notes") or "").strip()
+    if referrals_notes:
+        runs.append(("\n", None))
+        runs.append((referrals_notes + "\n\n", None))
 
     # Current Work Status
     status = (dx_struct.get("employment_status") or "").strip()
@@ -1905,6 +1929,10 @@ def diagnosis_struct_to_live_preview_runs(dx_struct: dict) -> list[tuple[str, st
         emp_lines.append(f"Notes: {notes}")
     if emp_lines:
         add_section("Current Work Status", "\n".join(emp_lines))
+    employment_general_notes = (dx_struct.get("employment_general_notes") or "").strip()
+    if employment_general_notes:
+        runs.append(("\n", None))
+        runs.append((employment_general_notes + "\n\n", None))
 
     return runs
 
@@ -2261,18 +2289,31 @@ def build_combined_pdf(path: str, payloads: list):
 
         if assessment_para:
             story.append(assessment_para)
-            story.append(Spacer(1, 0.10 * inch))        
+            story.append(Spacer(1, 0.10 * inch))
+        assessment_notes = (dx_struct.get("assessment_notes") or "").strip()
+        if assessment_notes:
+            story.append(Spacer(1, 0.06 * inch))
+            story.append(Paragraph(xml_escape(assessment_notes).replace("\n", "<br/>"), styles["BodyText"]))
 
         story.append(Spacer(1, 0.14 * inch))
 
         #if dx_text.strip():
         add_section("Diagnosis", dx_text)
+        dx_block_notes = (dx_struct.get("dx_block_notes") or "").strip()
+        if dx_block_notes:
+            story.append(Spacer(1, 0.06 * inch))
+            story.append(Paragraph(xml_escape(dx_block_notes).replace("\n", "<br/>"), styles["BodyText"]))
+            story.append(Spacer(1, 0.14 * inch))
         
         if causation_para:
             story.append(Paragraph("<b>Causation</b>", styles["Heading3"]))
             story.append(Spacer(1, 0.04 * inch))
             story.append(causation_para)
             story.append(Spacer(1, 0.10 * inch))
+        causation_general_notes = (dx_struct.get("causation_general_notes") or "").strip()
+        if causation_general_notes:
+            story.append(Spacer(1, 0.06 * inch))
+            story.append(Paragraph(xml_escape(causation_general_notes).replace("\n", "<br/>"), styles["BodyText"]))
         
         bold_body = ParagraphStyle(
             'BoldBody',
@@ -2298,21 +2339,40 @@ def build_combined_pdf(path: str, payloads: list):
                 )
 
             add_section("Prognosis", prognosis_text)
+        prognosis_notes = (dx_struct.get("prognosis_notes") or "").strip()
+        if prognosis_notes:
+            story.append(Spacer(1, 0.06 * inch))
+            story.append(Paragraph(xml_escape(prognosis_notes).replace("\n", "<br/>"), styles["BodyText"]))
+            story.append(Spacer(1, 0.14 * inch))
                     
             
         img = _imaging_sentence(dx_struct)
         if img:
             add_section("Imaging", img)
+        imaging_notes = (dx_struct.get("imaging_notes") or "").strip()
+        if imaging_notes:
+            story.append(Spacer(1, 0.06 * inch))
+            story.append(Paragraph(xml_escape(imaging_notes).replace("\n", "<br/>"), styles["BodyText"]))
+            story.append(Spacer(1, 0.14 * inch))
 
         ref = _referral_sentence(dx_struct)
         if ref:
             add_section("Referrals", ref)
+        referrals_notes = (dx_struct.get("referrals_notes") or "").strip()
+        if referrals_notes:
+            story.append(Spacer(1, 0.06 * inch))
+            story.append(Paragraph(xml_escape(referrals_notes).replace("\n", "<br/>"), styles["BodyText"]))
+            story.append(Spacer(1, 0.14 * inch))
             
         if emp_current_para:
             story.append(Paragraph("<b>Current Work Status</b>", styles["Heading3"]))
             story.append(Spacer(1, 0.04 * inch))
             story.append(emp_current_para)
             story.append(Spacer(1, 0.10 * inch))
+        employment_general_notes = (dx_struct.get("employment_general_notes") or "").strip()
+        if employment_general_notes:
+            story.append(Spacer(1, 0.06 * inch))
+            story.append(Paragraph(xml_escape(employment_general_notes).replace("\n", "<br/>"), styles["BodyText"]))
 
         # ✅ Plan (structured PDF rendering)
         dx_struct = soap.get("diagnosis_struct") or {}

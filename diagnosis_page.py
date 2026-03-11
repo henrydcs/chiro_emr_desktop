@@ -467,6 +467,14 @@ class DiagnosisPage(ttk.Frame):
         cb.bind("<MouseWheel>", lambda e: "break")
         cb.bind("<Button-4>", lambda e: "break")
         cb.bind("<Button-5>", lambda e: "break")
+
+    def _sync_notes_to_var(self, text_widget: tk.Text, var: tk.StringVar):
+        """Sync Text widget content to StringVar and mark changed."""
+        try:
+            var.set(text_widget.get("1.0", "end-1c"))
+        except Exception:
+            pass
+        self._changed()
     
     def _build_assessment_frame(self, parent, padx=10) -> ttk.Frame:
         """Build Assessment section frame (no back button)."""
@@ -479,6 +487,8 @@ class DiagnosisPage(ttk.Frame):
             self.assessment_choice_var = tk.StringVar(value="(select)")
         if not hasattr(self, "assessment_custom_var"):
             self.assessment_custom_var = tk.StringVar(value="")
+        if not hasattr(self, "assessment_notes_var"):
+            self.assessment_notes_var = tk.StringVar(value="")
 
         ASSESSMENT_STMT_CHOICES = [
             "(select)", "Standard exam / evaluation day", "Therapy-only visit",
@@ -512,6 +522,21 @@ class DiagnosisPage(ttk.Frame):
         self.assessment_custom_var.trace_add("write", lambda *_: self._changed())
         self.assess_custom_row.grid_remove()
 
+        ttk.Label(body, text="Notes (general text):").grid(row=4, column=0, sticky="w", pady=(14, 4))
+        self.assessment_notes = tk.Text(body, height=4, wrap="word", font=("Segoe UI", 9))
+        self.assessment_notes.grid(row=5, column=0, sticky="nsew", pady=(0, 6))
+        body.rowconfigure(5, weight=1)
+        try:
+            self.assessment_notes.delete("1.0", "end")
+            self.assessment_notes.insert("1.0", self.assessment_notes_var.get() or "")
+        except Exception:
+            pass
+        def _sync_assess_notes(*_):
+            self._sync_notes_to_var(self.assessment_notes, self.assessment_notes_var)
+        self.assessment_notes.bind("<KeyRelease>", lambda e: _sync_assess_notes())
+        self.assessment_notes.bind("<<Paste>>", lambda e: parent.after(1, _sync_assess_notes))
+        self.assessment_notes.bind("<<Cut>>", lambda e: parent.after(1, _sync_assess_notes))
+
         self._assessment_screen_refresh(self.ASSESSMENT_STMT_TEXT)
         return fr
 
@@ -528,6 +553,8 @@ class DiagnosisPage(ttk.Frame):
             self.causation_custom_var = tk.StringVar(value="")
         if not hasattr(self, "causation_notes_var"):
             self.causation_notes_var = tk.StringVar(value="")
+        if not hasattr(self, "causation_general_notes_var"):
+            self.causation_general_notes_var = tk.StringVar(value="")
 
         CAUSATION_CHOICES = [
             "(select)", "Causally related (WDM certainty)", "Clinically consistent with reported mechanism (conservative)",
@@ -583,6 +610,21 @@ class DiagnosisPage(ttk.Frame):
         self.causation_notes.bind("<<Paste>>", lambda e: parent.after(1, _sync_causation_notes))
         self.causation_notes.bind("<<Cut>>", lambda e: parent.after(1, _sync_causation_notes))
 
+        ttk.Label(body, text="Notes (general text):").grid(row=6, column=0, sticky="w", pady=(14, 4))
+        self.causation_general_notes = tk.Text(body, height=4, wrap="word", font=("Segoe UI", 9))
+        self.causation_general_notes.grid(row=7, column=0, sticky="nsew", pady=(0, 6))
+        body.rowconfigure(7, weight=1)
+        try:
+            self.causation_general_notes.delete("1.0", "end")
+            self.causation_general_notes.insert("1.0", self.causation_general_notes_var.get() or "")
+        except Exception:
+            pass
+        def _sync_causation_general(*_):
+            self._sync_notes_to_var(self.causation_general_notes, self.causation_general_notes_var)
+        self.causation_general_notes.bind("<KeyRelease>", lambda e: _sync_causation_general())
+        self.causation_general_notes.bind("<<Paste>>", lambda e: parent.after(1, _sync_causation_general))
+        self.causation_general_notes.bind("<<Cut>>", lambda e: parent.after(1, _sync_causation_general))
+
         self._causation_refresh(CAUSATION_TEXT)
         return fr
 
@@ -597,6 +639,23 @@ class DiagnosisPage(ttk.Frame):
         self._disable_mousewheel_on_cb(self.prognosis_cb)
         self.prognosis_cb.grid(row=0, column=0, sticky="ew", padx=8, pady=8)
         self.prognosis_cb.bind("<<ComboboxSelected>>", lambda e: self._changed())
+
+        if not hasattr(self, "prognosis_notes_var"):
+            self.prognosis_notes_var = tk.StringVar(value="")
+        ttk.Label(pro_box, text="Notes (general text):").grid(row=1, column=0, sticky="w", padx=8, pady=(14, 4))
+        self.prognosis_notes = tk.Text(pro_box, height=4, wrap="word", font=("Segoe UI", 9))
+        self.prognosis_notes.grid(row=2, column=0, sticky="nsew", padx=8, pady=(0, 8))
+        pro_box.rowconfigure(2, weight=1)
+        try:
+            self.prognosis_notes.delete("1.0", "end")
+            self.prognosis_notes.insert("1.0", self.prognosis_notes_var.get() or "")
+        except Exception:
+            pass
+        def _sync_prog_notes(*_):
+            self._sync_notes_to_var(self.prognosis_notes, self.prognosis_notes_var)
+        self.prognosis_notes.bind("<KeyRelease>", lambda e: _sync_prog_notes())
+        self.prognosis_notes.bind("<<Paste>>", lambda e: parent.after(1, _sync_prog_notes))
+        self.prognosis_notes.bind("<<Cut>>", lambda e: parent.after(1, _sync_prog_notes))
         return fr
 
     def _build_imaging_frame(self, parent, padx=10) -> ttk.Frame:
@@ -628,6 +687,22 @@ class DiagnosisPage(ttk.Frame):
 
         self.imaging_list = tk.Listbox(img_box, height=4)
         self.imaging_list.grid(row=2, column=0, sticky="ew", padx=8, pady=(0, 8))
+        if not hasattr(self, "imaging_notes_var"):
+            self.imaging_notes_var = tk.StringVar(value="")
+        ttk.Label(img_box, text="Notes (general text):").grid(row=3, column=0, sticky="w", padx=8, pady=(14, 4))
+        self.imaging_notes = tk.Text(img_box, height=4, wrap="word", font=("Segoe UI", 9))
+        self.imaging_notes.grid(row=4, column=0, sticky="nsew", padx=8, pady=(0, 8))
+        img_box.rowconfigure(4, weight=1)
+        try:
+            self.imaging_notes.delete("1.0", "end")
+            self.imaging_notes.insert("1.0", self.imaging_notes_var.get() or "")
+        except Exception:
+            pass
+        def _sync_img_notes(*_):
+            self._sync_notes_to_var(self.imaging_notes, self.imaging_notes_var)
+        self.imaging_notes.bind("<KeyRelease>", lambda e: _sync_img_notes())
+        self.imaging_notes.bind("<<Paste>>", lambda e: parent.after(1, _sync_img_notes))
+        self.imaging_notes.bind("<<Cut>>", lambda e: parent.after(1, _sync_img_notes))
         return fr
 
     def _build_referrals_frame(self, parent, padx=10) -> ttk.Frame:
@@ -649,6 +724,22 @@ class DiagnosisPage(ttk.Frame):
 
         self.ref_list = tk.Listbox(ref_box, height=4)
         self.ref_list.grid(row=2, column=0, sticky="ew", padx=8, pady=(0, 8))
+        if not hasattr(self, "referrals_notes_var"):
+            self.referrals_notes_var = tk.StringVar(value="")
+        ttk.Label(ref_box, text="Notes (general text):").grid(row=3, column=0, sticky="w", padx=8, pady=(14, 4))
+        self.referrals_notes = tk.Text(ref_box, height=4, wrap="word", font=("Segoe UI", 9))
+        self.referrals_notes.grid(row=4, column=0, sticky="nsew", padx=8, pady=(0, 8))
+        ref_box.rowconfigure(4, weight=1)
+        try:
+            self.referrals_notes.delete("1.0", "end")
+            self.referrals_notes.insert("1.0", self.referrals_notes_var.get() or "")
+        except Exception:
+            pass
+        def _sync_ref_notes(*_):
+            self._sync_notes_to_var(self.referrals_notes, self.referrals_notes_var)
+        self.referrals_notes.bind("<KeyRelease>", lambda e: _sync_ref_notes())
+        self.referrals_notes.bind("<<Paste>>", lambda e: parent.after(1, _sync_ref_notes))
+        self.referrals_notes.bind("<<Cut>>", lambda e: parent.after(1, _sync_ref_notes))
         return fr
 
     def _build_employment_frame(self, parent, padx=10) -> ttk.Frame:
@@ -666,6 +757,8 @@ class DiagnosisPage(ttk.Frame):
             self.employment_notes_var = tk.StringVar(value="")
         if not hasattr(self, "employment_other_var"):
             self.employment_other_var = tk.StringVar(value="")
+        if not hasattr(self, "employment_general_notes_var"):
+            self.employment_general_notes_var = tk.StringVar(value="")
 
         if not hasattr(self, "employment_status_choices"):
             self.employment_status_choices = [
@@ -738,6 +831,21 @@ class DiagnosisPage(ttk.Frame):
         self.employment_notes.bind("<KeyRelease>", lambda e: _sync_notes())
         self.employment_notes.bind("<<Paste>>", lambda e: parent.after(1, _sync_notes))
         self.employment_notes.bind("<<Cut>>", lambda e: parent.after(1, _sync_notes))
+
+        ttk.Label(body, text="Notes (general text):").grid(row=4, column=0, sticky="w", pady=(14, 4))
+        self.employment_general_notes = tk.Text(body, height=4, wrap="word", font=("Segoe UI", 9))
+        self.employment_general_notes.grid(row=5, column=0, sticky="nsew", pady=(0, 6))
+        body.rowconfigure(5, weight=1)
+        try:
+            self.employment_general_notes.delete("1.0", "end")
+            self.employment_general_notes.insert("1.0", self.employment_general_notes_var.get() or "")
+        except Exception:
+            pass
+        def _sync_emp_general(*_):
+            self._sync_notes_to_var(self.employment_general_notes, self.employment_general_notes_var)
+        self.employment_general_notes.bind("<KeyRelease>", lambda e: _sync_emp_general())
+        self.employment_general_notes.bind("<<Paste>>", lambda e: parent.after(1, _sync_emp_general))
+        self.employment_general_notes.bind("<<Cut>>", lambda e: parent.after(1, _sync_emp_general))
         return fr
 
     def _build_dx_block_frame(self, parent, padx=10) -> ttk.Frame:
@@ -772,6 +880,27 @@ class DiagnosisPage(ttk.Frame):
         self.blocks_canvas.bind("<Configure>", self._on_blocks_canvas_configure)
         self.blocks_canvas.bind("<Enter>", lambda e: self._bind_blocks_mousewheel(True))
         self.blocks_canvas.bind("<Leave>", lambda e: self._bind_blocks_mousewheel(False))
+
+        # Notes (general text) for Dx Block
+        if not hasattr(self, "dx_block_notes_var"):
+            self.dx_block_notes_var = tk.StringVar(value="")
+        notes_row = ttk.Frame(fr)
+        notes_row.pack(fill="x", padx=padx, pady=(8, 10))
+        notes_row.columnconfigure(0, weight=1)
+        ttk.Label(notes_row, text="Notes (general text):").grid(row=0, column=0, sticky="w", pady=(0, 4))
+        self.dx_block_notes = tk.Text(notes_row, height=4, wrap="word", font=("Segoe UI", 9))
+        self.dx_block_notes.grid(row=1, column=0, sticky="ew", pady=(0, 6))
+        notes_row.columnconfigure(0, weight=1)
+        try:
+            self.dx_block_notes.delete("1.0", "end")
+            self.dx_block_notes.insert("1.0", self.dx_block_notes_var.get() or "")
+        except Exception:
+            pass
+        def _sync_dx_notes(*_):
+            self._sync_notes_to_var(self.dx_block_notes, self.dx_block_notes_var)
+        self.dx_block_notes.bind("<KeyRelease>", lambda e: _sync_dx_notes())
+        self.dx_block_notes.bind("<<Paste>>", lambda e: self.after(1, _sync_dx_notes))
+        self.dx_block_notes.bind("<<Cut>>", lambda e: self.after(1, _sync_dx_notes))
 
         return fr
     
@@ -864,24 +993,6 @@ class DiagnosisPage(ttk.Frame):
             fr.grid(row=0, column=0, sticky="nsew")
 
         self._show_dx_block("Dx Block")
-
-        # Bottom: Notes (general text)
-        notes_frame = ttk.Frame(self.text_area)
-        notes_frame.grid(row=1, column=0, sticky="ew", pady=(10, 0))
-        notes_frame.columnconfigure(0, weight=1)
-        notes_frame.rowconfigure(1, weight=1)
-
-        ttk.Label(notes_frame, text="Notes (general text):").grid(row=0, column=0, sticky="w", pady=(0, 4))
-
-        self.text = tk.Text(notes_frame, height=8, wrap="word")
-        self.text.grid(row=1, column=0, sticky="nsew", pady=(0, 6))
-
-        self.text.configure(font=("Segoe UI", 9))
-
-        self.text.bind("<KeyRelease>", self._on_text_edited)
-        self.text.bind("<<Paste>>", lambda e: self.after(1, self._on_text_edited))
-        self.text.bind("<<Cut>>", lambda e: self.after(1, self._on_text_edited))
-        self.text.bind("<<Modified>>", self._on_text_modified)
 
         tip = (
             "Tip: Use ↑/↓ on a diagnosis block to change order. "
@@ -1002,10 +1113,15 @@ class DiagnosisPage(ttk.Frame):
         self._changed()
     
     def _set_text(self, s: str):
-        self.text.delete("1.0", "end")
-        self.text.insert("1.0", s or "")
+        """Backward compat: set the legacy 'text' into dx_block_notes when loading old saves."""
+        if getattr(self, "dx_block_notes_var", None) is not None:
+            self.dx_block_notes_var.set(s or "")
+            if hasattr(self, "dx_block_notes") and self.dx_block_notes.winfo_exists():
+                self.dx_block_notes.delete("1.0", "end")
+                self.dx_block_notes.insert("1.0", s or "")
         try:
-            self.text.edit_modified(False)
+            if hasattr(self, "text") and self.text.winfo_exists():
+                self.text.edit_modified(False)
         except Exception:
             pass
 
@@ -1017,7 +1133,7 @@ class DiagnosisPage(ttk.Frame):
 
     def _on_text_modified(self, _evt=None):
         try:
-            if self.text.edit_modified():
+            if hasattr(self, "text") and self.text.winfo_exists() and self.text.edit_modified():
                 self.text.edit_modified(False)
                 self._on_text_edited()
         except Exception:
@@ -1042,9 +1158,16 @@ class DiagnosisPage(ttk.Frame):
         self._changed()
 
     def get_value(self) -> str:
-        """Returns the general-purpose notes text (not diagnosis from blocks)."""
-        raw = _clean(self.text.get("1.0", "end-1c"))
-        return _strip_auto_tag(raw)
+        """Returns combined section notes for backward compat (e.g. soap['diagnosis'] string)."""
+        parts = []
+        for attr in ("dx_block_notes_var", "assessment_notes_var", "causation_general_notes_var",
+                     "prognosis_notes_var", "imaging_notes_var", "referrals_notes_var", "employment_general_notes_var"):
+            v = getattr(self, attr, None)
+            if v is not None:
+                t = (v.get() or "").strip()
+                if t:
+                    parts.append(t)
+        return _strip_auto_tag("\n\n".join(parts))
 
 
     def reset(self):
@@ -1052,8 +1175,12 @@ class DiagnosisPage(ttk.Frame):
         try:
             for b in list(self.blocks):
                 b.destroy()
-            self.blocks.clear()            
-            self._set_text("")
+            self.blocks.clear()
+            for attr in ("dx_block_notes_var", "assessment_notes_var", "causation_general_notes_var",
+                         "prognosis_notes_var", "imaging_notes_var", "referrals_notes_var", "employment_general_notes_var"):
+                v = getattr(self, attr, None)
+                if v is not None:
+                    v.set("")
             # ✅ NEW: clear Prognosis / Imaging / Referrals (structured)
             try:
                 self.prognosis_var.set("(select)")
@@ -1115,10 +1242,15 @@ class DiagnosisPage(ttk.Frame):
         self._changed()
 
     def to_dict(self) -> dict:
-        txt = self.get_value()
         return {
             "blocks": [b.to_dict() for b in self.blocks],
-            "text": txt,
+            "dx_block_notes": getattr(self.dx_block_notes_var, "get", lambda: "")(),
+            "assessment_notes": getattr(self.assessment_notes_var, "get", lambda: "")(),
+            "causation_general_notes": getattr(self.causation_general_notes_var, "get", lambda: "")(),
+            "prognosis_notes": getattr(self.prognosis_notes_var, "get", lambda: "")(),
+            "imaging_notes": getattr(self.imaging_notes_var, "get", lambda: "")(),
+            "referrals_notes": getattr(self.referrals_notes_var, "get", lambda: "")(),
+            "employment_general_notes": getattr(self.employment_general_notes_var, "get", lambda: "")(),
             "assessment_choice": self.assessment_choice_var.get(),
             "assessment_custom": self.assessment_custom_var.get(),
             "causation_choice": self.causation_choice_var.get() if hasattr(self, "causation_choice_var") else "(select)",
@@ -1179,6 +1311,28 @@ class DiagnosisPage(ttk.Frame):
             self._layout_blocks()
 
             self._set_text(data.get("text") or "")
+
+            # Per-section notes (Notes general text)
+            for key, var_attr, widget_attr in (
+                ("dx_block_notes", "dx_block_notes_var", "dx_block_notes"),
+                ("assessment_notes", "assessment_notes_var", "assessment_notes"),
+                ("causation_general_notes", "causation_general_notes_var", "causation_general_notes"),
+                ("prognosis_notes", "prognosis_notes_var", "prognosis_notes"),
+                ("imaging_notes", "imaging_notes_var", "imaging_notes"),
+                ("referrals_notes", "referrals_notes_var", "referrals_notes"),
+                ("employment_general_notes", "employment_general_notes_var", "employment_general_notes"),
+            ):
+                val = data.get(key) or ""
+                var = getattr(self, var_attr, None)
+                if var is not None:
+                    var.set(val)
+                w = getattr(self, widget_attr, None)
+                if w is not None and hasattr(w, "delete"):
+                    try:
+                        w.delete("1.0", "end")
+                        w.insert("1.0", val)
+                    except Exception:
+                        pass
 
             self.prognosis_var.set(data.get("prognosis") or "(select)")
 
