@@ -205,6 +205,7 @@ class DxBlock(ttk.Frame):
             state="readonly",
             width=44,
         )
+        self._disable_mousewheel_on_cb(self.dx_cb)
         self.dx_cb.pack(side="left", padx=(6, 0), fill="x", expand=True)
 
         # edit + move buttons
@@ -231,6 +232,12 @@ class DxBlock(ttk.Frame):
         if callable(fn):
             fn()
 
+    def _disable_mousewheel_on_cb(self, cb: ttk.Combobox):
+        """Prevent mouse wheel from changing combobox selection when dropdown is closed."""
+        cb.bind("<MouseWheel>", lambda e: "break")
+        cb.bind("<Button-4>", lambda e: "break")
+        cb.bind("<Button-5>", lambda e: "break")
+    
     def bind_actions(self, on_change, on_remove, on_move_up, on_move_down):
         """Bind / rebind actions safely after the block exists."""
         self._on_change = on_change
@@ -455,6 +462,12 @@ class DiagnosisPage(ttk.Frame):
             else:
                 btn.configure(relief="raised", font=("Segoe UI", 10))
 
+    def _disable_mousewheel_on_cb(self, cb: ttk.Combobox):
+        """Prevent mouse wheel from changing combobox selection when dropdown is closed."""
+        cb.bind("<MouseWheel>", lambda e: "break")
+        cb.bind("<Button-4>", lambda e: "break")
+        cb.bind("<Button-5>", lambda e: "break")
+    
     def _build_assessment_frame(self, parent, padx=10) -> ttk.Frame:
         """Build Assessment section frame (no back button)."""
         fr = ttk.Frame(parent)
@@ -484,6 +497,7 @@ class DiagnosisPage(ttk.Frame):
 
         ttk.Label(body, text="Choose statement type:").grid(row=0, column=0, sticky="w")
         cb = ttk.Combobox(body, textvariable=self.assessment_choice_var, values=ASSESSMENT_STMT_CHOICES, state="readonly", width=44)
+        self._disable_mousewheel_on_cb(cb)
         cb.grid(row=1, column=0, sticky="ew", pady=(4, 10))
         cb.bind("<<ComboboxSelected>>", lambda e: self._assessment_screen_refresh(self.ASSESSMENT_STMT_TEXT))
 
@@ -535,6 +549,7 @@ class DiagnosisPage(ttk.Frame):
 
         ttk.Label(body, text="Select causation statement:").grid(row=0, column=0, sticky="w")
         cb = ttk.Combobox(body, textvariable=self.causation_choice_var, values=CAUSATION_CHOICES, state="readonly", width=54)
+        self._disable_mousewheel_on_cb(cb)
         cb.grid(row=1, column=0, sticky="ew", pady=(4, 10))
         cb.bind("<<ComboboxSelected>>", lambda e: self._causation_refresh(CAUSATION_TEXT))
 
@@ -579,6 +594,7 @@ class DiagnosisPage(ttk.Frame):
         pro_box.columnconfigure(0, weight=1)
 
         self.prognosis_cb = ttk.Combobox(pro_box, textvariable=self.prognosis_var, values=PROGNOSIS_CHOICES, state="readonly")
+        self._disable_mousewheel_on_cb(self.prognosis_cb)
         self.prognosis_cb.grid(row=0, column=0, sticky="ew", padx=8, pady=8)
         self.prognosis_cb.bind("<<ComboboxSelected>>", lambda e: self._changed())
         return fr
@@ -598,8 +614,12 @@ class DiagnosisPage(ttk.Frame):
         self.img_mod_var = tk.StringVar(value="(select)")
         self.img_part_var = tk.StringVar(value="(select)")
 
-        ttk.Combobox(img_row, textvariable=self.img_mod_var, values=IMAGING_MODALITIES, state="readonly").grid(row=0, column=0, sticky="ew", padx=(0, 6))
-        ttk.Combobox(img_row, textvariable=self.img_part_var, values=IMAGING_PARTS, state="readonly").grid(row=0, column=1, sticky="ew", padx=(6, 0))
+        cb_img_mod = ttk.Combobox(img_row, textvariable=self.img_mod_var, values=IMAGING_MODALITIES, state="readonly")
+        self._disable_mousewheel_on_cb(cb_img_mod)
+        cb_img_mod.grid(row=0, column=0, sticky="ew", padx=(0, 6))
+        cb_img_part = ttk.Combobox(img_row, textvariable=self.img_part_var, values=IMAGING_PARTS, state="readonly")
+        self._disable_mousewheel_on_cb(cb_img_part)
+        cb_img_part.grid(row=0, column=1, sticky="ew", padx=(6, 0))
 
         img_btns = ttk.Frame(img_box)
         img_btns.grid(row=1, column=0, sticky="w", padx=8, pady=(0, 6))
@@ -618,7 +638,9 @@ class DiagnosisPage(ttk.Frame):
         ref_box.columnconfigure(0, weight=1)
 
         self.ref_var = tk.StringVar(value="(select)")
-        ttk.Combobox(ref_box, textvariable=self.ref_var, values=REFERRAL_CHOICES, state="readonly").grid(row=0, column=0, sticky="ew", padx=8, pady=(8, 4))
+        cb_ref = ttk.Combobox(ref_box, textvariable=self.ref_var, values=REFERRAL_CHOICES, state="readonly")
+        self._disable_mousewheel_on_cb(cb_ref)
+        cb_ref.grid(row=0, column=0, sticky="ew", padx=8, pady=(8, 4))
 
         ref_btns = ttk.Frame(ref_box)
         ref_btns.grid(row=1, column=0, sticky="w", padx=8, pady=(0, 6))
@@ -670,11 +692,13 @@ class DiagnosisPage(ttk.Frame):
 
         ttk.Label(left_col, text="Current employment status:").grid(row=0, column=0, sticky="w")
         self.employment_cb = ttk.Combobox(left_col, textvariable=self.employment_status_var, values=self.employment_status_choices, state="readonly")
+        self._disable_mousewheel_on_cb(self.employment_cb)
         self.employment_cb.grid(row=1, column=0, sticky="ew", pady=(4, 0))
         self.employment_cb.bind("<<ComboboxSelected>>", lambda e: self._changed())
 
         ttk.Label(right_col, text="Work restrictions / disability plan:").grid(row=0, column=0, sticky="w")
         self.work_plan_cb = ttk.Combobox(right_col, textvariable=self.work_plan_var, values=work_plan_choices, state="readonly")
+        self._disable_mousewheel_on_cb(self.work_plan_cb)
         self.work_plan_cb.grid(row=1, column=0, sticky="ew", pady=(4, 0))
         self.work_plan_cb.bind("<<ComboboxSelected>>", lambda e: self._changed())
 

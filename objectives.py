@@ -783,20 +783,48 @@ class VitalsInspectionPanel(ttk.Frame):
 
     def _build_posture_row(self, f):
         ttk.Label(f, text="Shoulders:").grid(row=0, column=0, sticky="e", padx=(0, 4), pady=2)
-        ttk.Combobox(f, textvariable=self.shoulder_levels_var, values=POSTURE_LEVELS, state="readonly", width=12)\
-            .grid(row=0, column=1, sticky="w", padx=(0, 12), pady=2)
+        cb_shoulders = ttk.Combobox(
+            f,
+            textvariable=self.shoulder_levels_var,
+            values=POSTURE_LEVELS,
+            state="readonly",
+            width=12,
+        )
+        self._disable_mousewheel_on_cb(cb_shoulders)
+        cb_shoulders.grid(row=0, column=1, sticky="w", padx=(0, 12), pady=2)
 
         ttk.Label(f, text="Kyphosis (T/S):").grid(row=0, column=2, sticky="e", padx=(0, 4), pady=2)
-        ttk.Combobox(f, textvariable=self.kyphosis_ts_var, values=POSTURE_SEVERITY, state="readonly", width=10)\
-            .grid(row=0, column=3, sticky="w", padx=(0, 12), pady=2)
+        cb_kyphosis = ttk.Combobox(
+            f,
+            textvariable=self.kyphosis_ts_var,
+            values=POSTURE_SEVERITY,
+            state="readonly",
+            width=10,
+        )
+        self._disable_mousewheel_on_cb(cb_kyphosis)
+        cb_kyphosis.grid(row=0, column=3, sticky="w", padx=(0, 12), pady=2)
 
         ttk.Label(f, text="FHP (C/S):").grid(row=0, column=4, sticky="e", padx=(0, 4), pady=2)
-        ttk.Combobox(f, textvariable=self.forward_head_cs_var, values=POSTURE_SEVERITY, state="readonly", width=10)\
-            .grid(row=0, column=5, sticky="w", padx=(0, 12), pady=2)
+        cb_fhp = ttk.Combobox(
+            f,
+            textvariable=self.forward_head_cs_var,
+            values=POSTURE_SEVERITY,
+            state="readonly",
+            width=10,
+        )
+        self._disable_mousewheel_on_cb(cb_fhp)
+        cb_fhp.grid(row=0, column=5, sticky="w", padx=(0, 12), pady=2)
 
         ttk.Label(f, text="Lordosis (L/S):").grid(row=0, column=6, sticky="e", padx=(0, 4), pady=2)
-        ttk.Combobox(f, textvariable=self.lordosis_ls_var, values=LORDOSIS_LEVELS, state="readonly", width=12)\
-            .grid(row=0, column=7, sticky="w", padx=(0, 0), pady=2)
+        cb_lordosis = ttk.Combobox(
+            f,
+            textvariable=self.lordosis_ls_var,
+            values=LORDOSIS_LEVELS,
+            state="readonly",
+            width=12,
+        )
+        self._disable_mousewheel_on_cb(cb_lordosis)
+        cb_lordosis.grid(row=0, column=7, sticky="w", padx=(0, 0), pady=2)
 
         f.grid_columnconfigure(99, weight=1)
     
@@ -878,8 +906,9 @@ class VitalsInspectionPanel(ttk.Frame):
             values=listings,
             textvariable=self.sublux_listing_var,
             width=10,
-            state="readonly"
+            state="readonly",
         )
+        self._disable_mousewheel_on_cb(self.sublux_listing_cb)
         self.sublux_listing_cb.grid(row=1, column=0, sticky="w")
 
         self.sublux_listing_cb.bind(
@@ -924,15 +953,23 @@ class VitalsInspectionPanel(ttk.Frame):
         ttk.Entry(f, textvariable=self.grip_right_var, width=8).grid(row=0, column=3, sticky="w", padx=(0, 14), pady=2)
 
         ttk.Label(f, text="Comparison:").grid(row=0, column=4, sticky="e", padx=(0, 4), pady=2)
-        ttk.Combobox(
+        cb_grip_compare = ttk.Combobox(
             f,
             textvariable=self.grip_compare_var,
             values=["(none)", "Symmetric", "Left weaker", "Right weaker"],
             state="readonly",
             width=14,
-        ).grid(row=0, column=5, sticky="w", padx=(0, 0), pady=2)
+        )
+        self._disable_mousewheel_on_cb(cb_grip_compare)
+        cb_grip_compare.grid(row=0, column=5, sticky="w", padx=(0, 0), pady=2)
 
         f.grid_columnconfigure(99, weight=1)
+
+    def _disable_mousewheel_on_cb(self, cb: ttk.Combobox):
+        """Prevent mouse wheel from changing combobox selection when dropdown is closed."""
+        cb.bind("<MouseWheel>", lambda e: "break")
+        cb.bind("<Button-4>", lambda e: "break")
+        cb.bind("<Button-5>", lambda e: "break")
 
     def _build_vitals_panel(self):
         f = self.vitals_frame
@@ -973,8 +1010,9 @@ class VitalsInspectionPanel(ttk.Frame):
             f,
             values=["(select)"] + [str(i) for i in range(10)],
             width=10,
-            state="readonly"
+            state="readonly",
         )
+        self._disable_mousewheel_on_cb(self.adl_sev_cb)
         self.adl_sev_cb.grid(row=1, column=1, sticky="w", padx=(10, 0), pady=(8, 2))
         self.adl_sev_cb.set("(select)")
 
@@ -1386,18 +1424,27 @@ class ObjectivesBlock(ttk.Frame):
 
         self.palp_notes_widget.tkraise()
 
+    def _disable_mousewheel_on_cb(self, cb: ttk.Combobox):
+        """Prevent mouse wheel from changing combobox selection when dropdown is closed."""
+        cb.bind("<MouseWheel>", lambda e: "break")
+        cb.bind("<Button-4>", lambda e: "break")
+        cb.bind("<Button-5>", lambda e: "break")
+    
+
     def _build_header(self):
         hdr = ttk.Frame(self)
         hdr.pack(fill="x", padx=10, pady=(10, 6))
 
         ttk.Label(hdr, text="Body region:").pack(side="left")
-        ttk.Combobox(
+        cb_region = ttk.Combobox(
             hdr,
             textvariable=self.region_var,
             values=REGION_OPTIONS,
             state="readonly",
-            width=10
-        ).pack(side="left", padx=(8, 12))
+            width=10,
+        )
+        self._disable_mousewheel_on_cb(cb_region)
+        cb_region.pack(side="left", padx=(8, 12))
 
         ttk.Label(hdr, textvariable=self.region_label_var, foreground="gray").pack(side="left")
 

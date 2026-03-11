@@ -487,7 +487,7 @@ class HOIPage(ttk.Frame):
         grid.pack(fill="x")
 
         ttk.Label(grid, text="Evaluation type:").grid(row=0, column=0, sticky="w", padx=6, pady=4)
-        ttk.Combobox(
+        cb_eval_type = ttk.Combobox(
             grid,
             textvariable=self.eval_type_var,
             values=[
@@ -496,11 +496,24 @@ class HOIPage(ttk.Frame):
                 "final evaluation",
             ],
             state="readonly",
-            width=28
-        ).grid(row=0, column=1, sticky="w", padx=6, pady=4)
+            width=28,
+        )
+        self._disable_mousewheel_on_cb(cb_eval_type)
+        cb_eval_type.grid(row=0, column=1, sticky="w", padx=6, pady=4)
+
+        ttk.Label(grid, text="Event wording:").grid(row=1, column=0, sticky="w", padx=6, pady=4)
+        cb_event_word = ttk.Combobox(
+            grid,
+            textvariable=self.intro_event_word_var,
+            values=self.intro_event_options,
+            state="readonly",
+            width=28,
+        )
+        self._disable_mousewheel_on_cb(cb_event_word)
+        cb_event_word.grid(row=1, column=1, sticky="w", padx=6, pady=4)
 
         ttk.Label(grid, text="Purpose (primary):").grid(row=2, column=0, sticky="w", padx=6, pady=4)
-        ttk.Combobox(
+        cb_purpose = ttk.Combobox(
             grid,
             textvariable=self.eval_purpose_var,
             values=[
@@ -508,11 +521,14 @@ class HOIPage(ttk.Frame):
                 "assess clinical progress since the prior evaluation",
                 "determine maximum medical improvement status",
             ],
-            width=48
-        ).grid(row=2, column=1, sticky="w", padx=6, pady=4)
+            width=48,
+            state="readonly",  # you can add this if you want it readonly too
+        )
+        self._disable_mousewheel_on_cb(cb_purpose)
+        cb_purpose.grid(row=2, column=1, sticky="w", padx=6, pady=4)
 
         ttk.Label(grid, text="Examination included:").grid(row=3, column=0, sticky="w", padx=6, pady=4)
-        ttk.Combobox(
+        cb_exam_scope = ttk.Combobox(
             grid,
             textvariable=self.eval_exam_scope_var,
             values=[
@@ -520,17 +536,11 @@ class HOIPage(ttk.Frame):
                 "a focused re-examination of previously identified findings",
                 "a final clinical examination and record review",
             ],
-            width=70
-        ).grid(row=3, column=1, sticky="w", padx=6, pady=4)
-
-        ttk.Label(grid, text="Event wording:").grid(row=1, column=0, sticky="w", padx=6, pady=4)        
-        ttk.Combobox(
-            grid,
-            textvariable=self.intro_event_word_var,
-            values=self.intro_event_options,
-            state="readonly",
-            width=28
-        ).grid(row=1, column=1, sticky="w", padx=6, pady=4)
+            width=70,
+            state="readonly",  # optional but recommended for consistency
+        )
+        self._disable_mousewheel_on_cb(cb_exam_scope)
+        cb_exam_scope.grid(row=3, column=1, sticky="w", padx=6, pady=4)
 
 
         ttk.Checkbutton(
@@ -1680,6 +1690,12 @@ class HOIPage(ttk.Frame):
         f.grid_columnconfigure(2, weight=1)
         return f
 
+    def _disable_mousewheel_on_cb(self, cb: ttk.Combobox):
+        """Prevent mouse wheel from changing combobox selection when dropdown is closed."""
+        cb.bind("<MouseWheel>", lambda e: "break")
+        cb.bind("<Button-4>", lambda e: "break")
+        cb.bind("<Button-5>", lambda e: "break")
+    
     def _build_type_block(self, parent):
         f = ttk.LabelFrame(parent, text="Type of Injury (Structured)")
 
@@ -1692,8 +1708,9 @@ class HOIPage(ttk.Frame):
         ttk.Radiobutton(sex_row, text="Unknown", value="(unknown)", variable=self.sex_var).pack(side="left", padx=(10, 0))
 
         ttk.Label(f, text="Type:").grid(row=1, column=0, sticky="w", padx=10, pady=10)
-        ttk.Combobox(f, textvariable=self.injury_type_var, values=self.INJURY_TYPES, state="readonly", width=18)\
-            .grid(row=1, column=1, sticky="w", padx=10, pady=10)
+        cb_type_injury = ttk.Combobox(f, textvariable=self.injury_type_var, values=self.INJURY_TYPES, state="readonly", width=18)
+        self._disable_mousewheel_on_cb(cb_type_injury)
+        cb_type_injury.grid(row=1, column=1, sticky="w", padx=10, pady=10)
 
         panel = ttk.Frame(f)
         panel.grid(row=2, column=0, columnspan=4, sticky="ew", padx=10, pady=(0, 10))
@@ -1704,20 +1721,24 @@ class HOIPage(ttk.Frame):
         aa.grid_columnconfigure(1, weight=1)
 
         ttk.Label(aa, text="Accident type:").grid(row=0, column=0, sticky="w", padx=8, pady=6)
-        ttk.Combobox(aa, textvariable=self.aa_moving_var, values=self.AA_ACCIDENT_TYPES, state="readonly", width=26)\
-            .grid(row=0, column=1, sticky="w", padx=8, pady=6)
+        cb_accident_type = ttk.Combobox(aa, textvariable=self.aa_moving_var, values=self.AA_ACCIDENT_TYPES, state="readonly", width=26)
+        self._disable_mousewheel_on_cb(cb_accident_type)
+        cb_accident_type.grid(row=0, column=1, sticky="w", padx=8, pady=6)
 
         ttk.Label(aa, text="Other vehicle impact area:").grid(row=1, column=0, sticky="w", padx=8, pady=6)
-        ttk.Combobox(aa, textvariable=self.aa_other_part_var, values=self.AA_OTHER_VEHICLE_PART, state="readonly", width=26)\
-            .grid(row=1, column=1, sticky="w", padx=8, pady=6)
+        cb_other_part = ttk.Combobox(aa, textvariable=self.aa_other_part_var, values=self.AA_OTHER_VEHICLE_PART, state="readonly", width=26)
+        self._disable_mousewheel_on_cb(cb_other_part)
+        cb_other_part.grid(row=1, column=1, sticky="w", padx=8, pady=6)
 
         ttk.Label(aa, text="Struck patient vehicle on:").grid(row=2, column=0, sticky="w", padx=8, pady=6)
-        ttk.Combobox(aa, textvariable=self.aa_patient_side_var, values=self.AA_PATIENT_SIDE, state="readonly", width=26)\
-            .grid(row=2, column=1, sticky="w", padx=8, pady=6)
+        cb_patient_side = ttk.Combobox(aa, textvariable=self.aa_patient_side_var, values=self.AA_PATIENT_SIDE, state="readonly", width=26)
+        self._disable_mousewheel_on_cb(cb_patient_side)
+        cb_patient_side.grid(row=2, column=1, sticky="w", padx=8, pady=6)
 
         ttk.Label(aa, text="Resembles:").grid(row=3, column=0, sticky="w", padx=8, pady=6)
-        ttk.Combobox(aa, textvariable=self.aa_resembles_var, values=self.AA_RESEMBLES, state="readonly", width=26)\
-            .grid(row=3, column=1, sticky="w", padx=8, pady=6)
+        cb_resembles = ttk.Combobox(aa, textvariable=self.aa_resembles_var, values=self.AA_RESEMBLES, state="readonly", width=26)
+        self._disable_mousewheel_on_cb(cb_resembles)
+        cb_resembles.grid(row=3, column=1, sticky="w", padx=8, pady=6)
 
         sf = ttk.LabelFrame(panel, text="Slip and Fall Details")
         sf.grid(row=1, column=0, columnspan=4, sticky="ew", pady=(0, 10))
@@ -1748,13 +1769,15 @@ class HOIPage(ttk.Frame):
         course.grid_columnconfigure(1, weight=1)
 
         ttk.Label(course, text="Course:").grid(row=0, column=0, sticky="w", padx=8, pady=6)
-        ttk.Combobox(
+        cb_course = ttk.Combobox(
             course,
             textvariable=self.course_var,
             values=self.COURSE,
             state="readonly",
             width=26
-        ).grid(row=0, column=1, sticky="w", padx=8, pady=6)
+        )
+        self._disable_mousewheel_on_cb(cb_course)
+        cb_course.grid(row=0, column=1, sticky="w", padx=8, pady=6)
 
         # ✅ NEW: small textbox appended to paragraph 3 (like Diagnostics behavior)
         ttk.Label(course, text="(Optional) Course notes (adds last sentence):", foreground="gray")\
@@ -1786,12 +1809,26 @@ class HOIPage(ttk.Frame):
         f = ttk.LabelFrame(parent, text="Prior Care / Treatment (Structured)")
 
         ttk.Label(f, text="Medical treatment for current injuries:").grid(row=0, column=0, sticky="w", padx=10, pady=10)
-        ttk.Combobox(f, textvariable=self.treatment_received_var, values=self.TREATMENT_RECEIVED, state="readonly", width=18)\
-            .grid(row=0, column=1, sticky="w", padx=10, pady=10)
+        cb_treatment = ttk.Combobox(
+            f,
+            textvariable=self.treatment_received_var,
+            values=self.TREATMENT_RECEIVED,
+            state="readonly",
+            width=18,
+        )
+        self._disable_mousewheel_on_cb(cb_treatment)
+        cb_treatment.grid(row=0, column=1, sticky="w", padx=10, pady=10)
 
         ttk.Label(f, text="Treatment setting:").grid(row=1, column=0, sticky="w", padx=10, pady=(0, 10))
-        ttk.Combobox(f, textvariable=self.care_setting_var, values=self.CARE_SETTING, state="readonly", width=18)\
-            .grid(row=1, column=1, sticky="w", padx=10, pady=(0, 10))
+        cb_care_setting = ttk.Combobox(
+            f,
+            textvariable=self.care_setting_var,
+            values=self.CARE_SETTING,
+            state="readonly",
+            width=18,
+        )
+        self._disable_mousewheel_on_cb(cb_care_setting)
+        cb_care_setting.grid(row=1, column=1, sticky="w", padx=10, pady=(0, 10))
 
         ttk.Label(f, text="Facility name (optional):").grid(row=2, column=0, sticky="w", padx=10, pady=(0, 10))
         ttk.Entry(f, textvariable=self.facility_name_var, width=32).grid(row=2, column=1, sticky="w", padx=10, pady=(0, 10))
@@ -1813,8 +1850,15 @@ class HOIPage(ttk.Frame):
         f = ttk.LabelFrame(parent, text="Medications (Structured)")
 
         ttk.Label(f, text="Prescribed medications:").grid(row=0, column=0, sticky="w", padx=10, pady=10)
-        ttk.Combobox(f, textvariable=self.meds_prescribed_var, values=self.MEDS_PRESCRIBED, state="readonly", width=18)\
-            .grid(row=0, column=1, sticky="w", padx=10, pady=10)
+        cb_meds = ttk.Combobox(
+            f,
+            textvariable=self.meds_prescribed_var,
+            values=self.MEDS_PRESCRIBED,
+            state="readonly",
+            width=18,
+        )
+        self._disable_mousewheel_on_cb(cb_meds)
+        cb_meds.grid(row=0, column=1, sticky="w", padx=10, pady=10)
 
         ttk.Label(f, text="Medication classes (select all that apply):")\
             .grid(row=1, column=0, columnspan=3, sticky="w", padx=10, pady=(0, 6))
@@ -1851,8 +1895,15 @@ class HOIPage(ttk.Frame):
         f = ttk.LabelFrame(parent, text="Diagnostics / Imaging (Structured)")
 
         ttk.Label(f, text="Imaging performed:").grid(row=0, column=0, sticky="w", padx=10, pady=10)
-        ttk.Combobox(f, textvariable=self.imaging_done_var, values=self.IMAGING_DONE, state="readonly", width=18)\
-            .grid(row=0, column=1, sticky="w", padx=10, pady=10)
+        cb_imaging = ttk.Combobox(
+            f,
+            textvariable=self.imaging_done_var,
+            values=self.IMAGING_DONE,
+            state="readonly",
+            width=18,
+        )
+        self._disable_mousewheel_on_cb(cb_imaging)
+        cb_imaging.grid(row=0, column=1, sticky="w", padx=10, pady=10)
 
         # controls row
         ctrls = ttk.Frame(f)

@@ -124,6 +124,11 @@ class PlanPage(ttk.Frame):
     DURATION_CHOICES = ["2", "3", "4", "4 to 6", "6", "8", "12", "(other)"]
     REEVAL_CHOICES = ["2 weeks", "4 weeks", "4 to 6 weeks", "6 weeks", "8 weeks", "12 visits", "18 visits", "(other)"]
 
+    def _disable_mousewheel_on_cb(self, cb: ttk.Combobox):
+        cb.bind("<MouseWheel>", lambda e: "break")
+        cb.bind("<Button-4>", lambda e: "break")
+        cb.bind("<Button-5>", lambda e: "break")
+    
     def has_content(self) -> bool:
         try:
             s = self.get_struct() or {}
@@ -511,6 +516,7 @@ class PlanPage(ttk.Frame):
         self.freq_cb = ttk.Combobox(
             sched_box, textvariable=self.freq_var, values=self.FREQ_CHOICES, width=12, state="readonly"
         )
+        self._disable_mousewheel_on_cb(self.freq_cb)
         self.freq_cb.grid(row=0, column=1, sticky="w", padx=8, pady=(10, 4))
         self.freq_other_entry = ttk.Entry(sched_box, textvariable=self.freq_other_var, width=16)
         self.freq_other_entry.grid(row=0, column=2, sticky="w", padx=8, pady=(10, 4))
@@ -520,6 +526,7 @@ class PlanPage(ttk.Frame):
         self.duration_cb = ttk.Combobox(
             sched_box, textvariable=self.duration_var, values=self.DURATION_CHOICES, width=12, state="readonly"
         )
+        self._disable_mousewheel_on_cb(self.duration_cb)
         self.duration_cb.grid(row=1, column=1, sticky="w", padx=8, pady=4)
         self.duration_other_entry = ttk.Entry(sched_box, textvariable=self.duration_other_var, width=16)
         self.duration_other_entry.grid(row=1, column=2, sticky="w", padx=8, pady=4)
@@ -529,6 +536,7 @@ class PlanPage(ttk.Frame):
         self.reeval_cb = ttk.Combobox(
             sched_box, textvariable=self.reeval_var, values=self.REEVAL_CHOICES, width=12, state="readonly"
         )
+        self._disable_mousewheel_on_cb(self.reeval_cb)
         self.reeval_cb.grid(row=2, column=1, sticky="w", padx=8, pady=4)
         self.reeval_other_entry = ttk.Entry(sched_box, textvariable=self.reeval_other_var, width=16)
         self.reeval_other_entry.grid(row=2, column=2, sticky="w", padx=8, pady=4)
@@ -1041,6 +1049,7 @@ class PlanPage(ttk.Frame):
         ]
 
         cmt_combo = ttk.Combobox(frame, textvariable=self.current_cmt_code, values=cmt_options, state="readonly", width=50)
+        self._disable_mousewheel_on_cb(cmt_combo)
         cmt_combo.pack(pady=(0, 20))
         cmt_combo.bind("<<ComboboxSelected>>", lambda e: self.handle_cmt_interaction(popup))
         
@@ -1093,6 +1102,7 @@ class PlanPage(ttk.Frame):
             state="readonly",
             width=50
         )
+        self._disable_mousewheel_on_cb(em_combo)
         em_combo.pack(pady=(0, 12))
 
         # ---- NEW: Exam Notes (starts 1 line, expands) ----
