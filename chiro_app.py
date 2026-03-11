@@ -89,7 +89,6 @@ EXAM_INDEX_FILENAME = "_exam_index.json"
 # No base exams; only dynamic exams (Initial 1, Re-Exam 1, etc.)
 EMPTY_EXAMS: list[str] = []
 
-
 # Template category configuration: filesystem-safe slugs + human-readable labels
 TEMPLATE_CATEGORIES = [
     ("initials", "Initials"),
@@ -118,7 +117,6 @@ def get_templates_root() -> Path:
     return root
 
 
-
 def _find_sets(obj, path="root"):
     if isinstance(obj, set):
         print("FOUND set at:", path, "=>", obj)
@@ -135,7 +133,6 @@ def _find_sets(obj, path="root"):
                 return True
 
     return False
-
 
 # Patient ID and folder paths: patient_storage.new_patient_id, get_patient_root, find_patient_root
 
@@ -156,7 +153,6 @@ def load_patient(patient_id: str) -> dict:
     if not folder:
         raise FileNotFoundError(f"No patient folder found for id: {patient_id}")
     return json.loads((folder / "patient.json").read_text(encoding="utf-8"))
-
 
 
 ALERTS_FILENAME = "alerts_dashboard.json"
@@ -186,7 +182,6 @@ def open_with_default_app(path: str):
 def launch_new_form():
     """Launch a totally separate process running a fresh blank form."""
     subprocess.Popen([sys.executable, os.path.abspath(__file__), "--new"])
-
 
 
 def _next_number(existing: list[str], prefix: str) -> int:
@@ -278,21 +273,12 @@ class App(tk.Tk):
 
         self.exam_date_var.trace_add("write", lambda *_: self._set_current_doc_label())
 
-
-
-
-
         self.master_save = MasterSaveController(self)
         self._build_ui()       
         self._wire_autosave_triggers()
 
         self._apply_demographics_visibility()
-
-        # If no patient is loaded yet, this will use the global file;
-        # once a patient loads, we'll open that patient's file (below).
-        #self.after_idle(self.show_current_patient_alerts_popup)
-
-
+        
         # Mousewheel scroll routing (Subjectives canvas)
         self.bind_all("<MouseWheel>", self._on_mousewheel)
         self.bind_all("<Button-4>", self._on_mousewheel_linux_up)
@@ -303,35 +289,7 @@ class App(tk.Tk):
             self.after(80, self.autoload_last_case_on_startup)
         else:
             self.status_var.set("Ready. (New blank form)")
-
-    # # --- Docs buttons: create PDF/doc for CURRENT exam (do not create new exams) ---
-
-    # def add_initial_doc(self):
-    #     self._docs_make_pdf_for_current_exam()
-
-    # def add_reexam_doc(self):
-    #     self._docs_make_pdf_for_current_exam()
-
-    # def add_rof_doc(self):
-    #     self._docs_make_pdf_for_current_exam()
-
-    # def add_final_doc(self):
-    #     self._docs_make_pdf_for_current_exam()
-
-    # def add_chiro_doc(self):
-    #     self._docs_make_pdf_for_current_exam()
-
-
-    # def _docs_make_pdf_for_current_exam(self):
-    #     """
-    #     Called by TkDocsPage '+ ...' buttons.
-    #     Uses your working PDF overwrite pipeline, so it always matches the current exam/date.
-    #     """
-    #     try:
-    #         self.export_current_exam_to_pdf_overwrite()
-    #     except Exception as e:
-    #         messagebox.showerror("Docs", f"Could not create/update PDF.\n\n{e}")
-
+    
     def propagate_demographics_to_all_exams(self):
         patient_root = self.get_current_patient_root()
         if not patient_root:
@@ -514,8 +472,7 @@ class App(tk.Tk):
             txt = getattr(self, "hoi_preview_text", None)
             if txt is None or not txt.winfo_exists():
                 return
-
-            # Build runs
+            
             # Build runs in PDF order: Beginning (Initial/Re-Exam/Final) → Subjectives → Objectives → ROF → Assessment
             runs = []
             try:
@@ -695,8 +652,6 @@ class App(tk.Tk):
             self._refreshing_preview = False
 
 
-
-
     def _rebuild_exam_nav_buttons(self):
         # Remove old exam buttons only (leave label + add buttons alone)
         for name, btn in list(self.exam_buttons.items()):
@@ -731,12 +686,7 @@ class App(tk.Tk):
 
 
         self._refresh_exam_button_styles()
-        self._apply_exam_color_theme()
-        # if hasattr(self, "tk_docs_page"):
-        #     try:
-        #         self.tk_docs_page.refresh()
-        #     except Exception:
-        #         pass
+        self._apply_exam_color_theme()        
 
 
     def _ensure_patient_for_dynamic_exam(self) -> bool:
@@ -861,9 +811,7 @@ class App(tk.Tk):
         self._apply_exam_color_theme()
         # ✅ NEW: set today's visit date for a newly created exam (first time)
         self.exam_date_var.set(today_mmddyyyy())
-        self._set_current_doc_label()
-        
-
+        self._set_current_doc_label()        
 
         if copy_current:
             # Save the CURRENT on-screen content under the NEW exam name/path
@@ -1199,14 +1147,9 @@ class App(tk.Tk):
         self.write_settings({
             "last_exam_pdfs": self.last_exam_pdf_paths,
             "last_all_exams_pdf": self.last_all_exams_pdf_path
-        })
-        # if messagebox.askyesno("PDF Saved", f"PDF overwritten/saved:\n{path}\n\nOpen it now?"):
-        #     open_with_default_app(path)
-
-
+        })        
 
     # ---------- Providers for HOI ----------
-
     def _patient_info_from_demo(self) -> dict:
         return {
             "first": self.first_name_var.get().strip(),
@@ -1244,7 +1187,6 @@ class App(tk.Tk):
         return out
 
     # ---------- Color Theme ----------
-
     def _apply_exam_color_theme(self):
         exam = self.current_exam.get()
         theme = EXAM_COLORS.get(exam)
@@ -1265,7 +1207,6 @@ class App(tk.Tk):
                 btn.configure(style="TButton")
 
     # ---------- Mousewheel ----------
-
     def _set_mousewheel_target(self, widget: tk.Widget | None):
         self._mousewheel_target = widget
 
@@ -1288,7 +1229,6 @@ class App(tk.Tk):
             self._mousewheel_target.yview_scroll(1, "units")
 
     # ---------- PDF open ----------
-
     def open_pdf_file(self, pdf_path: str):
         if not pdf_path or not os.path.exists(pdf_path):
             messagebox.showwarning("Not found", "No PDF file found to open.")
@@ -1310,15 +1250,12 @@ class App(tk.Tk):
         self.open_pdf_file(self.last_all_exams_pdf_path)
 
     # ---------- UI ----------
-
     def _build_ui(self):
         padx = 10
-
-        # =========================
+       
         # Top-level 2-column layout
         # LEFT: your normal UI
-        # RIGHT: live preview (starts at top of window)
-        # =========================
+        # RIGHT: live preview (starts at top of window)        
         main = ttk.Frame(self)
         main.pack(fill="both", expand=True)        
 
@@ -1388,8 +1325,7 @@ class App(tk.Tk):
         self.header_separator.pack(fill="x", pady=(10, 0))
 
         self.exam_accent = tk.Frame(self.header_container, height=4)
-        self.exam_accent.pack(fill="x", pady=(4, 6))        
-
+        self.exam_accent.pack(fill="x", pady=(4, 6))       
 
         # --- Patient info (collapsible + 1-line summary) ---
         demo_wrap = ttk.Frame(left_root)
@@ -1432,8 +1368,7 @@ class App(tk.Tk):
             textvariable=self.current_doc_label_var,
             font=("Segoe UI", 10, "bold")
         )
-        self.current_doc_label.pack(expand=True, anchor="center")
-        
+        self.current_doc_label.pack(expand=True, anchor="center")        
         
         # build once
         self._rebuild_exam_nav_buttons()
@@ -1463,7 +1398,6 @@ class App(tk.Tk):
         ttk.Label(info, text="Provider (DC):").grid(row=3, column=0, sticky="w", padx=padx, pady=6)
         ttk.Entry(info, textvariable=self.provider_var, width=32).grid(row=3, column=1, sticky="w", padx=padx, pady=6)
 
-
         # --- Section nav (now inside left pane) ---
         soap_nav = ttk.Frame(left_root)
         soap_nav.pack(fill="x")
@@ -1483,8 +1417,6 @@ class App(tk.Tk):
             else:
                 nav_pages.append("Docs")
 
-
-
         self.page_buttons: dict[str, ttk.Button] = {}
         for page in nav_pages:
             b = ttk.Button(soap_nav, text=page, command=lambda p=page: self.show_page(p))
@@ -1492,8 +1424,7 @@ class App(tk.Tk):
             self.page_buttons[page] = b
 
         # --- Content container (now inside left pane) ---
-        self.content = ttk.Frame(left_root)
-        
+        self.content = ttk.Frame(left_root)        
 
         self.content.pack(fill="both", expand=True, pady=(10, 0))
         self.content.grid_rowconfigure(0, weight=1)
@@ -1518,14 +1449,8 @@ class App(tk.Tk):
             txt.tag_configure("H_BOLD", font=bold)
 
         # call once after widget is created:
-        apply_preview_styles(self.hoi_preview_text)
-
-
-        # =========================
-        # Create pages (unchanged logic, same widgets)
-        # =========================
-        # Keep HOIPage created so saving/PDF still works,
-        # but it will no longer be shown as a "page" button.
+        apply_preview_styles(self.hoi_preview_text)        
+        
         self.hoi_page = HOIPage(self.content, self.schedule_autosave)
         self.after(50, self.request_live_preview_refresh)
 
@@ -1548,14 +1473,11 @@ class App(tk.Tk):
             self.subjectives_page.clear_all_body_regions
         )
 
-
         self.doc_vault_page = DocVaultPage(
             self.content,
             self.schedule_autosave,
             get_patient_root_fn=self.get_current_patient_root
-        )
-
-        
+        )        
 
         # --- Tk Docs timeline page ---
         self.tk_docs_page = TkDocsPage(
@@ -1571,12 +1493,9 @@ class App(tk.Tk):
             on_add_rof=self.add_rof,
             on_add_final=self.add_final,
             on_add_chiro=self.add_chiro_visit,
-
-
             set_scroll_target_fn=self._set_mousewheel_target,
             get_current_exam_fn=lambda: self.current_exam.get(),
         )
-
 
         # Only pages you want in the LEFT nav go here:
         self.pages = {
@@ -1604,8 +1523,7 @@ class App(tk.Tk):
 
         # Wire HOI providers (this is the critical part for your first-name + regions)
         self.hoi_page.set_regions_provider(self._regions_from_subjectives)
-        self.hoi_page.set_patient_provider(self._patient_info_from_demo)
-       
+        self.hoi_page.set_patient_provider(self._patient_info_from_demo)       
        
         # Mousewheel routing for Subjectives scroll canvas
         if hasattr(self.subjectives_page, "canvas"):
@@ -1630,7 +1548,6 @@ class App(tk.Tk):
             background=[("active", "#f5c6c6")]
         )
 
-
         # --- Bottom buttons ---
         bottom = ttk.Frame(self)
         bottom.pack(fill="x", padx=padx, pady=padx)
@@ -1651,7 +1568,6 @@ class App(tk.Tk):
         ttk.Button(bottom, text="Start New Case (keeps files)", command=self.start_new_case).pack(side="right", padx=(0, 8))
         ttk.Button(bottom, text="Export CURRENT Exam to PDF (overwrite)", command=self.export_current_exam_to_pdf_overwrite)\
             .pack(side="left", padx=(8, 0))
-
 
         self.status_var = tk.StringVar(value="Ready.")
         ttk.Label(self, textvariable=self.status_var, foreground="gray").pack(anchor="w", padx=padx, pady=(0, padx))
@@ -1855,8 +1771,8 @@ class App(tk.Tk):
             self.current_case_path = None
             self.status_var.set(f"{exam_name} ready (new exam; carry-over kept unless cleared).")
 
-
         self.write_settings({"last_exam": exam_name})
+
 
     def _refresh_exam_button_styles(self):
         current = self.current_exam.get()
@@ -2009,8 +1925,7 @@ class App(tk.Tk):
         print(f"  Review of Findings: {counts['rof']}")
         print(f"  Chiro Visit:    {counts['chiro']}")
         print(f"  Final:          {counts['final']}")
-        print(f"  TOTAL visits:   {total}")    
-    
+        print(f"  TOTAL visits:   {total}")        
     
 
     def _save_dynamic_exams_for_patient(self):
@@ -2048,9 +1963,7 @@ class App(tk.Tk):
         except Exception:
             return {}
 
-    # ---------- Patient folders / paths ----------
-
-    
+    # ---------- Patient folders / paths ----------    
     def _ensure_current_patient_id(self) -> str:
         """Ensure we have a patient ID; create one if missing. Returns current_patient_id."""
         pid = getattr(self, "current_patient_id", None)
@@ -2188,7 +2101,6 @@ class App(tk.Tk):
             self.status_var.set(f"Auto-save failed: {e}")
 
     # ---------- Save / Load ----------
-
     def _apply_soap_to_ui(self, soap: dict):
         """Apply a soap dict to all SOAP pages (HOI, Subjectives, Objectives, Diagnosis, Plan, Family/Social). Does not change patient demographics."""
         soap = soap or {}
@@ -2523,8 +2435,7 @@ class App(tk.Tk):
         payload.setdefault("patient", {})
         payload["patient"]["patient_id"] = self._ensure_current_patient_id()
 
-        return payload
-      
+        return payload      
     
 
     def save_case_to_path(self, path: str | Path):
@@ -2652,8 +2563,6 @@ class App(tk.Tk):
             except Exception:
                 pass
 
-
-
             # After loading patient_id + names, show that patient's alerts file
             self.after_idle(self.show_current_patient_alerts_popup)
 
@@ -2661,7 +2570,6 @@ class App(tk.Tk):
             self._loading = False
                    
     # ---------- Reset ----------
-
     def clear_exam_content_only(self):
         """
         Clears all exam-related UI fields without touching
@@ -2985,7 +2893,6 @@ class App(tk.Tk):
 
 
     # ---------- Start New Case ----------
-
     def start_new_case(self):
         try:
             self._autosave(force=True)
