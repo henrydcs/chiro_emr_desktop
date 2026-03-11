@@ -202,5 +202,5 @@ PATIENT_SUBDIR_IMAGING = "imaging"
 PATIENT_SUBDIR_ATTORNEY = "attorney"
 PATIENT_SUBDIR_BILLING = "billing"
 PATIENT_SUBDIR_MESSAGES = "messages"
-EXAM_INDEX_SUBDIR = "index_exam_number"  # Where _exam_index.json lives (patient_info, exams, etc.)
+EXAM_INDEX_SUBDIR = "index_exam_number" #where _index_exam.json now lives
 
