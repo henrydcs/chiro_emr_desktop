@@ -1510,7 +1510,7 @@ class HOIPage(ttk.Frame):
             if typed_prior:
                 medical_parts.append(self._ensure_period(typed_prior))
         else:
-            medical_parts.append("TThe patient has not received any medical care for the injuries resulting from this incident. She presents to our office at this time due to persistent symptoms and expressed concern regarding her condition.")
+            medical_parts.append("The patient has not received any medical care for the injuries resulting from this incident. The patient presents to our office at this time due to persistent symptoms and expressed concern regarding this condition.")
 
         if self.meds_prescribed_var.get() == "Was prescribed" and self._meds_selected:
             meds = ", ".join([_clean(x).lower() for x in self._meds_selected if _clean(x)])
