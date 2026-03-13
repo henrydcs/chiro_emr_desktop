@@ -781,20 +781,20 @@ class HOIPage(ttk.Frame):
         incident_noun = _clean(self.intro_event_word_var.get()) or "incident"
 
         first = _clean(ctx.get("first", ""))  # ✅ ADD THIS
-        subj = first if first else "The patient"
+        subj = first if first else "The patient"        
 
-
-        #last = _clean(ctx.get("last", "")) or "the patient"
+        last = _clean(ctx.get("last", "")) or "the patient"
+        subjL = last if last else "the patient"
         clinic = _clean(self._patient_provider().get("clinic", "the clinic")) if callable(self._patient_provider) else "the clinic"
         doi = _clean(ctx.get("doi", "")) or "____/____/________"
-        eval_date = "the date of this evaluation"
+        #eval_date = "the date of this evaluation"
 
         eval_type = _clean(self.eval_type_var.get())
         purpose = _clean(self.eval_purpose_var.get())
         scope = _clean(self.eval_exam_scope_var.get())
 
         parts = [
-            f"{subj} presented to {clinic} on {eval_date} for an {eval_type} regarding injuries allegedly sustained in an {incident_noun} that occurred on {doi}.",
+            f"{subj} {subjL} presented to {clinic} for an {eval_type} regarding injuries allegedly sustained in an {incident_noun} that occurred on {doi}.",
             f"The purpose of this evaluation is to {purpose}.",
             f"Our patient provided a history and underwent {scope}."
         ]
@@ -825,7 +825,7 @@ class HOIPage(ttk.Frame):
 
         ctx = self._patient_ctx()
         first = _clean(ctx.get("first", "")) or "The patient"
-
+        #last = _clean(ctx.get("last", "")) or "the patient"
         # collect meaningful entries (preserve the order blocks appear)
         entries: list[dict] = []
         for blk in self.rof_imaging_blocks:
@@ -1302,12 +1302,13 @@ class HOIPage(ttk.Frame):
 
     # ---------------- Patient helpers ----------------
     def _patient_ctx(self) -> dict:
-        ctx = {"first": "", "sex": "", "doi": ""}
+        ctx = {"first": "", "last": "", "sex": "", "doi": ""}
 
         if callable(self._patient_provider):
             try:
                 d = self._patient_provider() or {}
                 ctx["first"] = _clean(d.get("first", "")) or _clean(d.get("first_name", ""))
+                ctx["last"] = _clean(d.get("last", "")) or _clean(d.get("last_name", ""))
                 ctx["sex"] = _clean(d.get("sex", ""))
                 ctx["doi"] = _clean(d.get("doi", ""))
             except Exception:
@@ -1433,13 +1434,14 @@ class HOIPage(ttk.Frame):
 
         ctx = self._patient_ctx()
         first = ctx.get("first", "")
+        #last = ctx.get("last", "")
         sex = ctx.get("sex", "")
         pro = self._pronouns(sex)
 
         doi = _clean(ctx.get("doi", "")) or "____/____/________"
 
         reports = self._reports(first)
-        states = self._states(first)
+        #states = self._states(first)
         
         # PARAGRAPH 1 – ACCIDENT / MECHANISM
         # -------------------------

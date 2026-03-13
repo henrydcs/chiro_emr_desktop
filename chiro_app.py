@@ -235,7 +235,29 @@ class App(tk.Tk):
         self._start_blank = "--new" in sys.argv
 
         self.title("PI Exams – SOAP Builder")
-        self.geometry("1060x930")
+
+        # Choose window size based on screen size so it works well
+        # both on your large monitor and on a laptop.
+        screen_w = self.winfo_screenwidth()
+        screen_h = self.winfo_screenheight()
+
+        if screen_w >= 1600:
+            # Large monitor (e.g., home)
+            win_w, win_h = 1060, 930
+            self._left_root_width = 960
+        else:
+            # Laptop / smaller screen
+            # Leave a margin so the window doesn't hit screen edges
+            margin = 80
+            # Width: between 900 and 1060, but not wider than screen - margin
+            win_w = max(900, min(1060, screen_w - margin))
+            # Height: at most 930, but no more than 90% of screen height
+            win_h = min(930, int(screen_h * 0.9))
+
+            # Left column gets ~60% of total width
+            self._left_root_width = int(win_w * 0.8)
+
+        self.geometry(f"{win_w}x{win_h}")
 
         self.header_visible = tk.BooleanVar(value=True)
         self.demo_visible = tk.BooleanVar(value=True)
@@ -1153,6 +1175,7 @@ class App(tk.Tk):
     def _patient_info_from_demo(self) -> dict:
         return {
             "first": self.first_name_var.get().strip(),
+            "last": self.last_name_var.get().strip(),
             "doi": self.doi_var.get().strip(),
             # if later you add sex to demographics, include it here:
             # "sex": self.sex_var.get().strip(),
@@ -1257,9 +1280,13 @@ class App(tk.Tk):
         # LEFT: your normal UI
         # RIGHT: live preview (starts at top of window)        
         main = ttk.Frame(self)
-        main.pack(fill="both", expand=True)        
+        main.pack(fill="both", expand=True)
 
-        left_root = ttk.Frame(main, width=960)
+        # Use the width chosen in __init__ based on screen size.
+        # Fallback to 960 if for some reason it wasn't set.
+        left_root_width = getattr(self, "_left_root_width", 960)
+
+        left_root = ttk.Frame(main, width=left_root_width)
         left_root.pack(side="left", fill="both", expand=True)
         left_root.pack_propagate(False)
 
