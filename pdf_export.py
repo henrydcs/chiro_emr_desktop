@@ -1708,13 +1708,13 @@ def therapy_paragraph_from_subjectives(subj: dict, first_name: str = "") -> tupl
     others = [x for x in selected if x != main]
 
     s1 = (
-        f"{first_name} states that today the worst symptoms are located in the following area: "
+        f"{first_name} states being primarily concerned with symptoms located in the following area(s): "
         f"{main} region."
     )
     if not others:
         return s1, selected
 
-    s2 = f"The patient also feels symptoms in the {_join_with_and(others)}."
+    s2 = f"The patient also feels discomfort in the {_join_with_and(others)}."
     return (s1 + " " + s2), selected
 
 # =======================================================

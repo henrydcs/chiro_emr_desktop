@@ -1542,7 +1542,7 @@ class HOIPage(ttk.Frame):
 
         p3_parts: list[str] = []
         if course:
-            p3_parts.append(f"Since the date of injury, {reports} states that the condition has been {course}.")
+            p3_parts.append(f"Since the date of injury, {reports} that the condition has been {course}.")
         #if regions:
             #p3_parts.append("The patient reports injuries involving the following body regions: " + ", ".join(regions) + ".")
         if regions:

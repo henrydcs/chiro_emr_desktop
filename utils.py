@@ -187,13 +187,13 @@ def build_sentence(
             return ""
         if "pain" in t:
             return t
-        return f"{t} pain"
+        return f"{t}"
 
     descriptors = [_as_pain_phrase(d) for d in raw if _as_pain_phrase(d)]
 
     if descriptors:
         if len(descriptors) == 1:
-            pain_sentence = f"The patient describes those symptoms as {descriptors[0]}."
+            pain_sentence = f"The patient describes the pain as {descriptors[0]}."
         else:
             pain_sentence = (
                 f"The patient describes those symptoms as "

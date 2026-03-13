@@ -204,7 +204,7 @@ class SubjectivesPage(ttk.Frame):
         others = selected[1:]
 
         s1 = (
-            "The patient states that today the worst symptoms are located in the following area: "
+            f"The patient states being primarily concerned with symptoms located in the following area(s): "
             f"{main} region."
         )
 
