@@ -61,7 +61,7 @@ EXAM_COLORS = {
 # ----------------- UI OPTIONS -----------------
 PAIN_DESCRIPTORS = [
     "Achy", "Sharp", "Tension", "Dull", "Burning", "Throbbing",
-    "Stabbing", "Shooting", "Tight", "Pressure", "Cramping"
+    "Stabbing", "Shooting", "Tightness", "Pressure", "Cramping"
 ]
 
 RADIC_SYMPTOMS = ["None", "Numbness", "Tingling", "Weakness", "Sypmtoms", "Discomfort", "Pain"]
