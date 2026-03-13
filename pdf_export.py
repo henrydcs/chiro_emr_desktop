@@ -172,35 +172,66 @@ def tokens_from_subjective_block(block: dict) -> list[str]:
     return _dedupe_preserve_order(toks)
 
 
-def _auto_text_from_block(block: dict) -> str:
+def _auto_text_from_block(
+    block: dict,
+    first_name: str = "",
+    last_name: str = "",
+    use_first_name: bool = True,
+) -> str:
     """
     Rebuild the auto-generated subjective paragraph from block dict.
-    Same logic as DescriptorBlock.get_auto_generated_text().
+    Same logic as DescriptorBlock.get_auto_generated_text(), but allows
+    using patient's first or last name instead of generic 'The patient'.
     """
     block = block or {}
+
+    # Decide which name to use as the subject in sentences.
+    first_name = (first_name or "").strip()
+    last_name = (last_name or "").strip()
+
+    if use_first_name and first_name:
+        subject = first_name
+    elif last_name:
+        subject = last_name
+    else:
+        subject = "The patient"
+
     region = (block.get("region") or "").strip()
     label = REGION_LABELS.get(region, "")
     if not region or region == "(none)" or not label:
         return ""
+
     base = build_sentence(
         label,
         block.get("desc1", ""),
         block.get("desc2", ""),
         block.get("radic_symptom", "None"),
         block.get("radic_location", "(select)"),
+        subject=subject,
     )
+
     muscles = block.get("muscles") or []
     tenderness = ""
     if len(muscles) == 1:
-        tenderness = f"The patient indicates or points to the {muscles[0]} as the area of tenderness."
+        tenderness = (
+            f"Our patient indicates or points to the {muscles[0]} as the area of tenderness."
+        )
     elif len(muscles) == 2:
-        tenderness = f"The patient indicates or points to the {muscles[0]} and the {muscles[1]} as the areas of tenderness."
+        tenderness = (
+            f"Our patient indicates or points to the {muscles[0]} and the {muscles[1]} "
+            f"as the areas of tenderness."
+        )
     elif len(muscles) > 2:
         mid = ", ".join(muscles[:-1])
         last = muscles[-1]
-        tenderness = f"The patient indicates or points to the {mid}, and the {last} as the areas of tenderness."
+        tenderness = (
+            f"Our patient indicates or points to the {mid}, and the {last} "
+            f"as the areas of tenderness."
+        )
+
     scale = (block.get("pain_scale") or "None").strip().lower()
-    pain_line = f"The patient states the overall discomfort in this area is {scale}."
+    pain_line = f"{subject} states the overall discomfort in this area is {scale}."
+
     parts = [base]
     if tenderness:
         parts.append(tenderness)
@@ -1654,13 +1685,14 @@ THERAPY_BODY_PARTS = [
     "Left Fingers", "Right Fingers",
 ]
 
-def therapy_paragraph_from_subjectives(subj: dict) -> tuple[str, list[str]]:
+def therapy_paragraph_from_subjectives(subj: dict, first_name: str = "") -> tuple[str, list[str]]:
     """
     Returns: (text, tokens)
     Uses subj["therapy_main"] if present and still checked.
     Falls back to fixed list order if missing.
     """
     subj = subj or {}
+    first_name = (first_name or "").strip()
     therapy_state = subj.get("therapy_only") or {}
     if not isinstance(therapy_state, dict):
         return "", []
@@ -1676,7 +1708,7 @@ def therapy_paragraph_from_subjectives(subj: dict) -> tuple[str, list[str]]:
     others = [x for x in selected if x != main]
 
     s1 = (
-        "The patient states that today the worst symptoms are located in the following area: "
+        f"{first_name} states that today the worst symptoms are located in the following area: "
         f"{main} region."
     )
     if not others:
@@ -1692,6 +1724,7 @@ def payload_to_exam_sections(payload: dict):
     payload = payload or {}
     exam_name = payload.get("exam", "Exam")
     patient = payload.get("patient", {}) or {}
+    first_name = (patient.get("first_name") or "").strip()
     soap = payload.get("soap", {}) or {}
     subj = soap.get("subjectives") or {}
 
@@ -1705,7 +1738,12 @@ def payload_to_exam_sections(payload: dict):
         if region in REGION_LABELS:
             tokens = tokens_from_subjective_block(b)
             if tokens:
-                auto_text = _auto_text_from_block(b)
+                auto_text = _auto_text_from_block(
+                    b,
+                    first_name=first_name,
+                    last_name=patient.get("last_name", ""),
+                    use_first_name=True,
+                )
                 if auto_text:
                     # Append this block's textbox as last sentence(s) of this body region block
                     combined_text = auto_text + ("\n\n" + user_text if user_text else "")
@@ -2143,9 +2181,10 @@ def build_combined_pdf(path: str, payloads: list):
         story.append(Paragraph("<b>SUBJECTIVES</b>", styles["Heading2"]))
         story.append(Spacer(1, 0.08 * inch))
 
-        # ✅ NEW: Therapy paragraph prints FIRST (independent of dropdown/blocks)
+                # ✅ NEW: Therapy paragraph prints FIRST (independent of dropdown/blocks)
         subj = (soap.get("subjectives") or {})
-        therapy_text, therapy_tokens = therapy_paragraph_from_subjectives(subj)
+        first_name = (patient.get("first_name") or "").strip()
+        therapy_text, therapy_tokens = therapy_paragraph_from_subjectives(subj, first_name=first_name)
 
         printed_any_subjectives = False
 

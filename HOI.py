@@ -796,7 +796,7 @@ class HOIPage(ttk.Frame):
         parts = [
             f"{subj} presented to {clinic} on {eval_date} for an {eval_type} regarding injuries allegedly sustained in an {incident_noun} that occurred on {doi}.",
             f"The purpose of this evaluation is to {purpose}.",
-            f"The patient provided a history and underwent {scope}."
+            f"Our patient provided a history and underwent {scope}."
         ]
 
         if self.eval_consent_var.get():
@@ -1445,7 +1445,7 @@ class HOIPage(ttk.Frame):
         # -------------------------
         if injury == "Auto Accident":
             p1_parts = [
-                f"{reports} {pro['subj']} was involved in a {self.aa_moving_var.get().strip().lower()} "
+                f"{reports} to have been involved in a {self.aa_moving_var.get().strip().lower()} "
                 f"on {doi}. The patient states the {self.aa_other_part_var.get().strip().lower()} portion of the "
                 f"other vehicle struck {pro['poss']} vehicle on the "
                 f"{self.aa_patient_side_var.get().strip().lower()}, and the mechanism of injury "
@@ -1459,7 +1459,7 @@ class HOIPage(ttk.Frame):
             p1 = " ".join(p1_parts)
 
         elif injury == "Slip and Fall":
-            parts = [f"{reports} {pro['subj']} sustained a slip and fall injury on {doi}."]
+            parts = [f"{reports} to have been sustained a slip and fall injury on {doi}."]
 
             if self.sf_circumstance_var.get() != "(none)":
                 parts.append(f"The patient states the incident involved {self.sf_circumstance_var.get().lower()}")
@@ -1503,19 +1503,19 @@ class HOIPage(ttk.Frame):
             setting = _clean(self.care_setting_var.get())
             facility = _clean(self.facility_name_var.get())
             if setting and setting != "(none)":
-                line = f"The patient sought medical care at a {setting.lower()}"
+                line = f"Our patient sought medical care at a {setting.lower()}"
                 line += f", specifically at {facility}." if facility else "."
                 medical_parts.append(line)
             typed_prior = _clean(self.prior_care_var.get())
             if typed_prior:
                 medical_parts.append(self._ensure_period(typed_prior))
         else:
-            medical_parts.append("The patient has not received any medical care for the injuries resulting from this incident. The patient presents to our office at this time due to persistent symptoms and expressed concern regarding this condition.")
+            medical_parts.append("The indivudual has not received any medical care for the injuries resulting from this incident. The patient presents to our office at this time due to persistent symptoms and expressed concern regarding this condition.")
 
         if self.meds_prescribed_var.get() == "Was prescribed" and self._meds_selected:
             meds = ", ".join([_clean(x).lower() for x in self._meds_selected if _clean(x)])
             if meds:
-                medical_parts.append(f"The patient was prescribed medications including {meds}.")
+                medical_parts.append(f"The individual was prescribed medications including {meds}.")
 
         typed_meds = _clean(self.meds_var.get())
         if typed_meds and self.meds_prescribed_var.get() == "Was prescribed":
@@ -1542,12 +1542,12 @@ class HOIPage(ttk.Frame):
 
         p3_parts: list[str] = []
         if course:
-            p3_parts.append(f"Since the date of injury, the patient reports that the condition has been {course}.")
+            p3_parts.append(f"Since the date of injury, {reports} states that the condition has been {course}.")
         #if regions:
             #p3_parts.append("The patient reports injuries involving the following body regions: " + ", ".join(regions) + ".")
         if regions:
             p3_parts.append(
-                "The patient reports injuries to the following area or body regions: "
+                "The patient notes injuries to the following area or body regions: "
                 + _join_with_and(regions) + "."
             )
         

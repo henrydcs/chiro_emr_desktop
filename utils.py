@@ -127,45 +127,6 @@ def patient_folder_name(pid: str, last: str, first: str) -> str:
     return f"{last_c}_{first_c}__{pid}"
 
 
-# def patient_folder_name(pid: str, last: str, first: str, dob: str = "") -> str:
-#     def clean(s: str) -> str:
-#         return safe_slug(s).replace("-", "_")
-
-#     last_c = clean(last)
-#     first_c = clean(first)
-
-#     dob_c = (dob or "").strip()
-#     dob_part = f"DOB_{clean(dob_c)}" if dob_c else "DOB_unknown"
-
-#     # ✅ alphabetizes by last name
-#     return f"{last_c}_{first_c}__{dob_part}__{pid}"
-
-
-# def get_patient_root_dir(last: str, first: str, dob: str, doi: str) -> str | None:
-#     ensure_year_root()
-
-#     last = (last or "").strip()
-#     first = (first or "").strip()
-
-#     dob_n = normalize_mmddyyyy(dob)
-#     doi_n = normalize_mmddyyyy(doi)
-
-#     # Require all fields
-#     if not (last and first and dob_n and doi_n):
-#         return None
-
-#     # Require DOB/DOI to be REAL dates so the folder name won't change later
-#     try:
-#         datetime.strptime(dob_n, "%m/%d/%Y")
-#         datetime.strptime(doi_n, "%m/%d/%Y")
-#     except Exception:
-#         return None
-
-#     folder = patient_folder_name(last, first, dob_n, doi_n)
-#     return os.path.join(str(YEAR_CASES_ROOT), folder)
-
-
-
 def ensure_patient_dirs(patient_root: str | os.PathLike):
     root = os.fspath(patient_root)  # converts Path -> str, leaves str alone
 
@@ -182,33 +143,48 @@ def ensure_patient_dirs(patient_root: str | os.PathLike):
     os.makedirs(os.path.join(root, PATIENT_SUBDIR_MESSAGES), exist_ok=True)
 
 
-def build_sentence(region_label: str,
-                   desc1: str,
-                   desc2: str,
-                   radic_symptom: str,
-                   radic_location: str) -> str:
+def build_sentence(
+    region_label: str,
+    desc1: str,
+    desc2: str,
+    radic_symptom: str,
+    radic_location: str,
+    subject: str | None = None,
+) -> str:
     """
     Builds a clean, non-duplicative subjective sentence.
+
     Region headers are handled elsewhere (UI / PDF).
+
+    Parameters
+    ----------
+    region_label:
+        Human-readable region label (e.g. "cervical spine").
+    desc1, desc2:
+        Primary / secondary pain descriptors.
+    radic_symptom, radic_location:
+        Radiculopathy selections.
+    subject:
+        Optional subject phrase, e.g. "John", "Mr. Smith", "John Smith",
+        or "The patient". If not provided or blank, defaults to "The patient".
     """
-
     region = (region_label or "").strip().lower()
+    subject = (subject or "").strip() or "The patient"
 
-    # Lead sentence (NEW)
-    lead = f"The patient reports symptoms in the {region}."
+    # Lead sentence
+    lead = f"{subject} reports symptoms in the {region}."
 
     # Pain descriptors (ensure each descriptor ends with "pain")
     raw = [
-        d.strip()
-        for d in (desc1, desc2)
-        if d and d not in ("(none)", "")
+        (desc1 or "").strip(),
+        (desc2 or "").strip(),
     ]
+    raw = [d for d in raw if d and d not in ("(none)", "")]
 
     def _as_pain_phrase(s: str) -> str:
-        t = s.strip().lower()
+        t = (s or "").strip().lower()
         if not t:
             return ""
-        # If the descriptor already contains "pain", keep it
         if "pain" in t:
             return t
         return f"{t} pain"
@@ -229,13 +205,12 @@ def build_sentence(region_label: str,
     # Radiculopathy
     radic_sentence = ""
     if radic_symptom and radic_symptom != "None":
+        rs = (radic_symptom or "").strip().lower()
+        rl = (radic_location or "").strip().lower()
         if radic_location and radic_location != "(select)":
-            radic_sentence = (
-                f"The patient complains of {radic_symptom.lower()} "
-                f"into the {radic_location.lower()}."
-            )
+            radic_sentence = f"Associated symptoms of {rs} into the {rl} were also reported."
         else:
-            radic_sentence = f"The patient complains of {radic_symptom.lower()}."
+            radic_sentence = f"Associated symptoms of {rs} were also reported."
 
     return " ".join(s for s in (lead, pain_sentence, radic_sentence) if s)
 
