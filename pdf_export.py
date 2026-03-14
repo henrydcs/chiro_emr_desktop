@@ -99,14 +99,27 @@ def _imaging_sentence(dx_struct: dict) -> str:
     recs = dx_struct.get("imaging_recs") or []
     if not isinstance(recs, list):
         return ""
-    parts = []
+    # Group by modality (order of first occurrence); value = list of body parts, no duplicates per modality
+    groups = {}
     for r in recs:
         if not isinstance(r, dict):
             continue
         mod = (r.get("modality") or "").strip()
         bp = (r.get("body_part") or "").strip()
-        if mod and bp:
-            parts.append(f"{mod} of {bp}")
+        if not mod or not bp:
+            continue
+        if mod not in groups:
+            groups[mod] = []
+        if bp not in groups[mod]:
+            groups[mod].append(bp)
+    # One phrase per modality: "X-ray of Thoracic Spine" or "X-ray of the Thoracic Spine and Cervical Spine"
+    parts = []
+    for mod, body_parts in groups.items():
+        if len(body_parts) == 1:
+            parts.append(f"{mod} of {body_parts[0]}")
+        else:
+            body_joined = _join_with_and(body_parts)
+            parts.append(f"{mod} of the {body_joined}")
     joined = _join_with_and(parts)
     if not joined:
         return ""
