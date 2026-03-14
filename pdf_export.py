@@ -1917,11 +1917,10 @@ def diagnosis_struct_to_live_preview_runs(dx_struct: dict) -> list[tuple[str, st
     if prog and prog != "(select)":
         if prog.lower() == "guarded":
             prognosis_text = (
-                "Based on the patient's reported symptoms, objective findings, "
+                "Based on the patient’s reported symptoms, objective findings, "
                 "and functional impairments, the prognosis is currently assessed "
-                f"as {prog}. Clinical improvement is anticipated with consistent "
-                "participation in care and adherence to prescribed therapeutic "
-                "recommendations."
+                f"as {prog}. Positive outcomes are expected, contingent "
+                "upon the patient’s active engagement in care and treatment compliance."
             )
         else:
             prognosis_text = (
@@ -2366,9 +2365,8 @@ def build_combined_pdf(path: str, payloads: list):
                 prognosis_text = (
                     "Based on the patient’s reported symptoms, objective findings, "
                     "and functional impairments, the prognosis is currently assessed "
-                    f"as {prog}. Clinical improvement is anticipated with consistent "
-                    "participation in care and adherence to prescribed therapeutic "
-                    "recommendations."
+                    f"as {prog}. Positive outcomes are expected, contingent "
+                    "upon the patient’s active engagement in care and treatment compliance."
                 )
             else:
                 prognosis_text = (
