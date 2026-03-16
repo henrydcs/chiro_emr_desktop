@@ -416,7 +416,7 @@ class HOIPage(ttk.Frame):
 
     # Care / Treatment
     TREATMENT_RECEIVED = ["Did not receive", "Did receive"]
-    CARE_SETTING = ["(none)", "Hospital", "Urgent Care", "Primary MD", "ER", "Chiropractic", "Physical Therapy", "Other"]
+    CARE_SETTING = ["(none)", "Hospital", "Urgent Care", "Primary MD", "ER", "Chiropractic", "Physical Therapy", "Massage Facility", "Other"]
 
     # Medications
     MEDS_PRESCRIBED = ["Was not prescribed", "Was prescribed"]
