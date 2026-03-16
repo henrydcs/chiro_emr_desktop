@@ -404,7 +404,7 @@ class DescriptorBlock:
                 variable=v,
                 command=self._on_descriptor_change  # do not rebuild muscles here
             )
-            cb.grid(row=i // 3, column=i % 3, sticky="w", padx=(0, 10))
+            cb.grid(row=i // 3, column=i % 3, sticky="w", padx=(0, 10)) #****this gives columns and rows; originally 2, 2
             
 
 
