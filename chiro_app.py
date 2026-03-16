@@ -974,6 +974,7 @@ class App(tk.Tk):
             pass
 
         self.status_var.set(f"Deleted exam: {exam_name}")
+    
 
     def _toggle_header(self):
         self.header_visible.set(not self.header_visible.get())
@@ -1318,8 +1319,7 @@ class App(tk.Tk):
         self.master_save_btn.pack(side="left", padx=5)
 
         self.templates_btn = ttk.Button(toggle_row, text="Templates", command=self._open_templates_popup)
-        self.templates_btn.pack(side="left", padx=5)
-
+        self.templates_btn.pack(side="left", padx=5)        
 
         # The actual clinic header frame (this will be hidden/shown)
         self.clinic_frame = ttk.Frame(self.header_container)

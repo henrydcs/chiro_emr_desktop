@@ -117,15 +117,14 @@ def generate_prognosis_paragraph(self):
         return (
             "Based on the patient’s reported symptoms, objective findings, "
             "and functional impairments, the prognosis is currently assessed "
-            f"as {prognosis_level}. Clinical improvement is anticipated with "
-            "consistent participation in care and adherence to prescribed "
-            "therapeutic recommendations."
+            f"as {prognosis_level}. Positive outcomes are expected, contingent "
+            "upon the patient’s active engagement in care and treatment compliance."
         )
 
     # 🔹 Default paragraph for all other selections
     return (
         "Based on the patient’s clinical presentation, examination findings, "
-        f"and overall health status, the prognosis is considered {prognosis_level}. "
+        f"and overall health status, the prognosis is considered {prognosis_level}."
         "Progress will be monitored and reassessed throughout the course of care."
     )
 

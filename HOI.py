@@ -1515,8 +1515,9 @@ class HOIPage(ttk.Frame):
             medical_parts.append("The indivudual has not received any medical care for the injuries resulting from this incident. The patient presents to our office at this time due to persistent symptoms and expressed concern regarding this condition.")
 
         if self.meds_prescribed_var.get() == "Was prescribed" and self._meds_selected:
-            meds = ", ".join([_clean(x).lower() for x in self._meds_selected if _clean(x)])
-            if meds:
+            med_list = [_clean(x).lower() for x in self._meds_selected if _clean(x)]
+            if med_list:
+                meds = _join_with_and(med_list)
                 medical_parts.append(f"The individual was prescribed medications including {meds}.")
 
         typed_meds = _clean(self.meds_var.get())
