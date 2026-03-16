@@ -249,8 +249,47 @@ class DescriptorBlock:
                 row=0, column=0, columnspan=2, sticky="w", padx=0, pady=(0, 6)
             )
 
-            self.muscles_frame = ttk.Frame(self.points_frame)
-            self.muscles_frame.grid(row=1, column=0, columnspan=2, sticky="ew", padx=0, pady=0)
+            # Scrollable muscles list (canvas + scrollbar, inner frame for checkbuttons)
+            muscles_container = ttk.Frame(self.points_frame)
+            muscles_container.grid(row=1, column=0, columnspan=2, sticky="nsew", padx=0, pady=0)
+
+            self.muscles_canvas = tk.Canvas(muscles_container, highlightthickness=0)
+            muscles_scrollbar = ttk.Scrollbar(muscles_container)
+
+            muscles_scrollbar.pack(side="right", fill="y")
+            self.muscles_canvas.pack(side="left", fill="both", expand=True)
+
+            self.muscles_canvas.configure(yscrollcommand=muscles_scrollbar.set)
+            muscles_scrollbar.configure(command=self.muscles_canvas.yview)
+
+            self.muscles_frame = ttk.Frame(self.muscles_canvas)
+            self._muscles_canvas_window = self.muscles_canvas.create_window(
+                (0, 0), window=self.muscles_frame, anchor="nw"
+            )
+
+            def _on_muscles_frame_configure(_e=None):
+                self.muscles_canvas.configure(scrollregion=self.muscles_canvas.bbox("all"))
+
+            def _on_muscles_canvas_configure(_e=None):
+                w = self.muscles_canvas.winfo_width()
+                self.muscles_canvas.itemconfigure(self._muscles_canvas_window, width=max(w, 1))
+
+            self.muscles_frame.bind("<Configure>", _on_muscles_frame_configure)
+            self.muscles_canvas.bind("<Configure>", _on_muscles_canvas_configure)
+
+            def _scroll_muscles(event):
+                if event.num == 5 or (hasattr(event, "delta") and event.delta > 0):
+                    self.muscles_canvas.yview_scroll(1, "units")
+                else:
+                    self.muscles_canvas.yview_scroll(-1, "units")
+
+            self.muscles_canvas.bind("<MouseWheel>", _scroll_muscles)
+            self.muscles_canvas.bind("<Button-4>", _scroll_muscles)
+            self.muscles_canvas.bind("<Button-5>", _scroll_muscles)
+            self.muscles_frame.bind("<MouseWheel>", _scroll_muscles)
+            self.muscles_frame.bind("<Button-4>", _scroll_muscles)
+            self.muscles_frame.bind("<Button-5>", _scroll_muscles)
+
             self.muscles_frame.grid_columnconfigure(0, weight=1)
             self.muscles_frame.grid_columnconfigure(1, weight=1)
 
