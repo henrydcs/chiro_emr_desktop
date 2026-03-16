@@ -140,6 +140,7 @@ class DescriptorBlock:
             self.points_frame.grid(row=1, column=0, columnspan=3, sticky="ew", padx=padx, pady=(0, 10))
             self.points_frame.grid_columnconfigure(0, weight=1)
             self.points_frame.grid_columnconfigure(1, weight=1)
+            self.points_frame.grid_rowconfigure(1, weight=1)
 
             # Let the host stretch narrative when visible
             host.grid_columnconfigure(0, weight=1)
@@ -403,7 +404,7 @@ class DescriptorBlock:
                 variable=v,
                 command=self._on_descriptor_change  # do not rebuild muscles here
             )
-            cb.grid(row=i // 2, column=i % 2, sticky="w", padx=(0, 10))
+            cb.grid(row=i // 3, column=i % 3, sticky="w", padx=(0, 10))
             
 
 
