@@ -293,13 +293,19 @@ class App(tk.Tk):
 
         self.current_doc_label_var = tk.StringVar(value="")
 
-        self.exam_date_var.trace_add("write", lambda *_: self._set_current_doc_label())
+        # Live Preview heading registry: maps logical section names
+        # (e.g., "Subjectives") to Text indices like "12.0"
+        self._preview_heading_indices: dict[str, str] = {}
 
+        self.exam_date_var.trace_add("write", lambda *_: self._set_current_doc_label())
+        
         self.master_save = MasterSaveController(self)
         self._build_ui()       
         self._wire_autosave_triggers()
 
         self._apply_demographics_visibility()
+
+        
         
         # Mousewheel scroll routing (Subjectives canvas)
         self.bind_all("<MouseWheel>", self._on_mousewheel)
@@ -469,7 +475,30 @@ class App(tk.Tk):
             self._alerts_popup_win = None
 
         pop.bind("<Destroy>", _on_close)             
-         
+
+
+    def _build_preview_heading_map(self) -> dict[str, str]:
+        """
+        Map the literal heading text in the Live Preview to the logical
+        left-nav section name. Keys are the EXACT text used in the preview
+        (upper-case), values are the page names used by show_page().
+        """
+        return {
+            # HOI (beginning of Live Preview) — title depends on mode
+            # Initial exam:
+            "History of Present Illness": "HOI History",
+            # Re-exam:
+            "Status Update": "HOI History",
+            # Final:
+            "Final Visit Summary": "HOI History",
+            # Subjectives / Family / Objectives / Assessment / Plan
+            #"Mechanism of Injury (MOI)": "Type of Injury",
+            "SUBJECTIVES": "Subjectives",
+            "FAMILY / SOCIAL HISTORY": "Family/Social History",
+            "OBJECTIVES": "Objectives",
+            "ASSESSMENT": "Diagnosis",
+            "PLAN OF CARE": "Plan",
+        }
        
     def request_live_preview_refresh(self):
         # Debounce: cancel pending refresh and schedule a new one
@@ -662,6 +691,15 @@ class App(tk.Tk):
                     else:
                         txt.insert("end", chunk)
 
+                # Add top/bottom spacer strips (light blue) to allow centering
+                # of first/last headings with visible empty space.
+                self._augment_preview_with_spacers(txt)
+
+                # Tag heading lines and build the index registry for centering.
+                self._retag_preview_headings(txt)
+
+                # Restore the previous view position unless the caller
+                # explicitly centers later (on click / section change).
                 txt.yview_moveto(y0)
 
             finally:
@@ -673,6 +711,418 @@ class App(tk.Tk):
         finally:
             self._refreshing_preview = False
 
+
+    def _augment_preview_with_spacers(self, txt: "tk.Text") -> None:
+        """
+        Ensure there is some light-blue "empty" space at the top and bottom
+        of the Live Preview so that the first / last headings can be scrolled
+        toward the vertical center.
+
+        Implementation: we insert a few blank lines at top and bottom, tagged
+        with a special SPACER_BG tag that uses a light-blue background.
+        """
+        # Configure the spacer tag once
+        txt.tag_configure("SPACER_BG", background="#e0f0ff")
+
+        # Insert top spacer only if not already present
+        first_line = txt.get("1.0", "2.0")
+        if "SPACER_MARKER_TOP" not in first_line:
+            txt.insert("1.0", "SPACER_MARKER_TOP\n", ("SPACER_BG",))
+            for _ in range(6):
+                txt.insert("2.0", "\n", ("SPACER_BG",))
+
+        # Insert bottom spacer only if not already present
+        # (Look at the last couple of lines for the marker.)
+        last_start = txt.index("end-2l")
+        last_text = txt.get(last_start, "end-1c")
+        if "SPACER_MARKER_BOTTOM" not in last_text:
+            txt.insert("end-1c", "\nSPACER_MARKER_BOTTOM", ("SPACER_BG",))
+            for _ in range(6):
+                txt.insert("end-1c", "\n", ("SPACER_BG",))
+
+    def _retag_preview_headings(self, txt: "tk.Text") -> None:
+        """
+        Find main SOAP headings in the Live Preview and:
+        - Create a HEAD_* tag that covers the entire heading line.
+        - Record the first index for each section into self._preview_heading_indices
+          so we can center on them later.
+
+        When multiple heading texts map to the same section (e.g. "History of
+        Present Illness", "Status Update", "Final Visit Summary" -> HOI History),
+        we must only delete that tag once, then add it to every matching line.
+        """
+        self._preview_heading_indices.clear()
+
+        heading_map = self._build_preview_heading_map()
+        seen_tag_names: set[str] = set()
+
+        for heading_text, section_name in heading_map.items():
+            tag_name = f"HEAD_{section_name.upper().replace(' ', '_').replace('/', '_')}"
+
+            # Delete and configure each tag only once. Otherwise, when several
+            # headings map to the same section (e.g. HOI), we'd remove the tag
+            # from earlier lines when we process the next heading.
+            if tag_name not in seen_tag_names:
+                seen_tag_names.add(tag_name)
+                txt.tag_delete(tag_name)
+                txt.tag_configure(tag_name)
+
+            search_start = "1.0"
+            pattern = heading_text + "\n"
+
+            while True:
+                idx = txt.search(pattern, search_start, stopindex="end")
+                if not idx:
+                    break
+                line_start = idx
+                line_end = f"{idx} lineend"
+                txt.tag_add(tag_name, line_start, line_end)
+
+                # Record the FIRST occurrence for this section
+                if section_name not in self._preview_heading_indices:
+                    self._preview_heading_indices[section_name] = line_start
+
+                search_start = line_end
+
+    def _center_preview_on_heading_index(self, index: str) -> None:
+        """
+        Scroll the Live Preview so that the line at `index` appears roughly
+        in the vertical center of the Text widget.
+        """
+        txt = getattr(self, "hoi_preview_text", None)
+        if txt is None or not txt.winfo_exists():
+            return
+
+        txt.update_idletasks()
+
+        bbox = txt.bbox(index)
+        if not bbox:
+            # Fallback: at least ensure the line is visible
+            txt.see(index)
+            return
+
+        line_y, _x, _w, line_h = bbox
+        widget_h = txt.winfo_height()
+        if widget_h <= 0:
+            txt.see(index)
+            return
+
+        # Where we want the top of the view such that this line is centered
+        target_y = (widget_h - line_h) / 2.0
+        delta_pixels = line_y - target_y
+
+        # Approximate conversion from pixels to yview fraction
+        end_bbox = txt.bbox("end-1c")
+        if not end_bbox:
+            txt.see(index)
+            return
+
+        total_height = end_bbox[1] + end_bbox[3]
+        if total_height <= 0:
+            txt.see(index)
+            return
+
+        current_first_frac = txt.yview()[0]
+        current_first_y = current_first_frac * total_height
+        new_first_y = current_first_y + delta_pixels
+        new_frac = max(0.0, min(new_first_y / total_height, 1.0))
+
+        txt.yview_moveto(new_frac)
+
+    def _center_preview_on_section(self, section_name: str) -> None:
+        """
+        Convenience wrapper: center the Live Preview on the heading that
+        corresponds to the given left-nav section name, if we know it.
+
+        If the heading registry is empty or missing this section, we make
+        a best-effort attempt to re-scan the Text widget for headings.
+        """
+        # Fast path: use whatever we already recorded
+        index = self._preview_heading_indices.get(section_name)
+        if not index:
+            txt = getattr(self, "hoi_preview_text", None)
+            if txt is not None and txt.winfo_exists():
+                # Re-scan the current preview content to rebuild heading tags
+                self._retag_preview_headings(txt)
+                index = self._preview_heading_indices.get(section_name)
+
+        if not index:
+            # No heading exists in the preview for this section yet
+            # (e.g., no Subjectives content on screen). Do nothing.
+            return
+
+        self._center_preview_on_heading_index(index)
+
+    def _on_preview_click(self, event) -> None:
+        """
+        When the user clicks inside the Live Preview, check whether the
+        click landed on a main heading line or an important sub-heading.
+        If so, center that heading and optionally switch/focus the left panel.
+        """
+        txt = getattr(self, "hoi_preview_text", None)
+        if txt is None or not txt.winfo_exists():
+            return
+
+        # Convert click coordinates to a Text index
+        index = txt.index(f"@{event.x},{event.y}")
+        line_start = f"{index.split('.')[0]}.0"
+
+        heading_map = self._build_preview_heading_map()
+
+        # 1) Try tag-based match for top-level headings
+        tags = txt.tag_names(line_start)
+        for heading_text, section_name in heading_map.items():
+            tag_name = f"HEAD_{section_name.upper().replace(' ', '_').replace('/', '_')}"
+            if tag_name in tags:
+                self._center_preview_on_heading_index(line_start)
+                self.show_page(section_name)
+
+                # Also let subheading logic run for more granular focus
+                try:
+                    line_end = txt.index(f"{line_start} lineend")
+                    line_content = txt.get(line_start, line_end).strip()
+                except Exception:
+                    line_content = ""
+                self._handle_preview_subheading_click(section_name, line_content)
+                return
+
+        # 2) Fallback: match by exact line text (in case tag wasn't applied)
+        try:
+            line_end = txt.index(f"{line_start} lineend")
+            line_content = txt.get(line_start, line_end).strip()
+        except Exception:
+            return
+
+        if line_content in heading_map:
+            section_name = heading_map[line_content]
+            self._center_preview_on_heading_index(line_start)
+            self.show_page(section_name)
+            self._handle_preview_subheading_click(section_name, line_content)
+            return
+
+        
+        # 3) If not a main heading, still see if this line is an important sub-heading
+        #    (e.g., "Care Type(s):", "Cervical Spine", "Mechanism of Injury (MOI):", etc.).
+        #    Start from the current page, but override when the line clearly belongs
+        #    to a different section.
+        section_name = self.current_page.get() or ""
+
+        # Subjectives body-region headings: e.g., "Cervical Spine", "Lumbar Spine", etc.
+        try:
+            from config import REGION_LABELS  # local import to avoid cycles
+        except Exception:
+            REGION_LABELS = {}
+
+        if line_content in REGION_LABELS.values():
+            # Force switch to Subjectives and focus that region block
+            section_name = "Subjectives"
+            self.show_page("Subjectives")
+            self._handle_preview_subheading_click(section_name, line_content)
+            return
+
+        # HOI subheading + keywords inside the MOI narrative: choose the closest keyword
+        # on this line to where the user actually clicked.
+        lower = (line_content or "").lower()
+
+        if (
+            "mechanism of injury" in lower
+            or "medical care" in lower
+            or "prescribed" in lower
+            or "diagnostic imaging" in lower
+        ):
+            # Always use the HOI page for these keywords
+            section_name = "HOI History"
+            self.show_page("HOI History")
+
+            # Column within the line where the user clicked (0-based)
+            try:
+                col = int(index.split(".")[1])
+            except Exception:
+                col = 0
+
+            def _nearest_hoi_keyword(line_lower: str, col_idx: int) -> str | None:
+                """
+                Return one of:
+                  'moi', 'prior_care', 'meds', 'diagnostics'
+                based on which keyword center is closest to the click column.
+                """
+                candidates: list[tuple[float, str]] = []
+
+                # Keywords and their logical targets, in rough priority order
+                patterns = [
+                    ("mechanism of injury (moi):", "moi"),
+                    ("diagnostic imaging", "diagnostics"),
+                    ("prescribed", "meds"),
+                    ("medical care", "prior_care"),
+                ]
+
+                for key, label in patterns:
+                    pos = line_lower.find(key)
+                    if pos != -1:
+                        center = pos + (len(key) / 2.0)
+                        dist = abs(center - col_idx)
+                        candidates.append((dist, label))
+
+                if not candidates:
+                    return None
+
+                candidates.sort(key=lambda x: x[0])
+                return candidates[0][1]
+
+            target = _nearest_hoi_keyword(lower, col)
+
+            if hasattr(self, "hoi_page") and target:
+                if target == "moi" and hasattr(self.hoi_page, "focus_moi_section"):
+                    self.hoi_page.focus_moi_section()
+                elif target == "diagnostics" and hasattr(self.hoi_page, "focus_diagnostics_section"):
+                    self.hoi_page.focus_diagnostics_section()
+                elif target == "meds" and hasattr(self.hoi_page, "focus_medications_section"):
+                    self.hoi_page.focus_medications_section()
+                elif target == "prior_care" and hasattr(self.hoi_page, "focus_prior_care_section"):
+                    self.hoi_page.focus_prior_care_section()
+
+            # We’ve fully handled the HOI click here; no need to fall through.
+            return
+
+        # For everything else (Objectives, Plan, etc.) fall back to subheading handler.
+        self._handle_preview_subheading_click(section_name, line_content)
+
+    def _handle_preview_subheading_click(self, section_name: str, line: str) -> None:
+        """
+        Handle clicks on sub-headings or summary lines inside the Live Preview.
+
+        - section_name: logical left-nav page (e.g. "HOI History", "Subjectives",
+          "Objectives", "Plan").
+        - line: the exact text content of the clicked line (trimmed).
+        """
+        line = (line or "").strip()
+        if not line:
+            return
+
+        # ------------- HOI: Mechanism of Injury / Prior Care / Meds / Diagnostics -------------
+        if section_name == "HOI History":
+            lower = (line or "").strip().lower()
+
+            # 1) Exact MOI heading line
+            # Live Preview prints: "Mechanism of Injury (MOI):"
+            if lower.startswith("mechanism of injury (moi):"):
+                if hasattr(self, "hoi_page") and hasattr(self.hoi_page, "focus_moi_section"):
+                    self.hoi_page.focus_moi_section()
+                return
+
+            # 2) More general keywords inside the HOI narrative.
+            # Order here matters: we check DIAGNOSTIC IMAGING first,
+            # then PRESCRIBED, then MEDICAL CARE, so a line containing
+            # multiple phrases does not always fall into Prior Care.
+            if "diagnostic imaging" in lower:
+                if hasattr(self, "hoi_page") and hasattr(self.hoi_page, "focus_diagnostics_section"):
+                    self.hoi_page.focus_diagnostics_section()
+                return
+
+            if "prescribed" in lower:
+                if hasattr(self, "hoi_page") and hasattr(self.hoi_page, "focus_medications_section"):
+                    self.hoi_page.focus_medications_section()
+                return
+
+            if "medical care" in lower:
+                if hasattr(self, "hoi_page") and hasattr(self.hoi_page, "focus_prior_care_section"):
+                    self.hoi_page.focus_prior_care_section()
+                return
+
+            return
+
+        # ------------- Subjectives: region headings -> Block N {Region} -------------
+        if section_name == "Subjectives":
+            # Subjectives Live Preview prints REGION_LABELS as headings, e.g. "Cervical Spine"
+            # We treat any known body-region label as a click on that block.
+            if hasattr(self, "subjectives_page") and hasattr(self.subjectives_page, "focus_region_label"):
+                try:
+                    from config import REGION_LABELS  # local import to avoid cycles at top
+                except Exception:
+                    REGION_LABELS = {}
+                # If this line matches any REGION_LABELS value, try to focus that block.
+                if line in REGION_LABELS.values():
+                    self.subjectives_page.focus_region_label(line)
+            return
+
+        # ------------- Objectives: Functional Status, Vitals, Posture, Palpation, Grip -------------
+        if section_name == "Objectives":
+            if not hasattr(self, "objectives_page"):
+                return
+            # Functional Status -> ADLs block
+            if line.startswith("Functional Status"):
+                if hasattr(self.objectives_page, "focus_adl_section"):
+                    self.objectives_page.focus_adl_section()
+            # Vitals
+            if line.startswith("Vitals"):
+                if hasattr(self.objectives_page, "focus_vitals_section"):
+                    self.objectives_page.focus_vitals_section()
+            # Posture
+            if line.lower().startswith("posture"):
+                if hasattr(self.objectives_page, "focus_posture_section"):
+                    self.objectives_page.focus_posture_section()
+            # Spinal Palpatory Inspection -> Subluxations / palpation block
+            if "Spinal Palpatory Inspection" in line:
+                if hasattr(self.objectives_page, "focus_spinal_palpation_section"):
+                    self.objectives_page.focus_spinal_palpation_section()
+            # Grip Strength (Jamar) -> Grip
+            if "Grip Strength" in line or "Jamar" in line:
+                if hasattr(self.objectives_page, "focus_grip_section"):
+                    self.objectives_page.focus_grip_section()
+            return
+
+        # ------------- Assessment: Diagnosis / Prognosis / Imaging / Referrals / Work Status -------------
+        if section_name == "Diagnosis":
+            if not hasattr(self, "diagnosis_page"):
+                return
+            # Diagnosis main subheading
+            if line.startswith("Diagnosis"):
+                if hasattr(self.diagnosis_page, "focus_diagnosis_block"):
+                    self.diagnosis_page.focus_diagnosis_block()
+            # Prognosis
+            if "Prognosis" in line:
+                if hasattr(self.diagnosis_page, "focus_prognosis_block"):
+                    self.diagnosis_page.focus_prognosis_block()
+            # Imaging
+            if "Imaging" in line:
+                if hasattr(self.diagnosis_page, "focus_imaging_block"):
+                    self.diagnosis_page.focus_imaging_block()
+            # Referrals
+            if "Referral" in line:
+                if hasattr(self.diagnosis_page, "focus_referrals_block"):
+                    self.diagnosis_page.focus_referrals_block()
+            # Current Work Status / Work Duties
+            if "Current Work Status" in line or "Work Duties" in line:
+                if hasattr(self.diagnosis_page, "focus_work_status_block"):
+                    self.diagnosis_page.focus_work_status_block()
+            return
+
+        # ------------- PLAN OF CARE: grid lines -> PlanPage blocks -------------
+        if section_name == "Plan":
+            if not hasattr(self, "plan_page"):
+                return
+            lower = line.lower()
+
+            if line.startswith("Care Type(s):"):
+                if hasattr(self.plan_page, "focus_care_types_block"):
+                    self.plan_page.focus_care_types_block()
+            elif line.startswith("Regions:"):
+                if hasattr(self.plan_page, "focus_regions_treated_block"):
+                    self.plan_page.focus_regions_treated_block()
+            elif line.startswith("Frequency:") or line.startswith("Duration:") or line.startswith("Re-evaluation:"):
+                if hasattr(self.plan_page, "focus_schedule_block"):
+                    self.plan_page.focus_schedule_block()
+            elif line.startswith("Goals:"):
+                if hasattr(self.plan_page, "focus_goals_block"):
+                    self.plan_page.focus_goals_block()
+            elif line.startswith("Work Duties:"):
+                if hasattr(self, "diagnosis_page") and hasattr(self.diagnosis_page, "focus_work_status_block"):
+                    self.diagnosis_page.focus_work_status_block()
+            elif line.startswith("Services Provided Today"):
+                if hasattr(self.plan_page, "focus_services_block"):
+                    self.plan_page.focus_services_block()
+
+            return
 
     def _rebuild_exam_nav_buttons(self):
         # Remove old exam buttons only (leave label + add buttons alone)
@@ -1468,6 +1918,8 @@ class App(tk.Tk):
 
         self.hoi_preview_scroll.pack(side="right", fill="y")
         self.hoi_preview_text.pack(side="left", fill="both", expand=True)
+        # Clickable headings in Live Preview
+        self.hoi_preview_text.bind("<Button-1>", self._on_preview_click)
 
         def apply_preview_styles(txt: "tk.Text"):
             base = tkfont.nametofont("TkDefaultFont")
@@ -1619,6 +2071,9 @@ class App(tk.Tk):
         self.current_page.set(page_name)
         self.pages[page_name].tkraise()
         self._refresh_page_button_styles()
+
+        # Also center the Live Preview on the corresponding heading, if any.
+        self._center_preview_on_section(page_name)
 
 
     def _refresh_page_button_styles(self):

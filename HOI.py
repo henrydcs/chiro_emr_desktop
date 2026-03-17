@@ -2373,6 +2373,50 @@ class HOIPage(ttk.Frame):
             )
         )
 
+        # -------- Public focus helpers for Live Preview --------
+    def focus_moi_section(self) -> None:
+        """
+        Live Preview: 'Mechanism of Injury (MOI):' -> bring the MOI / Type of Injury
+        controls into view and/or give them keyboard focus.
+        """
+        # Send the HOI UI to the "Type of Injury" block and scroll to the top.
+        # This makes a click on "Mechanism of Injury (MOI):" in Live Preview
+        # open the structured Type of Injury controls.
+        self._show_block("Type of Injury")
+
+        # Scroll HOI's ScrollFrame to the top if it exists
+        scroll = getattr(self, "scroll", None)
+        if scroll is not None and hasattr(scroll, "scroll_to_top"):
+            scroll.scroll_to_top()
+
+    def focus_prior_care_section(self) -> None:
+        """Live Preview: line containing 'medical care' -> Prior Care area."""
+        # Open the "Prior Care" block and scroll it into view.
+        self._show_block("Prior Care")
+
+        scroll = getattr(self, "scroll", None)
+        if scroll is not None and hasattr(scroll, "scroll_to_top"):
+            scroll.scroll_to_top()
+
+    def focus_medications_section(self) -> None:
+        """Live Preview: line containing 'prescribed' -> Medications area."""
+        # Open the "Medications" block and scroll it into view.
+        self._show_block("Medications")
+
+        scroll = getattr(self, "scroll", None)
+        if scroll is not None and hasattr(scroll, "scroll_to_top"):
+            scroll.scroll_to_top()
+
+    def focus_diagnostics_section(self) -> None:
+        """Live Preview: line containing 'Diagnostic Imaging' -> Diagnostics area."""
+        # Open the "Diagnostics" block and scroll it into view.
+        self._show_block("Diagnostics")
+
+        scroll = getattr(self, "scroll", None)
+        if scroll is not None and hasattr(scroll, "scroll_to_top"):
+            scroll.scroll_to_top()
+
+    # -------- Public focus helpers (for Live Preview clicks) --------
 
     def reset(self):
         if not messagebox.askyesno("Reset HOI", "Are you sure you want to clear ALL HOI fields?"):

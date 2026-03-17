@@ -543,6 +543,27 @@ class SubjectivesPage(ttk.Frame):
         self._add_block()
         self.on_change_callback()
 
+    def focus_region_label(self, region_label: str) -> None:
+        """
+        Given a REGION_LABELS value from the Live Preview (e.g. "Cervical Spine"),
+        find the first Subjectives block whose region label matches and show it.
+
+        This makes Live Preview headings like "Cervical Spine" jump to the correct
+        "Block N C/S" in the left Subjectives nav.
+        """
+        from config import REGION_LABELS  # local import to avoid circulars
+
+        wanted = (region_label or "").strip()
+        if not wanted:
+            return
+
+        for idx, block in enumerate(self.blocks):
+            code = (block.region_var.get() or "").strip()
+            label = (REGION_LABELS.get(code, "") or "").strip()
+            if label == wanted:
+                self.show_block(idx)
+                return
+
     def has_content(self) -> bool:
         # therapy counts as content (prevents dash when dropdown empty)
         if self._therapy_selected_ordered():

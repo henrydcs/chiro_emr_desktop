@@ -658,6 +658,28 @@ class PlanPage(ttk.Frame):
             for key, btn in self._section_buttons.items():
                 btn.configure(font=("Segoe UI", 10, "bold") if key == name else ("Segoe UI", 10))
 
+    # -------- Public focus helpers (for Live Preview clicks) --------
+    def focus_care_types_block(self) -> None:
+        """Live Preview: 'Care Type(s):' -> Treatment block."""
+        self._show_plan_block("Treatment")
+
+    def focus_schedule_block(self) -> None:
+        """Live Preview: 'Frequency'/'Duration'/'Re-evaluation' -> Schedule block."""
+        self._show_plan_block("Schedule")
+
+    def focus_regions_treated_block(self) -> None:
+        """Live Preview: 'Regions:' -> Regions Treated block."""
+        self._show_plan_block("Regions Treated")
+
+    def focus_services_block(self) -> None:
+        """Live Preview: 'Services Provided Today' -> Services block."""
+        self._show_plan_block("Services Provided Today")
+
+    def focus_goals_block(self) -> None:
+        """Live Preview: 'Goals:' -> Goals block."""
+        self._show_plan_block("Goals")
+    
+    
     def _wire_triggers(self):
         def _general_changed(*_):
             if self._loading:
