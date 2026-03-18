@@ -60,6 +60,7 @@ class SubjectivesPage(ttk.Frame):
         self._build_ui()
         self._add_block()  # start with block 1
         self._sync_therapy_visibility()
+        self._go_back_to_subjectives()
 
     
     def _open_therapy_modalities(self):

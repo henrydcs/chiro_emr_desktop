@@ -152,6 +152,54 @@ def _region_tag(code: str) -> str:
 
     return mapping.get(c, c if c and c != "(none)" else "")
 
+def _code_from_tag(tag: str) -> str:
+    """
+    Inverse of _region_tag: given a display tag like 'C/S', 'T/S', etc.,
+    return the corresponding region code (e.g. 'CS', 'TS', 'LS') if known.
+    """
+    t = (tag or "").strip().strip("()").strip()
+    if not t or t == "(none)":
+        return ""
+
+    # Build the same mapping used by _region_tag
+    mapping = {
+        "CS": "C/S",
+        "TS": "T/S",
+        "LS": "L/S",
+
+        "R_SHOULDER": "R Shoulder",
+        "L_SHOULDER": "L Shoulder",
+        "BL_SHOULDER": "B/L Shoulders",
+
+        "R_ELBOW": "R Elbow",
+        "L_ELBOW": "L Elbow",
+        "BL_ELBOW": "B/L Elbows",
+
+        "R_WRIST": "R Wrist",
+        "L_WRIST": "L Wrist",
+        "BL_WRIST": "B/L Wrists",
+
+        "R_HIP": "R Hip",
+        "L_HIP": "L Hip",
+        "BL_HIP": "B/L Hips",
+
+        "R_KNEE": "R Knee",
+        "L_KNEE": "L Knee",
+        "BL_KNEE": "B/L Knees",
+
+        "R_ANKLE": "R Ankle",
+        "L_ANKLE": "L Ankle",
+        "BL_ANKLE": "B/L Ankles",
+    }
+
+    for code, display in mapping.items():
+        if display == t:
+            return code
+
+    # Fallback: assume tag itself is the code if any block uses it
+    return t
+
+
 # -----------------------------
 # Toggleable Radiobutton group (TTK-safe)
 # Click same value again => deselect to -1
@@ -1702,6 +1750,120 @@ class ObjectivesPage(ttk.Frame):
 
     def show_blocks(self):
         self.block_container.tkraise()        
+    
+    
+        # -------- Live Preview helpers (global Vitals / Inspection tabs) --------
+    def _focus_global_tab(self, which: str) -> None:
+        """
+        Ensure the Vitals / Inspection panel is visible and switch to a specific
+        sub-tab: 'Vitals', 'Posture', 'Subluxations', 'Grip', or 'ADLs'.
+        """
+        # Show the global (Vitals / Inspection) view
+        self.show_global()
+
+        try:
+            # Expand the collapsible panel
+            self.global_panel._open.set(True)
+            self.global_panel._apply_open_state()
+
+            # Select the requested tab if it's valid
+            if which in ("Vitals", "Posture", "Subluxations", "Grip", "ADLs"):
+                self.global_panel.active.set(which)
+            # Raise the active frame
+            self.global_panel._show_active()
+        except Exception:
+            pass
+
+        # -------- Public focus helpers for Live Preview --------
+    def focus_vitals_section(self) -> None:
+        """Live Preview: 'Vitals' heading -> Vitals tab."""
+        self._focus_global_tab("Vitals")
+
+    def focus_posture_section(self) -> None:
+        """Live Preview: 'Posture' heading -> Posture tab."""
+        self._focus_global_tab("Posture")
+
+    def focus_spinal_palpation_section(self) -> None:
+        """Live Preview: 'Spinal Palpatory Inspection' heading -> Subluxations tab."""
+        self._focus_global_tab("Subluxations")
+
+    def focus_grip_section(self) -> None:
+        """Live Preview: 'Grip Strength (Jamar)' heading -> Grip tab."""
+        self._focus_global_tab("Grip")
+
+    def focus_adl_section(self) -> None:
+        """Live Preview: 'Functional Status' (ADLs) -> ADLs tab."""
+        self._focus_global_tab("ADLs")
+
+
+    # -------- Public focus helpers for region blocks (Palpation / Ortho / ROM) --------
+    def focus_palpation_region(self, tag: str) -> None:
+        """
+        Live Preview: 'SOFT TISSUE PALPATION {tag}' -> make the block for that region
+        active and select the Palpation section.
+        """
+        code = _code_from_tag(tag)
+        if not code:
+            return
+
+        for i, block in enumerate(self.blocks):
+            if (block.region_var.get() or "").strip() == code:
+                # Set section first so we don't briefly show "Vitals / Inspection" and switch to global
+                try:
+                    block.active_section.set("Palpation")
+                except Exception:
+                    pass
+                self.show_block(i)
+                # Force Palpation frame on top (block stays in blocks view, not global)
+                try:
+                    block._show_section("Palpation")
+                except Exception:
+                    pass
+                return
+
+    def focus_orthopedic_region(self, tag: str) -> None:
+        """
+        Live Preview: 'ORTHOPEDIC EXAM {tag}' -> make the block for that region
+        active and select the Orthopedic section.
+        """
+        code = _code_from_tag(tag)
+        if not code:
+            return
+
+        for i, block in enumerate(self.blocks):
+            if (block.region_var.get() or "").strip() == code:
+                try:
+                    block.active_section.set("Orthopedic")
+                except Exception:
+                    pass
+                self.show_block(i)
+                try:
+                    block._show_section("Orthopedic")
+                except Exception:
+                    pass
+                return
+
+    def focus_rom_region(self, tag: str) -> None:
+        """
+        Live Preview: 'RANGE OF MOTION {tag}' -> make the block for that region
+        active and select the ROM section.
+        """
+        code = _code_from_tag(tag)
+        if not code:
+            return
+
+        for i, block in enumerate(self.blocks):
+            if (block.region_var.get() or "").strip() == code:
+                try:
+                    block.active_section.set("ROM")
+                except Exception:
+                    pass
+                self.show_block(i)
+                try:
+                    block._show_section("ROM")
+                except Exception:
+                    pass
+                return
     
     
     def _build_ui(self):

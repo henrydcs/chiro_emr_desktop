@@ -902,27 +902,78 @@ class App(tk.Tk):
 
         
         # 3) If not a main heading, still see if this line is an important sub-heading
-        #    (e.g., "Care Type(s):", "Cervical Spine", "Mechanism of Injury (MOI):", etc.).
-        #    Start from the current page, but override when the line clearly belongs
-        #    to a different section.
+        #    ...
         section_name = self.current_page.get() or ""
 
-        # Subjectives body-region headings: e.g., "Cervical Spine", "Lumbar Spine", etc.
+        # Subjectives body-region headings...
         try:
-            from config import REGION_LABELS  # local import to avoid cycles
+            from config import REGION_LABELS
         except Exception:
             REGION_LABELS = {}
 
-        if line_content in REGION_LABELS.values():
-            # Force switch to Subjectives and focus that region block
+        if section_name != "Objectives" and line_content in REGION_LABELS.values():
             section_name = "Subjectives"
             self.show_page("Subjectives")
             self._handle_preview_subheading_click(section_name, line_content)
             return
 
-        # HOI subheading + keywords inside the MOI narrative: choose the closest keyword
-        # on this line to where the user actually clicked.
+        _obj_line = (line_content or "").strip()
+
+        def _normalize_obj_tag(t: str) -> str:
+            """Strip parentheses so '(C/S)' and 'C/S' both work."""
+            if not t:
+                return ""
+            return (t.strip().strip("()") or "").strip()
+
+        # Region-block headings: open Objectives and go straight to the block/section.
+        # Match by containment so we still catch the line if formatting or parsing shifts.
+        if "SOFT TISSUE PALPATION" in _obj_line:
+            _parts = _obj_line.split()
+            _tag = _normalize_obj_tag(_parts[-1]) if _parts else ""
+            if _tag:
+                self.show_page("Objectives")
+                if hasattr(self, "objectives_page") and hasattr(self.objectives_page, "focus_palpation_region"):
+                    self.objectives_page.focus_palpation_region(_tag)
+            return
+        if "ORTHOPEDIC EXAM" in _obj_line:
+            _parts = _obj_line.split()
+            _tag = _normalize_obj_tag(_parts[-1]) if _parts else ""
+            if _tag:
+                self.show_page("Objectives")
+                if hasattr(self, "objectives_page") and hasattr(self.objectives_page, "focus_orthopedic_region"):
+                    self.objectives_page.focus_orthopedic_region(_tag)
+            return
+        if "RANGE OF MOTION" in _obj_line:
+            _parts = _obj_line.split()
+            _tag = _normalize_obj_tag(_parts[-1]) if _parts else ""
+            if _tag:
+                self.show_page("Objectives")
+                if hasattr(self, "objectives_page") and hasattr(self.objectives_page, "focus_rom_region"):
+                    self.objectives_page.focus_rom_region(_tag)
+            return
+
+        # Other Objectives sub-headings (Functional Status, Vitals, Posture, Grip, Subluxations).
+        # Only run when the line is clearly NOT a region-block line, so we never open Vitals
+        # when the user clicked on Palpation/Ortho/ROM (e.g. after a refresh shifted the line).
+        _is_region_block_line = (
+            "SOFT TISSUE PALPATION" in _obj_line
+            or "ORTHOPEDIC EXAM" in _obj_line
+            or "RANGE OF MOTION" in _obj_line
+        )
+        if not _is_region_block_line and (
+            _obj_line.startswith("Functional Status")
+            or _obj_line.startswith("Vitals")
+            or _obj_line.startswith("Posture")
+            or _obj_line.startswith("Grip Strength")
+            or "Spinal Palpatory Inspection" in _obj_line
+        ):
+            self.show_page("Objectives")
+            self._handle_preview_subheading_click("Objectives", line_content)
+            return
+
+        # HOI subheading + keywords inside the MOI narrative...
         lower = (line_content or "").lower()
+        ...
 
         if (
             "mechanism of injury" in lower
@@ -1045,30 +1096,53 @@ class App(tk.Tk):
                     self.subjectives_page.focus_region_label(line)
             return
 
-        # ------------- Objectives: Functional Status, Vitals, Posture, Palpation, Grip -------------
+        # ------------- Objectives: Functional Status, Vitals, Posture, Palpation, Grip, Blocks -------------
         if section_name == "Objectives":
             if not hasattr(self, "objectives_page"):
                 return
+
             # Functional Status -> ADLs block
             if line.startswith("Functional Status"):
                 if hasattr(self.objectives_page, "focus_adl_section"):
                     self.objectives_page.focus_adl_section()
+
             # Vitals
             if line.startswith("Vitals"):
                 if hasattr(self.objectives_page, "focus_vitals_section"):
                     self.objectives_page.focus_vitals_section()
+
             # Posture
             if line.lower().startswith("posture"):
                 if hasattr(self.objectives_page, "focus_posture_section"):
                     self.objectives_page.focus_posture_section()
-            # Spinal Palpatory Inspection -> Subluxations / palpation block
+
+            # Spinal Palpatory Inspection -> Subluxations / palpation block (global)
             if "Spinal Palpatory Inspection" in line:
                 if hasattr(self.objectives_page, "focus_spinal_palpation_section"):
                     self.objectives_page.focus_spinal_palpation_section()
+
             # Grip Strength (Jamar) -> Grip
             if "Grip Strength" in line or "Jamar" in line:
                 if hasattr(self.objectives_page, "focus_grip_section"):
                     self.objectives_page.focus_grip_section()
+
+            # Region block headings: SOFT TISSUE PALPATION {tag}, ORTHOPEDIC EXAM {tag}, RANGE OF MOTION {tag}
+            stripped = (line or "").strip()
+            parts = stripped.split()
+            tag = parts[-1] if len(parts) >= 2 else ""
+
+            if stripped.startswith("SOFT TISSUE PALPATION ") and tag:
+                if hasattr(self.objectives_page, "focus_palpation_region"):
+                    self.objectives_page.focus_palpation_region(tag)
+
+            if stripped.startswith("ORTHOPEDIC EXAM ") and tag:
+                if hasattr(self.objectives_page, "focus_orthopedic_region"):
+                    self.objectives_page.focus_orthopedic_region(tag)
+
+            if stripped.startswith("RANGE OF MOTION ") and tag:
+                if hasattr(self.objectives_page, "focus_rom_region"):
+                    self.objectives_page.focus_rom_region(tag)
+
             return
 
         # ------------- Assessment: Diagnosis / Prognosis / Imaging / Referrals / Work Status -------------
