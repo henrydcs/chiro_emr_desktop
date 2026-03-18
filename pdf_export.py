@@ -1278,11 +1278,25 @@ def objectives_struct_to_live_preview_runs(objectives_struct: dict, *, include_a
         global_struct = {}
 
     def add_section(heading: str, body: str):
-        if not body.strip():
+        """Only adds when body is non-empty (legacy single-arg use)."""
+        if not (body or "").strip():
             return
         runs.append((heading + "\n", "H_BOLD"))
         runs.append(("\n", None))
-        runs.append((body.strip() + "\n\n", None))
+        runs.append(((body or "").strip() + "\n\n", None))
+
+    def add_section_with_notes(heading: str, body: str, notes: str):
+        """Shows heading when there is body OR notes; then body (if any), then notes (if any)."""
+        body_s = (body or "").strip()
+        notes_s = (notes or "").strip()
+        if not body_s and not notes_s:
+            return
+        runs.append((heading + "\n", "H_BOLD"))
+        runs.append(("\n", None))
+        if body_s:
+            runs.append((body_s + "\n\n", None))
+        if notes_s:
+            runs.append((notes_s + "\n\n", None))
 
     # Vitals
     vitals = global_struct.get("vitals") or {}
@@ -1854,11 +1868,25 @@ def diagnosis_struct_to_live_preview_runs(dx_struct: dict) -> list[tuple[str, st
     dx_struct = dx_struct or {}
 
     def add_section(heading: str, body: str):
+        """Only adds when body is non-empty (legacy single-arg use)."""
         if not (body or "").strip():
             return
         runs.append((heading + "\n", "H_BOLD"))
         runs.append(("\n", None))
         runs.append(((body or "").strip() + "\n\n", None))
+
+    def add_section_with_notes(heading: str, body: str, notes: str):
+        """Shows heading when there is body OR notes; then body (if any), then notes (if any)."""
+        body_s = (body or "").strip()
+        notes_s = (notes or "").strip()
+        if not body_s and not notes_s:
+            return
+        runs.append((heading + "\n", "H_BOLD"))
+        runs.append(("\n", None))
+        if body_s:
+            runs.append((body_s + "\n\n", None))
+        if notes_s:
+            runs.append((notes_s + "\n\n", None))
 
     # Assessment statement (choice or custom)
     ASSESSMENT_TEXT = {
@@ -1884,14 +1912,10 @@ def diagnosis_struct_to_live_preview_runs(dx_struct: dict) -> list[tuple[str, st
         runs.append(("\n", None))
         runs.append((assessment_notes + "\n\n", None))
 
-    # Diagnosis
+        # Diagnosis
     dx_text = _diagnosis_text_from_struct(dx_struct)
-    if dx_text:
-        add_section("Diagnosis", dx_text)
     dx_block_notes = (dx_struct.get("dx_block_notes") or "").strip()
-    if dx_block_notes:
-        runs.append(("\n", None))
-        runs.append((dx_block_notes + "\n\n", None))
+    add_section_with_notes("Diagnosis", dx_text, dx_block_notes)
 
     # Causation
     CAUSATION_TEXT = {
@@ -1909,6 +1933,7 @@ def diagnosis_struct_to_live_preview_runs(dx_struct: dict) -> list[tuple[str, st
     causation_choice = (dx_struct.get("causation_choice") or "").strip()
     causation_custom = (dx_struct.get("causation_custom") or "").strip()
     causation_notes = (dx_struct.get("causation_notes") or "").strip()
+
     causation_lines = []
     if causation_choice == "Custom (free text)" and causation_custom:
         causation_lines.append(causation_custom)
@@ -1916,24 +1941,22 @@ def diagnosis_struct_to_live_preview_runs(dx_struct: dict) -> list[tuple[str, st
         preset = CAUSATION_TEXT.get(causation_choice, "")
         if preset:
             causation_lines.append(preset)
+
     if causation_notes:
         causation_lines.append(f"Additional Notes: {causation_notes}")
-    if causation_lines:
-        add_section("Causation", "\n\n".join(causation_lines))
+    causation_body = "\n\n".join(causation_lines) if causation_lines else ""
     causation_general_notes = (dx_struct.get("causation_general_notes") or "").strip()
-    if causation_general_notes:
-        runs.append(("\n", None))
-        runs.append((causation_general_notes + "\n\n", None))
-
+    add_section_with_notes("Causation", causation_body, causation_general_notes)
     # Prognosis
     prog = (dx_struct.get("prognosis") or "").strip()
+    prognosis_text = ""
     if prog and prog != "(select)":
         if prog.lower() == "guarded":
             prognosis_text = (
-                "Based on the patient’s reported symptoms, objective findings, "
+                "Based on the patient's reported symptoms, objective findings, "
                 "and functional impairments, the prognosis is currently assessed "
                 f"as {prog}. Positive outcomes are expected, contingent "
-                "upon the patient’s active engagement in care and treatment compliance."
+                "upon the patient's active engagement in care and treatment compliance."
             )
         else:
             prognosis_text = (
@@ -1941,31 +1964,19 @@ def diagnosis_struct_to_live_preview_runs(dx_struct: dict) -> list[tuple[str, st
                 f"the prognosis is currently assessed as {prog}. Progress will be monitored "
                 "and reassessed throughout the course of care."
             )
-        add_section("Prognosis", prognosis_text)
     prognosis_notes = (dx_struct.get("prognosis_notes") or "").strip()
-    if prognosis_notes:
-        runs.append(("\n", None))
-        runs.append((prognosis_notes + "\n\n", None))
+    add_section_with_notes("Prognosis", prognosis_text, prognosis_notes)
 
     # Imaging
-    img = _imaging_sentence(dx_struct)
-    if img:
-        add_section("Imaging", img)
+    img = _imaging_sentence(dx_struct) or ""
     imaging_notes = (dx_struct.get("imaging_notes") or "").strip()
-    if imaging_notes:
-        runs.append(("\n", None))
-        runs.append((imaging_notes + "\n\n", None))
+    add_section_with_notes("Imaging", img, imaging_notes)
 
-    # Referrals
-    ref = _referral_sentence(dx_struct)
-    if ref:
-        add_section("Referrals", ref)
+    ref = _referral_sentence(dx_struct) or ""
     referrals_notes = (dx_struct.get("referrals_notes") or "").strip()
-    if referrals_notes:
-        runs.append(("\n", None))
-        runs.append((referrals_notes + "\n\n", None))
+    add_section_with_notes("Referrals", ref, referrals_notes)
 
-    # Current Work Status
+        # Current Work Status
     status = (dx_struct.get("employment_status") or "").strip()
     other = (dx_struct.get("employment_other") or "").strip()
     notes = (dx_struct.get("employment_notes") or "").strip()
@@ -1977,12 +1988,9 @@ def diagnosis_struct_to_live_preview_runs(dx_struct: dict) -> list[tuple[str, st
             emp_lines.append(f"The patient is {status}")
     if notes:
         emp_lines.append(f"Notes: {notes}")
-    if emp_lines:
-        add_section("Current Work Status", "\n".join(emp_lines))
+    emp_body = "\n".join(emp_lines) if emp_lines else ""
     employment_general_notes = (dx_struct.get("employment_general_notes") or "").strip()
-    if employment_general_notes:
-        runs.append(("\n", None))
-        runs.append((employment_general_notes + "\n\n", None))
+    add_section_with_notes("Current Work Status", emp_body, employment_general_notes)
 
     return runs
 
@@ -2324,6 +2332,22 @@ def build_combined_pdf(path: str, payloads: list):
                 #"The patient presented for therapeutic management consistent with the established plan of care. No additional examination was performed at this time."
             story.append(Spacer(1, 0.14 * inch))
 
+        def add_section_with_notes(title: str, content: str, notes: str):
+            """Show heading only when there is content or notes; then content, then notes."""
+            content_s = (content or "").strip()
+            notes_s = (notes or "").strip()
+            if not content_s and not notes_s:
+                return
+            story.append(Paragraph(f"<b>{xml_escape(title)}</b>", styles["Heading3"]))
+            story.append(Spacer(1, 0.08 * inch))
+            if content_s:
+                safe = xml_escape(content_s).replace("\n\n", "<br/><br/>").replace("\n", "<br/>")
+                story.append(Paragraph(safe, styles["BodyText"]))
+                story.append(Spacer(1, 0.06 * inch))
+            if notes_s:
+                story.append(Paragraph(xml_escape(notes_s).replace("\n", "<br/>"), styles["BodyText"]))
+            story.append(Spacer(1, 0.14 * inch))
+        
         dx_text = _dx_text_from_soap(soap)
                 
         # ================================
@@ -2349,22 +2373,20 @@ def build_combined_pdf(path: str, payloads: list):
         story.append(Spacer(1, 0.14 * inch))
 
         #if dx_text.strip():
-        add_section("Diagnosis", dx_text)
         dx_block_notes = (dx_struct.get("dx_block_notes") or "").strip()
-        if dx_block_notes:
-            story.append(Spacer(1, 0.06 * inch))
-            story.append(Paragraph(xml_escape(dx_block_notes).replace("\n", "<br/>"), styles["BodyText"]))
-            story.append(Spacer(1, 0.14 * inch))
+        add_section_with_notes("Diagnosis", dx_text, dx_block_notes)
         
-        if causation_para:
+        causation_general_notes = (dx_struct.get("causation_general_notes") or "").strip()
+        if causation_para or causation_general_notes:
             story.append(Paragraph("<b>Causation</b>", styles["Heading3"]))
             story.append(Spacer(1, 0.04 * inch))
-            story.append(causation_para)
-            story.append(Spacer(1, 0.10 * inch))
-        causation_general_notes = (dx_struct.get("causation_general_notes") or "").strip()
-        if causation_general_notes:
-            story.append(Spacer(1, 0.06 * inch))
-            story.append(Paragraph(xml_escape(causation_general_notes).replace("\n", "<br/>"), styles["BodyText"]))
+            if causation_para:
+                story.append(causation_para)
+                story.append(Spacer(1, 0.10 * inch))
+            if causation_general_notes:
+                story.append(Spacer(1, 0.06 * inch))
+                story.append(Paragraph(xml_escape(causation_general_notes).replace("\n", "<br/>"), styles["BodyText"]))
+            story.append(Spacer(1, 0.14 * inch))
         
         bold_body = ParagraphStyle(
             'BoldBody',
@@ -2373,57 +2395,44 @@ def build_combined_pdf(path: str, payloads: list):
         )               
                                
         prog = (dx_struct.get("prognosis") or "").strip()
+        prognosis_text = ""
         if prog and prog != "(select)":
             if prog.lower() == "guarded":
                 prognosis_text = (
-                    "Based on the patient’s reported symptoms, objective findings, "
+                    "Based on the patient's reported symptoms, objective findings, "
                     "and functional impairments, the prognosis is currently assessed "
                     f"as {prog}. Positive outcomes are expected, contingent "
-                    "upon the patient’s active engagement in care and treatment compliance."
+                    "upon the patient's active engagement in care and treatment compliance."
                 )
             else:
                 prognosis_text = (
-                    "Based on the patient’s clinical presentation and examination findings, "
+                    "Based on the patient's clinical presentation and examination findings, "
                     f"the prognosis is currently assessed as {prog}. Progress will be monitored "
                     "and reassessed throughout the course of care."
                 )
-
-            add_section("Prognosis", prognosis_text)
         prognosis_notes = (dx_struct.get("prognosis_notes") or "").strip()
-        if prognosis_notes:
-            story.append(Spacer(1, 0.06 * inch))
-            story.append(Paragraph(xml_escape(prognosis_notes).replace("\n", "<br/>"), styles["BodyText"]))
-            story.append(Spacer(1, 0.14 * inch))
+        add_section_with_notes("Prognosis", prognosis_text, prognosis_notes)
                     
             
-        img = _imaging_sentence(dx_struct)
-        if img:
-            add_section("Imaging", img)
+        img = _imaging_sentence(dx_struct) or ""
         imaging_notes = (dx_struct.get("imaging_notes") or "").strip()
-        if imaging_notes:
-            story.append(Spacer(1, 0.06 * inch))
-            story.append(Paragraph(xml_escape(imaging_notes).replace("\n", "<br/>"), styles["BodyText"]))
-            story.append(Spacer(1, 0.14 * inch))
+        add_section_with_notes("Imaging", img, imaging_notes)
 
-        ref = _referral_sentence(dx_struct)
-        if ref:
-            add_section("Referrals", ref)
+        ref = _referral_sentence(dx_struct) or ""
         referrals_notes = (dx_struct.get("referrals_notes") or "").strip()
-        if referrals_notes:
-            story.append(Spacer(1, 0.06 * inch))
-            story.append(Paragraph(xml_escape(referrals_notes).replace("\n", "<br/>"), styles["BodyText"]))
-            story.append(Spacer(1, 0.14 * inch))
-            
-        if emp_current_para:
+        add_section_with_notes("Referrals", ref, referrals_notes)
+        
+        employment_general_notes = (dx_struct.get("employment_general_notes") or "").strip()
+        if emp_current_para or employment_general_notes:
             story.append(Paragraph("<b>Current Work Status</b>", styles["Heading3"]))
             story.append(Spacer(1, 0.04 * inch))
-            story.append(emp_current_para)
-            story.append(Spacer(1, 0.10 * inch))
-        employment_general_notes = (dx_struct.get("employment_general_notes") or "").strip()
-        if employment_general_notes:
-            story.append(Spacer(1, 0.06 * inch))
-            story.append(Paragraph(xml_escape(employment_general_notes).replace("\n", "<br/>"), styles["BodyText"]))
-
+            if emp_current_para:
+                story.append(emp_current_para)
+                story.append(Spacer(1, 0.10 * inch))
+            if employment_general_notes:
+                story.append(Spacer(1, 0.06 * inch))
+                story.append(Paragraph(xml_escape(employment_general_notes).replace("\n", "<br/>"), styles["BodyText"]))
+            story.append(Spacer(1, 0.14 * inch))
         # ✅ Plan (structured PDF rendering)
         dx_struct = soap.get("diagnosis_struct") or {}
 
