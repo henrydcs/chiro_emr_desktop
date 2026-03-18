@@ -678,6 +678,35 @@ class PlanPage(ttk.Frame):
     def focus_goals_block(self) -> None:
         """Live Preview: 'Goals:' -> Goals block."""
         self._show_plan_block("Goals")
+
+    def focus_cmt_popup(self) -> None:
+        """Live Preview: open Services Provided Today popup (CMT code selection)."""
+        self._show_plan_block("Services Provided Today")
+        self.open_services_main_popup()
+
+    def focus_therapy_popup(self, modality_code: str = "") -> None:
+        """Live Preview: open therapy details popup for a specific modality code."""
+        self._show_plan_block("Services Provided Today")
+        root = self.winfo_toplevel()
+        if not modality_code:
+            self.open_services_main_popup()
+            return
+        therapy_name = ""
+        list_idx = 0
+        for i, opt in enumerate(getattr(self, "_therapy_options", [])):
+            if opt.startswith(modality_code):
+                therapy_name = opt
+                list_idx = i
+                break
+        if therapy_name:
+            self.open_therapy_details_popup(root, therapy_name, list_idx)
+        else:
+            self.open_services_main_popup()
+
+    def focus_exam_popup(self) -> None:
+        """Live Preview: open Services Provided Today popup (exam fields live there)."""
+        self._show_plan_block("Services Provided Today")
+        self.open_services_main_popup()
     
     
     def _wire_triggers(self):

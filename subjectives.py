@@ -547,10 +547,8 @@ class SubjectivesPage(ttk.Frame):
     def focus_region_label(self, region_label: str) -> None:
         """
         Given a REGION_LABELS value from the Live Preview (e.g. "Cervical Spine"),
-        find the first Subjectives block whose region label matches and show it.
-
-        This makes Live Preview headings like "Cervical Spine" jump to the correct
-        "Block N C/S" in the left Subjectives nav.
+        find the first Subjectives block whose region label matches, show it,
+        and switch to the Pain Descriptor view.
         """
         from config import REGION_LABELS  # local import to avoid circulars
 
@@ -563,7 +561,42 @@ class SubjectivesPage(ttk.Frame):
             label = (REGION_LABELS.get(code, "") or "").strip()
             if label == wanted:
                 self.show_block(idx)
+                if hasattr(block, "view_var"):
+                    block.view_var.set("descriptor")
+                    block._apply_view()
                 return
+
+    def focus_points_to(self, line_text: str = "") -> None:
+        """
+        Live Preview: user clicked a line containing 'points to'.
+        Find the block whose muscles produced this sentence and switch
+        that block's view to 'Patient Points To'.
+        """
+        from config import REGION_LABELS
+
+        target_idx = None
+
+        if line_text:
+            for idx, block in enumerate(self.blocks):
+                muscles = block.to_dict().get("muscles") or []
+                if not muscles:
+                    continue
+                for m in muscles:
+                    if m.lower() in line_text.lower():
+                        target_idx = idx
+                        break
+                if target_idx is not None:
+                    break
+
+        if target_idx is None and self.blocks:
+            target_idx = self.current_block_index
+
+        if target_idx is not None and 0 <= target_idx < len(self.blocks):
+            self.show_block(target_idx)
+            blk = self.blocks[target_idx]
+            if hasattr(blk, "view_var"):
+                blk.view_var.set("points")
+                blk._apply_view()
 
     def has_content(self) -> bool:
         # therapy counts as content (prevents dash when dropdown empty)

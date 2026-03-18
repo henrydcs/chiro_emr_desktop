@@ -999,15 +999,72 @@ class App(tk.Tk):
                     self.diagnosis_page.focus_work_status_block()
                 return
 
-            # Services Provided Today -> Services Provided Today block
+                        # Services Provided Today -> Services Provided Today block + popup
             if plan_line.startswith("Services Provided Today"):
                 self.show_page("Plan")
                 if hasattr(self, "plan_page") and hasattr(self.plan_page, "focus_services_block"):
                     self.plan_page.focus_services_block()
                 return
 
+            # Chiropractic Manipulative Treatment / Adjustment Code / Segment lines -> CMT popup
+            if (
+                plan_line.startswith("Chiropractic Manipulative Treatment")
+                or plan_line.strip().startswith("Adjustment Code:")
+                or plan_line.strip().startswith("Segment(s) Adjusted")
+                or "Technique(s):" in plan_line
+            ):
+                self.show_page("Plan")
+                if hasattr(self, "plan_page") and hasattr(self.plan_page, "focus_cmt_popup"):
+                    self.plan_page.focus_cmt_popup()
+                return
+
+            # Therapeutic Modalities heading -> main Services popup
+            if plan_line.startswith("Therapeutic Modalities"):
+                self.show_page("Plan")
+                if hasattr(self, "plan_page") and hasattr(self.plan_page, "focus_services_block"):
+                    self.plan_page.focus_services_block()
+                    self.plan_page.open_services_main_popup()
+                return
+
+            # Modality Code lines -> open that specific therapy popup
+            if plan_line.strip().startswith("Modality Code:"):
+                self.show_page("Plan")
+                if hasattr(self, "plan_page") and hasattr(self.plan_page, "focus_therapy_popup"):
+                    code = ""
+                    try:
+                        code = plan_line.split("Modality Code:")[1].split("—")[0].strip()
+                    except Exception:
+                        pass
+                    self.plan_page.focus_therapy_popup(code)
+                return
+
+            # Therapy body-part / minutes lines (indented, contain " — " and "minutes")
+            if "minutes" in plan_line.lower() and "—" in plan_line:
+                self.show_page("Plan")
+                if hasattr(self, "plan_page") and hasattr(self.plan_page, "focus_services_block"):
+                    self.plan_page.focus_services_block()
+                    self.plan_page.open_services_main_popup()
+                return
+
+            # Examination and Management / Exam Code / Exam Notes -> Exam popup
+            if (
+                plan_line.startswith("Examination and Management")
+                or plan_line.strip().startswith("Exam Code:")
+            ):
+                self.show_page("Plan")
+                if hasattr(self, "plan_page") and hasattr(self.plan_page, "focus_exam_popup"):
+                    self.plan_page.focus_exam_popup()
+                return
+
         # Fall back to the existing per-page subheading logic
         section_name = self.current_page.get() or ""
+
+        # "Patient points to" sentence -> Subjectives, points view
+        if "points to" in (line_content or "").lower():
+            self.show_page("Subjectives")
+            if hasattr(self, "subjectives_page") and hasattr(self.subjectives_page, "focus_points_to"):
+                self.subjectives_page.focus_points_to(line_content)
+            return
         
         # Subjectives body-region headings...
         try:
