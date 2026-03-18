@@ -903,15 +903,119 @@ class App(tk.Tk):
         
         # 3) If not a main heading, still see if this line is an important sub-heading
         #    ...
-        section_name = self.current_page.get() or ""
 
+                # --- Assessment sub-headings (global) ---
+        # Make these work regardless of which left-panel page is currently active.
+        assess_line = (line_content or "").strip()
+        if assess_line:
+            # ASSESSMENT heading -> Assessment sub-section
+            if assess_line.upper().startswith("ASSESSMENT"):
+                self.show_page("Diagnosis")
+                if hasattr(self, "diagnosis_page") and hasattr(self.diagnosis_page, "focus_assessment_block"):
+                    self.diagnosis_page.focus_assessment_block()
+                return
+
+            # Diagnosis -> Dx Block
+            if assess_line.startswith("Diagnosis"):
+                self.show_page("Diagnosis")
+                if hasattr(self, "diagnosis_page") and hasattr(self.diagnosis_page, "focus_diagnosis_block"):
+                    self.diagnosis_page.focus_diagnosis_block()
+                return
+
+            # Causation
+            if assess_line.startswith("Causation"):
+                self.show_page("Diagnosis")
+                if hasattr(self, "diagnosis_page") and hasattr(self.diagnosis_page, "focus_causation_block"):
+                    self.diagnosis_page.focus_causation_block()
+                return
+
+            # Prognosis
+            if assess_line.startswith("Prognosis"):
+                self.show_page("Diagnosis")
+                if hasattr(self, "diagnosis_page") and hasattr(self.diagnosis_page, "focus_prognosis_block"):
+                    self.diagnosis_page.focus_prognosis_block()
+                return
+
+            # Imaging
+            if assess_line.startswith("Imaging"):
+                self.show_page("Diagnosis")
+                if hasattr(self, "diagnosis_page") and hasattr(self.diagnosis_page, "focus_imaging_block"):
+                    self.diagnosis_page.focus_imaging_block()
+                return
+
+            # Referrals
+            if assess_line.startswith("Referrals"):
+                self.show_page("Diagnosis")
+                if hasattr(self, "diagnosis_page") and hasattr(self.diagnosis_page, "focus_referrals_block"):
+                    self.diagnosis_page.focus_referrals_block()
+                return
+
+            # Current Work Status / Work Duties
+            if "Current Work Status" in assess_line or "Work Duties" in assess_line:
+                self.show_page("Diagnosis")
+                if hasattr(self, "diagnosis_page") and hasattr(self.diagnosis_page, "focus_work_status_block"):
+                    self.diagnosis_page.focus_work_status_block()
+                return
+
+        # --- Plan of Care sub-headings (global) ---
+        plan_line = (line_content or "").strip()
+        if plan_line:
+            # Care Type(s): -> Treatment block
+            if plan_line.startswith("Care Type(s):"):
+                self.show_page("Plan")
+                if hasattr(self, "plan_page") and hasattr(self.plan_page, "focus_care_types_block"):
+                    self.plan_page.focus_care_types_block()
+                return
+
+            # Regions: -> Regions Treated block
+            if plan_line.startswith("Regions:"):
+                self.show_page("Plan")
+                if hasattr(self, "plan_page") and hasattr(self.plan_page, "focus_regions_treated_block"):
+                    self.plan_page.focus_regions_treated_block()
+                return
+
+            # Frequency / Duration / Re-evaluation -> Schedule block
+            if (
+                plan_line.startswith("Frequency:")
+                or plan_line.startswith("Duration:")
+                or plan_line.startswith("Re-evaluation:")
+            ):
+                self.show_page("Plan")
+                if hasattr(self, "plan_page") and hasattr(self.plan_page, "focus_schedule_block"):
+                    self.plan_page.focus_schedule_block()
+                return
+
+            # Goals: -> Goals block
+            if plan_line.startswith("Goals:"):
+                self.show_page("Plan")
+                if hasattr(self, "plan_page") and hasattr(self.plan_page, "focus_goals_block"):
+                    self.plan_page.focus_goals_block()
+                return
+
+            # Work Duties: -> Current Work Status block (Assessment page)
+            if plan_line.startswith("Work Duties:"):
+                self.show_page("Diagnosis")
+                if hasattr(self, "diagnosis_page") and hasattr(self.diagnosis_page, "focus_work_status_block"):
+                    self.diagnosis_page.focus_work_status_block()
+                return
+
+            # Services Provided Today -> Services Provided Today block
+            if plan_line.startswith("Services Provided Today"):
+                self.show_page("Plan")
+                if hasattr(self, "plan_page") and hasattr(self.plan_page, "focus_services_block"):
+                    self.plan_page.focus_services_block()
+                return
+
+        # Fall back to the existing per-page subheading logic
+        section_name = self.current_page.get() or ""
+        
         # Subjectives body-region headings...
         try:
             from config import REGION_LABELS
         except Exception:
             REGION_LABELS = {}
 
-        if section_name != "Objectives" and line_content in REGION_LABELS.values():
+        if line_content in REGION_LABELS.values():
             section_name = "Subjectives"
             self.show_page("Subjectives")
             self._handle_preview_subheading_click(section_name, line_content)
@@ -1145,58 +1249,75 @@ class App(tk.Tk):
 
             return
 
-        # ------------- Assessment: Diagnosis / Prognosis / Imaging / Referrals / Work Status -------------
-        if section_name == "Diagnosis":
-            if not hasattr(self, "diagnosis_page"):
-                return
-            # Diagnosis main subheading
-            if line.startswith("Diagnosis"):
-                if hasattr(self.diagnosis_page, "focus_diagnosis_block"):
-                    self.diagnosis_page.focus_diagnosis_block()
-            # Prognosis
-            if "Prognosis" in line:
-                if hasattr(self.diagnosis_page, "focus_prognosis_block"):
-                    self.diagnosis_page.focus_prognosis_block()
-            # Imaging
-            if "Imaging" in line:
-                if hasattr(self.diagnosis_page, "focus_imaging_block"):
-                    self.diagnosis_page.focus_imaging_block()
-            # Referrals
-            if "Referral" in line:
-                if hasattr(self.diagnosis_page, "focus_referrals_block"):
-                    self.diagnosis_page.focus_referrals_block()
-            # Current Work Status / Work Duties
-            if "Current Work Status" in line or "Work Duties" in line:
-                if hasattr(self.diagnosis_page, "focus_work_status_block"):
-                    self.diagnosis_page.focus_work_status_block()
-            return
+        # ------------- Assessment: Diagnosis / Causation / Prognosis / Imaging / Referrals / Work Status -------------
+        # if section_name == "Diagnosis":
+        #     if not hasattr(self, "diagnosis_page"):
+        #         return
 
+        #     stripped = (line or "").strip()
+
+        #     # Main ASSESSMENT heading line should open the Assessment sub-section
+        #     if stripped.upper().startswith("ASSESSMENT"):
+        #         if hasattr(self.diagnosis_page, "focus_assessment_block"):
+        #             self.diagnosis_page.focus_assessment_block()
+
+        #     # Diagnosis -> Dx Block
+        #     if stripped.startswith("Diagnosis"):
+        #         if hasattr(self.diagnosis_page, "focus_diagnosis_block"):
+        #             self.diagnosis_page.focus_diagnosis_block()
+
+        #     # Causation
+        #     if stripped.startswith("Causation"):
+        #         if hasattr(self.diagnosis_page, "focus_causation_block"):
+        #             self.diagnosis_page.focus_causation_block()
+
+        #     # Prognosis
+        #     if stripped.startswith("Prognosis"):
+        #         if hasattr(self.diagnosis_page, "focus_prognosis_block"):
+        #             self.diagnosis_page.focus_prognosis_block()
+
+        #     # Imaging
+        #     if stripped.startswith("Imaging"):
+        #         if hasattr(self.diagnosis_page, "focus_imaging_block"):
+        #             self.diagnosis_page.focus_imaging_block()
+
+        #     # Referrals
+        #     if stripped.startswith("Referrals"):
+        #         if hasattr(self.diagnosis_page, "focus_referrals_block"):
+        #             self.diagnosis_page.focus_referrals_block()
+
+        #     # Current Work Status / Work Duties
+        #     if "Current Work Status" in stripped or "Work Duties" in stripped:
+        #         if hasattr(self.diagnosis_page, "focus_work_status_block"):
+        #             self.diagnosis_page.focus_work_status_block()
+
+        #     return
         # ------------- PLAN OF CARE: grid lines -> PlanPage blocks -------------
-        if section_name == "Plan":
-            if not hasattr(self, "plan_page"):
-                return
-            lower = line.lower()
+        # if section_name == "Plan":
+        #     if not hasattr(self, "plan_page"):
+        #         return
+        #     lower = line.lower()
 
-            if line.startswith("Care Type(s):"):
-                if hasattr(self.plan_page, "focus_care_types_block"):
-                    self.plan_page.focus_care_types_block()
-            elif line.startswith("Regions:"):
-                if hasattr(self.plan_page, "focus_regions_treated_block"):
-                    self.plan_page.focus_regions_treated_block()
-            elif line.startswith("Frequency:") or line.startswith("Duration:") or line.startswith("Re-evaluation:"):
-                if hasattr(self.plan_page, "focus_schedule_block"):
-                    self.plan_page.focus_schedule_block()
-            elif line.startswith("Goals:"):
-                if hasattr(self.plan_page, "focus_goals_block"):
-                    self.plan_page.focus_goals_block()
-            elif line.startswith("Work Duties:"):
-                if hasattr(self, "diagnosis_page") and hasattr(self.diagnosis_page, "focus_work_status_block"):
-                    self.diagnosis_page.focus_work_status_block()
-            elif line.startswith("Services Provided Today"):
-                if hasattr(self.plan_page, "focus_services_block"):
-                    self.plan_page.focus_services_block()
+        #     if line.startswith("Care Type(s):"):
+        #         if hasattr(self.plan_page, "focus_care_types_block"):
+        #             self.plan_page.focus_care_types_block()
+        #     elif line.startswith("Regions:"):
+        #         if hasattr(self.plan_page, "focus_regions_treated_block"):
+        #             self.plan_page.focus_regions_treated_block()
+        #     elif line.startswith("Frequency:") or line.startswith("Duration:") or line.startswith("Re-evaluation:"):
+        #         if hasattr(self.plan_page, "focus_schedule_block"):
+        #             self.plan_page.focus_schedule_block()
+        #     elif line.startswith("Goals:"):
+        #         if hasattr(self.plan_page, "focus_goals_block"):
+        #             self.plan_page.focus_goals_block()
+        #     elif line.startswith("Work Duties:"):
+        #         if hasattr(self, "diagnosis_page") and hasattr(self.diagnosis_page, "focus_work_status_block"):
+        #             self.diagnosis_page.focus_work_status_block()
+        #     elif line.startswith("Services Provided Today"):
+        #         if hasattr(self.plan_page, "focus_services_block"):
+        #             self.plan_page.focus_services_block()
 
-            return
+        #     return
 
     def _rebuild_exam_nav_buttons(self):
         # Remove old exam buttons only (leave label + add buttons alone)

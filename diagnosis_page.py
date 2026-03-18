@@ -461,6 +461,38 @@ class DiagnosisPage(ttk.Frame):
             else:
                 btn.configure(relief="raised", font=("Segoe UI", 10))
 
+    
+    # -------- Public focus helpers (for Live Preview clicks) --------
+
+    def focus_assessment_block(self) -> None:
+        """Live Preview: 'Assessment' heading -> Assessment sub-section."""
+        self._show_dx_block("Assessment")
+
+    def focus_diagnosis_block(self) -> None:
+        """Live Preview: 'Diagnosis' -> Dx Block grid."""
+        self._show_dx_block("Dx Block")
+
+    def focus_causation_block(self) -> None:
+        """Live Preview: 'Causation' -> Causation sub-section."""
+        self._show_dx_block("Causation")
+
+    def focus_prognosis_block(self) -> None:
+        """Live Preview: 'Prognosis' -> Prognosis sub-section."""
+        self._show_dx_block("Prognosis")
+
+    def focus_imaging_block(self) -> None:
+        """Live Preview: 'Imaging' -> Imaging sub-section."""
+        self._show_dx_block("Imaging")
+
+    def focus_referrals_block(self) -> None:
+        """Live Preview: 'Referrals' -> Referrals sub-section."""
+        self._show_dx_block("Referrals")
+
+    def focus_work_status_block(self) -> None:
+        """Live Preview: 'Current Work Status' / 'Work Duties' -> Current Work Status sub-section."""
+        self._show_dx_block("Current Work Status")
+    
+    
     def _disable_mousewheel_on_cb(self, cb: ttk.Combobox):
         """Prevent mouse wheel from changing combobox selection when dropdown is closed."""
         cb.bind("<MouseWheel>", lambda e: "break")
@@ -742,7 +774,7 @@ class DiagnosisPage(ttk.Frame):
         return fr
 
     def _build_employment_frame(self, parent, padx=10) -> ttk.Frame:
-        """Build Current Work Stats section frame (no back button)."""
+        """Build Current Work Status section frame (no back button)."""
         fr = ttk.Frame(parent)
         body = ttk.Frame(fr)
         body.pack(fill="both", expand=True, padx=padx, pady=(10, 10))
@@ -940,7 +972,7 @@ class DiagnosisPage(ttk.Frame):
         _add_dx_btn("Prognosis")
         _add_dx_btn("Imaging")
         _add_dx_btn("Referrals")
-        _add_dx_btn("Current Work Stats")
+        _add_dx_btn("Current Work Status")
 
         # Collapse toggles (right side)
         self.toggle_blocks_btn = ttk.Button(top, text="Hide Blocks", command=self._toggle_blocks)
@@ -985,7 +1017,7 @@ class DiagnosisPage(ttk.Frame):
             "Prognosis": self._build_prognosis_frame(self._dx_container, padx),
             "Imaging": self._build_imaging_frame(self._dx_container, padx),
             "Referrals": self._build_referrals_frame(self._dx_container, padx),
-            "Current Work Stats": self._build_employment_frame(self._dx_container, padx),
+            "Current Work Status": self._build_employment_frame(self._dx_container, padx),
         }
 
         for fr in self._dx_frames.values():
