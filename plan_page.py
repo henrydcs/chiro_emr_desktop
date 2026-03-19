@@ -684,6 +684,16 @@ class PlanPage(ttk.Frame):
         self._show_plan_block("Services Provided Today")
         self.open_services_main_popup()
 
+    def focus_cmt_details_popup(self) -> None:
+        """Live Preview: open CMT details popup (segments/techniques)."""
+        self._show_plan_block("Services Provided Today")
+        root = self.winfo_toplevel()
+        selection = (self.current_cmt_code.get() or "").strip()
+        if selection:
+            self.open_cmt_details_popup(root)
+        else:
+            self.open_services_main_popup()
+
     def focus_therapy_popup(self, modality_code: str = "") -> None:
         """Live Preview: open therapy details popup for a specific modality code."""
         self._show_plan_block("Services Provided Today")

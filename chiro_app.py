@@ -1006,12 +1006,20 @@ class App(tk.Tk):
                     self.plan_page.focus_services_block()
                 return
 
-            # Chiropractic Manipulative Treatment / Adjustment Code / Segment lines -> CMT popup
+            # Segment(s) Adjusted / Technique lines -> CMT details popup (segments & techniques)
+            if (
+                plan_line.strip().startswith("Segment(s) Adjusted")
+                or "Technique(s):" in plan_line
+            ):
+                self.show_page("Plan")
+                if hasattr(self, "plan_page") and hasattr(self.plan_page, "focus_cmt_details_popup"):
+                    self.plan_page.focus_cmt_details_popup()
+                return
+
+            # Chiropractic Manipulative Treatment / Adjustment Code -> main Services popup
             if (
                 plan_line.startswith("Chiropractic Manipulative Treatment")
                 or plan_line.strip().startswith("Adjustment Code:")
-                or plan_line.strip().startswith("Segment(s) Adjusted")
-                or "Technique(s):" in plan_line
             ):
                 self.show_page("Plan")
                 if hasattr(self, "plan_page") and hasattr(self.plan_page, "focus_cmt_popup"):
