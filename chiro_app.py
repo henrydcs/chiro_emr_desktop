@@ -795,63 +795,48 @@ class App(tk.Tk):
 
         txt.update_idletasks()
 
-        bbox = txt.bbox(index)
-        if not bbox:
-            # Fallback: at least ensure the line is visible
-            txt.see(index)
+        try:
+            target_line = int(str(txt.index(index)).split('.')[0])
+            total_lines = int(str(txt.index("end-1c")).split('.')[0])
+        except (ValueError, AttributeError):
             return
 
-        line_y, _x, _w, line_h = bbox
-        widget_h = txt.winfo_height()
-        if widget_h <= 0:
-            txt.see(index)
+        if total_lines <= 1:
             return
 
-        # Where we want the top of the view such that this line is centered
-        target_y = (widget_h - line_h) / 2.0
-        delta_pixels = line_y - target_y
+        heading_frac = (target_line - 1) / total_lines
+        first_frac, last_frac = txt.yview()
+        visible_frac = last_frac - first_frac
 
-        # Approximate conversion from pixels to yview fraction
-        end_bbox = txt.bbox("end-1c")
-        if not end_bbox:
-            txt.see(index)
-            return
+        centered_frac = heading_frac - (visible_frac / 2.0)
+        centered_frac = max(0.0, min(centered_frac, 1.0))
 
-        total_height = end_bbox[1] + end_bbox[3]
-        if total_height <= 0:
-            txt.see(index)
-            return
-
-        current_first_frac = txt.yview()[0]
-        current_first_y = current_first_frac * total_height
-        new_first_y = current_first_y + delta_pixels
-        new_frac = max(0.0, min(new_first_y / total_height, 1.0))
-
-        txt.yview_moveto(new_frac)
+        txt.yview_moveto(centered_frac)
 
     def _center_preview_on_section(self, section_name: str) -> None:
         """
-        Convenience wrapper: center the Live Preview on the heading that
-        corresponds to the given left-nav section name, if we know it.
-
-        If the heading registry is empty or missing this section, we make
-        a best-effort attempt to re-scan the Text widget for headings.
+        Center the Live Preview on the heading that corresponds to the
+        given left-nav section name.  Searches the preview text directly
+        each time (no cached-index dependency).
         """
-        # Fast path: use whatever we already recorded
-        index = self._preview_heading_indices.get(section_name)
-        if not index:
-            txt = getattr(self, "hoi_preview_text", None)
-            if txt is not None and txt.winfo_exists():
-                # Re-scan the current preview content to rebuild heading tags
-                self._retag_preview_headings(txt)
-                index = self._preview_heading_indices.get(section_name)
-
-        if not index:
-            # No heading exists in the preview for this section yet
-            # (e.g., no Subjectives content on screen). Do nothing.
+        txt = getattr(self, "hoi_preview_text", None)
+        if txt is None or not txt.winfo_exists():
             return
 
-        self._center_preview_on_heading_index(index)
+        heading_map = self._build_preview_heading_map()
+
+        target_index = None
+        for heading_text, mapped_section in heading_map.items():
+            if mapped_section == section_name:
+                idx = txt.search(heading_text, "1.0", stopindex="end")
+                if idx:
+                    target_index = f"{idx.split('.')[0]}.0"
+                    break
+
+        if not target_index:
+            return
+
+        self._center_preview_on_heading_index(target_index)
 
     def _on_preview_click(self, event) -> None:
         """
