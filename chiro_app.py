@@ -812,7 +812,9 @@ class App(tk.Tk):
         centered_frac = max(0.0, min(centered_frac, 1.0))
 
         txt.yview_moveto(centered_frac)
-
+    
+    # If we did not converge, leave view as close as we got
+    
     def _center_preview_on_section(self, section_name: str) -> None:
         """
         Center the Live Preview on the heading that corresponds to the
@@ -869,6 +871,8 @@ class App(tk.Tk):
                 except Exception:
                     line_content = ""
                 self._handle_preview_subheading_click(section_name, line_content)
+                # Re-center after left-panel layout settles (same heading as nav click).
+                self.after_idle(lambda sn=section_name: self._center_preview_on_section(sn))
                 return
 
         # 2) Fallback: match by exact line text (in case tag wasn't applied)
@@ -883,6 +887,7 @@ class App(tk.Tk):
             self._center_preview_on_heading_index(line_start)
             self.show_page(section_name)
             self._handle_preview_subheading_click(section_name, line_content)
+            self.after_idle(lambda sn=section_name: self._center_preview_on_section(sn))
             return
 
         
