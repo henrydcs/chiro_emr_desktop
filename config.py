@@ -60,7 +60,7 @@ EXAM_COLORS = {
 
 # ----------------- UI OPTIONS -----------------
 PAIN_DESCRIPTORS = [
-    "Achy", "Sharp", "Tension", "Dull", "Burning", "Throbbing",
+    "Achy", "Sharp", "Soreness", "Tension", "Dull", "Burning", "Throbbing",
     "Stabbing", "Shooting", "Tightness", "Pressure", "Cramping"
 ]
 
