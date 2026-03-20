@@ -1269,7 +1269,9 @@ def build_objectives_flowables(objectives_struct: dict, styles, doc_width: float
 def objectives_struct_to_live_preview_runs(objectives_struct: dict, *, include_adl: bool = True) -> list[tuple[str, str | None]]:
     """
     Build Live Preview runs from objectives_struct, mirroring PDF structure.
-    Returns [(chunk, tag), ...] with tag "H_BOLD" for headings.
+    Returns [(chunk, tag), ...] with:
+      - tag "H_BOLD" for headings
+      - tag "PREVIEW_MONO" for aligned table-like body content
     """
     runs: list[tuple[str, str | None]] = []
     objectives_struct = objectives_struct or {}
@@ -1278,27 +1280,13 @@ def objectives_struct_to_live_preview_runs(objectives_struct: dict, *, include_a
         global_struct = {}
 
     def add_section(heading: str, body: str):
-        """Only adds when body is non-empty (legacy single-arg use)."""
         if not (body or "").strip():
             return
         runs.append((heading + "\n", "H_BOLD"))
         runs.append(("\n", None))
         runs.append(((body or "").strip() + "\n\n", None))
 
-    def add_section_with_notes(heading: str, body: str, notes: str):
-        """Shows heading when there is body OR notes; then body (if any), then notes (if any)."""
-        body_s = (body or "").strip()
-        notes_s = (notes or "").strip()
-        if not body_s and not notes_s:
-            return
-        runs.append((heading + "\n", "H_BOLD"))
-        runs.append(("\n", None))
-        if body_s:
-            runs.append((body_s + "\n\n", None))
-        if notes_s:
-            runs.append((notes_s + "\n\n", None))
-
-    # Vitals
+    # ---------- Global sections (unchanged behavior) ----------
     vitals = global_struct.get("vitals") or {}
     if isinstance(vitals, dict):
         fields = [("BP:", "bp"), ("Pulse:", "pulse"), ("Resp:", "resp"), ("Temp:", "temp"),
@@ -1316,7 +1304,6 @@ def objectives_struct_to_live_preview_runs(objectives_struct: dict, *, include_a
                 body += "\n\nNotes: " + vit_notes
             add_section("Vitals", body)
 
-    # Posture
     posture = global_struct.get("posture") or {}
     if isinstance(posture, dict):
         lines = []
@@ -1332,7 +1319,6 @@ def objectives_struct_to_live_preview_runs(objectives_struct: dict, *, include_a
                 body += "\n\nNotes: " + pos_notes
             add_section("Posture", body)
 
-    # Spinal Palpatory Inspection (sublux)
     sublux = global_struct.get("sublux") or {}
     if isinstance(sublux, dict):
         regions = sublux.get("regions") or {}
@@ -1363,7 +1349,6 @@ def objectives_struct_to_live_preview_runs(objectives_struct: dict, *, include_a
                 body += "\n\nNotes: " + sx_notes
             add_section("Spinal Palpatory Inspection", body)
 
-    # Grip Strength
     grip = global_struct.get("grip") or {}
     if isinstance(grip, dict):
         left = _clean_val(grip.get("left"))
@@ -1383,125 +1368,240 @@ def objectives_struct_to_live_preview_runs(objectives_struct: dict, *, include_a
                 body += "\n\nNotes: " + grip_notes
             add_section("Grip Strength (Jamar)", body)
 
-    # Region blocks
+    # ---------- Objective region rendering (PDF-like in monospaced text) ----------
     blocks = objectives_struct.get("blocks") or []
-    if isinstance(blocks, list):
-        grouped: dict[str, list[dict]] = {}
-        order: list[str] = []
-        for b in blocks:
-            if not isinstance(b, dict):
-                continue
-            code = (b.get("region") or "").strip() or "(none)"
-            if code not in grouped:
-                grouped[code] = []
-                order.append(code)
-            grouped[code].append(b)
+    if not isinstance(blocks, list):
+        return runs
 
-        for code in order:
-            region_blocks = grouped.get(code, [])
-            if not region_blocks:
-                continue
-            label = _pretty_region(code)
-            if not label:
-                continue
-            region_title = _region_group_name(label)
-            tag = _region_tag(code)
+    grouped: dict[str, list[dict]] = {}
+    order: list[str] = []
+    for b in blocks:
+        if not isinstance(b, dict):
+            continue
+        code = (b.get("region") or "").strip() or "(none)"
+        if code not in grouped:
+            grouped[code] = []
+            order.append(code)
+        grouped[code].append(b)
 
-            palp_left_all, palp_right_all = [], []
-            ortho_left_all, ortho_right_all = [], []
-            for b in region_blocks:
-                findings = _collect_objectives_findings(b)
-                pL, pR = findings["PALPATION"]
-                oL, oR = findings["ORTHOPEDIC EXAM"]
-                palp_left_all.append(pL)
-                palp_right_all.append(pR)
-                ortho_left_all.append(oL)
-                ortho_right_all.append(oR)
+    # Slightly narrower columns so RIGHT SIDE starts more to the left
+    # and avoids wrap spillover in tk.Text preview.
+    COL_W = 26
+    SEP = " "
 
-            def merge_findings(lsts):
-                seen = set()
-                out = []
-                for L in lsts:
-                    for item in L:
-                        key = (item[0], item[1]) if len(item) >= 2 else (item[0],)
-                        if key not in seen:
-                            seen.add(key)
-                            out.append(item)
-                return out
+    def _fit_cell(text: str, width: int) -> str:
+        s = (text or "").strip()
+        if len(s) <= width:
+            return s
+        # hard trim keeps table alignment stable in preview
+        return s[: width - 1] + "…"
 
-            palp_left = merge_findings(palp_left_all)
-            palp_right = merge_findings(palp_right_all)
-            ortho_left = merge_findings(ortho_left_all)
-            ortho_right = merge_findings(ortho_right_all)
+    def _fmt_row(left: str, right: str) -> str:
+        l = _fit_cell(left, COL_W).ljust(COL_W)
+        r = _fit_cell(right, COL_W).ljust(COL_W)
+        return f"{l}{SEP}{r}"
 
+    def _item_lines(item) -> list[str]:
+        if not item:
+            return []
+        name = (item[0] or "").strip() if len(item) > 0 else ""
+        line2 = (item[1] or "").strip() if len(item) > 1 else ""
+        line3 = (item[2] or "").strip() if len(item) > 2 else ""
+        out = []
+        if name:
+            out.append(name)
+        if line2:
+            out.append(line2)
+        if line3:
+            out.append(line3)
+        return out or [""]
+
+    def _append_lr_section(section_title: str, left_items: list, right_items: list, notes: str = ""):
+        if not left_items and not right_items and not notes:
+            return
+
+        runs.append((section_title + "\n", "H_BOLD"))
+        runs.append(("\n", None))
+
+        table_lines = []
+        table_lines.append(_fmt_row("LEFT SIDE", "RIGHT SIDE"))
+        table_lines.append(_fmt_row("-" * 9, "-" * 10))
+        table_lines.append("")
+
+        max_len = max(len(left_items), len(right_items), 1)
+        for i in range(max_len):
+            l_lines = _item_lines(left_items[i]) if i < len(left_items) else [""]
+            r_lines = _item_lines(right_items[i]) if i < len(right_items) else [""]
+            h = max(len(l_lines), len(r_lines))
+            for j in range(h):
+                ltxt = l_lines[j] if j < len(l_lines) else ""
+                rtxt = r_lines[j] if j < len(r_lines) else ""
+                table_lines.append(_fmt_row(ltxt, rtxt))
+            table_lines.append("")
+
+        runs.append(("\n".join(table_lines).rstrip() + "\n\n", "PREVIEW_MONO"))
+
+        if notes:
+            runs.append((f"Notes: {notes}\n\n", None))
+
+    def _append_rom_grid(section_title: str, code: str, rom_merged: dict, notes: str = ""):
+        if not rom_merged and not notes:
+            return
+
+        runs.append((section_title + "\n", "H_BOLD"))
+        runs.append(("\n", None))
+
+        REGION_ROM_MOTIONS = {
+            "CS": ["Flexion", "Extension", "Lateral Flexion", "Rotation"],
+            "TS": ["Flexion", "Extension", "Lateral Flexion", "Rotation"],
+            "LS": ["Flexion", "Extension", "Lateral Flexion", "Rotation"],
+
+            "R_SHOULDER": ["Flexion", "Extension", "Abduction", "Adduction", "Internal Rotation", "External Rotation"],
+            "L_SHOULDER": ["Flexion", "Extension", "Abduction", "Adduction", "Internal Rotation", "External Rotation"],
+            "BL_SHOULDER": ["Flexion", "Extension", "Abduction", "Adduction", "Internal Rotation", "External Rotation"],
+
+            "R_ELBOW": ["Flexion", "Extension", "Supination", "Pronation"],
+            "L_ELBOW": ["Flexion", "Extension", "Supination", "Pronation"],
+            "BL_ELBOW": ["Flexion", "Extension", "Supination", "Pronation"],
+
+            "R_WRIST": ["Flexion", "Extension", "Radial Deviation", "Ulnar Deviation"],
+            "L_WRIST": ["Flexion", "Extension", "Radial Deviation", "Ulnar Deviation"],
+            "BL_WRIST": ["Flexion", "Extension", "Radial Deviation", "Ulnar Deviation"],
+
+            "R_HIP": ["Flexion", "Extension", "Abduction", "Adduction", "Internal Rotation", "External Rotation"],
+            "L_HIP": ["Flexion", "Extension", "Abduction", "Adduction", "Internal Rotation", "External Rotation"],
+            "BL_HIP": ["Flexion", "Extension", "Abduction", "Adduction", "Internal Rotation", "External Rotation"],
+
+            "R_KNEE": ["Flexion", "Extension"],
+            "L_KNEE": ["Flexion", "Extension"],
+            "BL_KNEE": ["Flexion", "Extension"],
+
+            "R_ANKLE": ["Dorsiflexion", "Plantarflexion", "Inversion", "Eversion"],
+            "L_ANKLE": ["Dorsiflexion", "Plantarflexion", "Inversion", "Eversion"],
+            "BL_ANKLE": ["Dorsiflexion", "Plantarflexion", "Inversion", "Eversion"],
+        }
+
+        motions = REGION_ROM_MOTIONS.get(code, ["Flexion", "Extension", "Lateral Flexion", "Rotation"])
+
+        def motion_lines(motion: str) -> list[str]:
+            st = (rom_merged or {}).get(motion) or {}
             try:
-                rom_merged = _merge_rom_struct(region_blocks) or {}
+                l_sev = int(st.get("l_sev", -1))
             except Exception:
-                rom_merged = {}
-            rom_merged = {m: st for m, st in (rom_merged or {}).items()
-                         if int((st or {}).get("l_sev", -1)) != -1 or int((st or {}).get("r_sev", -1)) != -1}
+                l_sev = -1
+            try:
+                r_sev = int(st.get("r_sev", -1))
+            except Exception:
+                r_sev = -1
+            return _rom_style_lines(motion, l_sev, r_sev, region_code=code)
 
-            def first_note(region_blocks, key):
-                for bb in region_blocks:
-                    txt = _clean_val(bb.get(key, ""))
-                    if txt:
-                        return txt
-                return ""
+        def make_cell(motion: str) -> list[str]:
+            lines = [motion]
+            lines.extend(motion_lines(motion))
+            if len(lines) < 4:
+                lines.extend([""] * (4 - len(lines)))
+            return [_fit_cell(ln, COL_W).ljust(COL_W) for ln in lines]
 
-            palp_notes = first_note(region_blocks, "palpation_notes")
-            ortho_notes = first_note(region_blocks, "ortho_notes")
-            rom_notes = first_note(region_blocks, "rom_notes")
+        box_lines = []
+        hline = "+" + "-" * COL_W + "+" + "-" * COL_W + "+"
 
-            has_any = bool(palp_left or palp_right or palp_notes or ortho_left or ortho_right or ortho_notes or rom_merged or rom_notes)
-            if not has_any:
-                continue
+        cells = [make_cell(m) for m in motions]
+        for i in range(0, len(cells), 2):
+            left = cells[i]
+            right = cells[i + 1] if i + 1 < len(cells) else [" " * COL_W for _ in range(len(left))]
+            row_h = max(len(left), len(right))
+            if len(left) < row_h:
+                left += [" " * COL_W] * (row_h - len(left))
+            if len(right) < row_h:
+                right += [" " * COL_W] * (row_h - len(right))
 
-            runs.append((region_title + "\n", "H_BOLD"))
-            runs.append(("\n", None))
+            box_lines.append(hline)
+            for j in range(row_h):
+                box_lines.append(f"{left[j]}{right[j]}")
+        box_lines.append(hline)
 
-            if palp_left or palp_right or palp_notes:
-                runs.append((f"SOFT TISSUE PALPATION {tag}\n", "H_BOLD"))
-                if palp_left or palp_right:
-                    for i in range(max(len(palp_left), len(palp_right), 1)):
-                        lstr = f"{palp_left[i][0]}: {palp_left[i][1]}" if i < len(palp_left) else ""
-                        rstr = f"{palp_right[i][0]}: {palp_right[i][1]}" if i < len(palp_right) else ""
-                        runs.append((f"LEFT: {lstr}  |  RIGHT: {rstr}\n", None))
-                if palp_notes:
-                    runs.append((f"Notes: {palp_notes}\n\n", None))
+        runs.append(("\n".join(box_lines) + "\n\n", "PREVIEW_MONO"))
 
-            if ortho_left or ortho_right or ortho_notes:
-                runs.append((f"ORTHOPEDIC EXAM {tag}\n", "H_BOLD"))
-                if ortho_left or ortho_right:
-                    for i in range(max(len(ortho_left), len(ortho_right), 1)):
-                        lstr = f"{ortho_left[i][0]}: {ortho_left[i][1]}" if i < len(ortho_left) else ""
-                        rstr = f"{ortho_right[i][0]}: {ortho_right[i][1]}" if i < len(ortho_right) else ""
-                        runs.append((f"LEFT: {lstr}  |  RIGHT: {rstr}\n", None))
-                if ortho_notes:
-                    runs.append((f"Notes: {ortho_notes}\n\n", None))
+        if notes:
+            runs.append((f"Notes: {notes}\n\n", None))
 
-            if rom_merged or rom_notes:
-                runs.append((f"RANGE OF MOTION {tag}\n", "H_BOLD"))
-                REGION_ROM_MOTIONS = {
-                    "CS": ["Flexion", "Extension", "Lateral Flexion", "Rotation"],
-                    "TS": ["Flexion", "Extension", "Lateral Flexion", "Rotation"],
-                    "LS": ["Flexion", "Extension", "Lateral Flexion", "Rotation"],
-                    "R_SHOULDER": ["Flexion", "Extension", "Abduction", "Adduction", "Internal Rotation", "External Rotation"],
-                    "L_SHOULDER": ["Flexion", "Extension", "Abduction", "Adduction", "Internal Rotation", "External Rotation"],
-                    "BL_SHOULDER": ["Flexion", "Extension", "Abduction", "Adduction", "Internal Rotation", "External Rotation"],
-                }
-                motions = REGION_ROM_MOTIONS.get(code, ["Flexion", "Extension", "Lateral Flexion", "Rotation"])
-                for m in motions:
-                    st = (rom_merged or {}).get(m) or {}
-                    l_sev = int(st.get("l_sev", -1))
-                    r_sev = int(st.get("r_sev", -1))
-                    if l_sev != -1 or r_sev != -1:
-                        l_txt = SEVERITY_LABELS.get(l_sev, "") if l_sev != -1 else ""
-                        r_txt = SEVERITY_LABELS.get(r_sev, "") if r_sev != -1 else ""
-                        runs.append((f"{m}: L={l_txt or '-'} R={r_txt or '-'}\n", None))
-                if rom_notes:
-                    runs.append((f"Notes: {rom_notes}\n\n", None))
+    for code in order:
+        region_blocks = grouped.get(code, [])
+        if not region_blocks:
+            continue
 
-            runs.append(("\n", None))
+        label = _pretty_region(code)
+        if not label:
+            continue
+
+        region_title = _region_group_name(label)
+        tag = _region_tag(code)
+
+        palp_left_all, palp_right_all = [], []
+        ortho_left_all, ortho_right_all = [], []
+
+        for b in region_blocks:
+            findings = _collect_objectives_findings(b)
+            pL, pR = findings["PALPATION"]
+            oL, oR = findings["ORTHOPEDIC EXAM"]
+            palp_left_all.append(pL)
+            palp_right_all.append(pR)
+            ortho_left_all.append(oL)
+            ortho_right_all.append(oR)
+
+        def merge_findings(lsts):
+            seen = set()
+            out = []
+            for L in lsts:
+                for item in L:
+                    key = (item[0], item[1]) if len(item) >= 2 else (item[0],)
+                    if key not in seen:
+                        seen.add(key)
+                        out.append(item)
+            return out
+
+        palp_left = merge_findings(palp_left_all)
+        palp_right = merge_findings(palp_right_all)
+        ortho_left = merge_findings(ortho_left_all)
+        ortho_right = merge_findings(ortho_right_all)
+
+        try:
+            rom_merged = _merge_rom_struct(region_blocks) or {}
+        except Exception:
+            rom_merged = {}
+
+        rom_merged = {
+            m: st for m, st in (rom_merged or {}).items()
+            if int((st or {}).get("l_sev", -1)) != -1 or int((st or {}).get("r_sev", -1)) != -1
+        }
+
+        def first_note(region_blocks, key):
+            for bb in region_blocks:
+                txt = _clean_val(bb.get(key, ""))
+                if txt:
+                    return txt
+            return ""
+
+        palp_notes = first_note(region_blocks, "palpation_notes")
+        ortho_notes = first_note(region_blocks, "ortho_notes")
+        rom_notes = first_note(region_blocks, "rom_notes")
+
+        has_any = bool(
+            palp_left or palp_right or palp_notes or
+            ortho_left or ortho_right or ortho_notes or
+            rom_merged or rom_notes
+        )
+        if not has_any:
+            continue
+
+        runs.append((region_title + "\n", "H_BOLD"))
+        runs.append(("\n", None))
+
+        _append_lr_section(f"SOFT TISSUE PALPATION {tag}", palp_left, palp_right, palp_notes)
+        _append_lr_section(f"ORTHOPEDIC EXAM {tag}", ortho_left, ortho_right, ortho_notes)
+        _append_rom_grid(f"RANGE OF MOTION {tag}", code, rom_merged, rom_notes)
+
+        runs.append(("\n", None))
 
     return runs
 

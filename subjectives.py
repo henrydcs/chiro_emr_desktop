@@ -3,6 +3,7 @@ import tkinter as tk
 from tkinter import ttk, messagebox
 from ui_blocks import DescriptorBlock
 from config import REGION_LABELS
+import re
 
 THERAPY_BODY_PARTS = [
     "Neck", "Upper Back", "Mid-Back", "Low Back", "Pelvic Area",
@@ -235,47 +236,138 @@ class SubjectivesPage(ttk.Frame):
 
         return "\n\n".join(parts).strip()
 
+    def _dedupe_tokens_casefold(self, items: list[str]) -> list[str]:
+        seen = set()
+        out = []
+        for s in items or []:
+            txt = (s or "").strip()
+            if not txt:
+                continue
+            key = txt.casefold()
+            if key in seen:
+                continue
+            seen.add(key)
+            out.append(txt)
+        return out
+
+
+    def _tokens_from_block_for_preview(self, b) -> list[str]:
+        toks: list[str] = []
+
+        # pain descriptors
+        for attr in ("desc1_var", "desc2_var"):
+            v = getattr(b, attr, None)
+            if v is None:
+                continue
+            val = (v.get() or "").strip()
+            if val and val != "(none)":
+                toks.append(val)
+
+        # radiculopathy
+        rs_var = getattr(b, "radic_symptom_var", None)
+        if rs_var is not None:
+            rs = (rs_var.get() or "").strip()
+            if rs and rs.lower() not in ("none", "(none)", "select", "(select)"):
+                toks.append(rs)
+
+        rl_var = getattr(b, "radic_location_var", None)
+        if rl_var is not None:
+            rl = (rl_var.get() or "").strip()
+            if rl and rl.lower() not in ("none", "(none)", "select", "(select)"):
+                toks.append(rl)
+
+        # muscles selected in "Patient Points To"
+        for m, var in (getattr(b, "muscle_vars", {}) or {}).items():
+            try:
+                if var.get():
+                    toks.append((m or "").strip())
+            except Exception:
+                pass
+
+        # pain scale dropdown
+        ps_var = getattr(b, "pain_scale_var", None)
+        if ps_var is not None:
+            ps = (ps_var.get() or "").strip()
+            if ps and ps.lower() not in ("none", "select", "(none)", "(select)"):
+                toks.append(ps)
+
+        return self._dedupe_tokens_casefold(toks)
+
+
+    def _emphasis_runs(self, text: str, tokens: list[str]) -> list[tuple[str, str | None]]:
+        """
+        Split text into runs for Live Preview:
+        - normal chunks tagged None
+        - matched selected tokens tagged EMPH_BOLD
+        """
+        s = text or ""
+        if not s:
+            return []
+
+        toks = self._dedupe_tokens_casefold(tokens)
+        toks = [t for t in toks if t]
+        toks.sort(key=len, reverse=True)
+
+        if not toks:
+            return [(s, None)]
+
+        pattern = re.compile("|".join(re.escape(t) for t in toks), re.IGNORECASE)
+
+        runs: list[tuple[str, str | None]] = []
+        pos = 0
+        for m in pattern.finditer(s):
+            if m.start() > pos:
+                runs.append((s[pos:m.start()], None))
+            runs.append((m.group(0), "EMPH_BOLD"))
+            pos = m.end()
+
+        if pos < len(s):
+            runs.append((s[pos:], None))
+
+        return runs
+
     def get_live_preview_runs(self) -> list[tuple[str, str | None]]:
         """
-        Returns runs for Live Preview: therapy paragraph + auto-generated content
-        from each block + narrative text box. Format: [(chunk, tag), ...] with
-        tag "H_BOLD" for headings. Mirrors PDF structure: one line of space
-        between last subjectives and narrative text.
+        Returns runs for Live Preview with emphasis tags for selected subjective tokens.
+        Mirrors PDF structure and selected-value bolding behavior.
         """
-        runs = []
+        runs: list[tuple[str, str | None]] = []
         therapy = self.build_therapy_paragraph().strip()
 
-        # Check if any block has auto content (mirrors PDF: region blocks)
-        has_block_content = any(
-            (b.get_auto_generated_text() or "").strip() for b in self.blocks
-        )
+        has_block_content = any((b.get_auto_generated_text() or "").strip() for b in self.blocks)
         has_block_narrative = any((b.get_narrative() or "").strip() for b in self.blocks)
 
-        # Show Subjectives heading if we have ANY subjectives content (mirrors PDF)
         has_any_subjectives = bool(therapy or has_block_content or has_block_narrative)
         if has_any_subjectives:
             runs.append(("SUBJECTIVES\n", "H_BOLD"))
             runs.append(("\n", None))
 
+        # Therapy paragraph: bold selected therapy areas
         if therapy:
-            runs.append((therapy + "\n\n", None))
+            therapy_tokens = self._therapy_selected_ordered()
+            runs.extend(self._emphasis_runs(therapy + "\n\n", therapy_tokens))
 
         orphan_narratives = []
         for b in self.blocks:
             auto = (b.get_auto_generated_text() or "").strip()
             user_narr = (b.get_narrative() or "").strip()
+            block_tokens = self._tokens_from_block_for_preview(b)
+
             if auto:
                 region_code = b.region_var.get()
                 label = REGION_LABELS.get(region_code, "")
                 if label:
                     runs.append((label + "\n", "H_BOLD"))
                     runs.append(("\n", None))
-                runs.append((auto + "\n\n", None))
-                # This block's textbox prints as last sentence(s) of this body region
+
+                # Auto-generated region text with bolded selected items
+                runs.extend(self._emphasis_runs(auto + "\n\n", block_tokens))
+
+                # Narrative under same region gets same token emphasis (matches PDF intent)
                 if user_narr:
-                    runs.append((user_narr + "\n\n", None))
+                    runs.extend(self._emphasis_runs(user_narr + "\n\n", block_tokens))
             elif user_narr:
-                # Block has narrative but no auto (e.g. region is (none))
+                # Narrative-only block (no structured token set)
                 orphan_narratives.append(user_narr)
 
         if orphan_narratives:

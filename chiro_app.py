@@ -2170,7 +2170,17 @@ class App(tk.Tk):
             base = tkfont.nametofont("TkDefaultFont")
             bold = base.copy()
             bold.configure(weight="bold")
+
+            # Existing heading bold
             txt.tag_configure("H_BOLD", font=bold)
+
+            # Subjectives emphasis bold (selected words/tokens)
+            txt.tag_configure("EMPH_BOLD", font=bold)
+
+            # Monospace tag for Objective table-style layout
+            mono = base.copy()
+            mono.configure(family="Consolas")  # fallback handled by Tk if unavailable
+            txt.tag_configure("PREVIEW_MONO", font=mono)
 
         # call once after widget is created:
         apply_preview_styles(self.hoi_preview_text)        
