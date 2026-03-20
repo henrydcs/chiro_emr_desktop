@@ -491,7 +491,7 @@ def plan_struct_to_live_preview_runs(
 ) -> list[tuple[str, str | None]]:
     """
     Build Live Preview runs from plan_struct, mirroring PDF Plan of Care section.
-    Returns [(chunk, tag), ...] with tag "H_BOLD" for headings.
+    Returns [(chunk, tag), ...]
     """
     runs: list[tuple[str, str | None]] = []
     d = plan_struct or {}
@@ -529,37 +529,82 @@ def plan_struct_to_live_preview_runs(
         runs.append(("\n", None))
         runs.append(((body or "").strip() + "\n\n", None))
 
-    # Summary grid (Treatment Care Types, Regions, Schedule, Goals, Work Duties)
-    grid_lines: list[str] = []
-    if care:
-        grid_lines.append(f"Care Type(s): {', '.join(care)}")
-    if regions:
-        grid_lines.append(f"Regions: {', '.join(regions)}")
-    if freq:
-        grid_lines.append(f"Frequency: {freq} / week")
-    if dur:
-        grid_lines.append(f"Duration: {dur} weeks")
-    if reeval:
-        grid_lines.append(f"Re-evaluation: {reeval}")
-    if goals:
-        grid_lines.append(f"Goals: {', '.join(goals)}")
-    if work_recs:
-        grid_lines.append(f"Work Duties: {work_recs}")
-    if grid_lines:
-        runs.append(("\n".join(grid_lines) + "\n\n", None))
+    def add_label_value_line(label: str, value: str, *, indent: str = "", label_tag: str = "LP_LABEL_BOLD", value_tag: str | None = None):
+        v = _clean(value)
+        if not v:
+            return
+        runs.append((f"{indent}{label}", label_tag))
+        runs.append((f" {v}\n", value_tag))
 
-    # Plan Narrative
+    # ---------------------------
+    # PLAN OF CARE summary lines
+    # ---------------------------
+    if care:
+        add_label_value_line("Care Type(s):", ", ".join(care))
+    if regions:
+        add_label_value_line("Regions:", ", ".join(regions))
+    if freq:
+        add_label_value_line("Frequency:", f"{freq} / week")
+    if dur:
+        add_label_value_line("Duration:", f"{dur} weeks")
+    if reeval:
+        add_label_value_line("Re-evaluation:", reeval)
+    if goals:
+        add_label_value_line("Goals:", ", ".join(goals))
+    if work_recs:
+        add_label_value_line("Work Duties:", work_recs)
+
+    # spacing after summary block (if any summary line was printed)
+    if care or regions or freq or dur or reeval or goals or work_recs:
+        runs.append(("\n", None))
+
+    # Plan narrative (kept as-is)
     if plan_text:
         runs.append((plan_text.strip() + "\n\n", None))
 
-    # Notes
+    # Notes (kept heading behavior)
     if notes:
-        add_section("Notes", notes) 
+        add_section("Notes", notes)
 
-    # Services Provided Today
+    # -------------------------------------
+    # Services Provided Today (styled text)
+    # -------------------------------------
     svc_text = _services_to_plain_text(d)
     if svc_text:
-        add_section("Services Provided Today", svc_text)
+        runs.append(("Services Provided Today\n", "H_BOLD"))
+        runs.append(("\n", None))
+
+        for raw_line in svc_text.splitlines():
+            line = raw_line.rstrip()
+            stripped = line.strip()
+
+            # preserve blank lines
+            if not stripped:
+                runs.append(("\n", "PREVIEW_MONO"))
+                continue
+
+            # section subtitles in services block
+            if stripped in ("Chiropractic Manipulative Treatment", "Therapeutic Modalities", "Examination and Management"):
+                runs.append((line + "\n", "PREVIEW_MONO_BOLD"))
+                continue
+
+            # Bold any "Label: value" pattern while preserving leading indentation
+            leading = line[: len(line) - len(line.lstrip(" "))]
+            body = line[len(leading):]
+
+            if ":" in body:
+                left, right = body.split(":", 1)
+                label = left.strip()
+                value = right.lstrip()
+                if label:
+                    runs.append((f"{leading}{label}:", "PREVIEW_MONO_BOLD"))
+                    runs.append((f" {value}\n", "PREVIEW_MONO"))
+                    continue
+
+            # default service line
+            runs.append((line + "\n", "PREVIEW_MONO"))
+
+        runs.append(("\n", None))
 
     return runs
 # =========================================================

@@ -68,19 +68,19 @@ RADIC_SYMPTOMS = ["None", "Numbness", "Tingling", "Weakness", "Sypmtoms", "Disco
 
 RADIC_LOCATIONS = [
     "(select)",
-    "Left shoulder", "Right shoulder",    
-    "Left arm", "Right arm",
-    "Left forearm", "Right forearm",
-    "Left hand", "Right hand", 
-    "Left fingers", "Right fingers", "---------------",
-    "Left buttocks", "Right buttocks",
-    "Left hip", "Right hip",
-    "Left thigh", "Right thigh",
-    "Left knee", "Right knee",
-    "Left leg", "Right leg", "-----------------",
-    "Left ankle", "Right ankle",
-    "Left foot", "Right foot", 
-    "Left toes", "Right toes", 
+    "Bilateral shoulders", "Left shoulder", "Right shoulder",    
+    "Bilateral arms", "Left arm", "Right arm",
+    "Bilateral elbows", "Left elbow", "Right elbow",
+    "Bilateral forearms", "Left forearm", "Right forearm",
+    "Bilateral wrists", "Left wrist", "Right wrist",
+    "Bilateral hands", "Left hand", "Right hand",
+    "Left and Right fingers", "Left finger", "Right finger",
+    "Left and Right toes", "Left toe", "Right toe",
+    "Bilateral feet", "Left foot", "Right foot",
+    "Bilateral ankles", "Left ankle", "Right ankle",
+    "Bilateral legs", "Left leg", "Right leg",
+    "Bilateral knees", "Left knee", "Right knee",    
+    "Bilateral hips", "Left hip", "Right hip",
 ]
 
 REGION_OPTIONS = [

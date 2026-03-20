@@ -2168,19 +2168,23 @@ class App(tk.Tk):
 
         def apply_preview_styles(txt: "tk.Text"):
             base = tkfont.nametofont("TkDefaultFont")
+
             bold = base.copy()
             bold.configure(weight="bold")
-
-            # Existing heading bold
             txt.tag_configure("H_BOLD", font=bold)
-
-            # Subjectives emphasis bold (selected words/tokens)
             txt.tag_configure("EMPH_BOLD", font=bold)
 
-            # Monospace tag for Objective table-style layout
             mono = base.copy()
-            mono.configure(family="Consolas")  # fallback handled by Tk if unavailable
+            mono.configure(family="Consolas")
             txt.tag_configure("PREVIEW_MONO", font=mono)
+
+            # NEW: bold monospace (for Services headings/labels)
+            mono_bold = mono.copy()
+            mono_bold.configure(weight="bold")
+            txt.tag_configure("PREVIEW_MONO_BOLD", font=mono_bold)
+
+            # NEW: bold labels in normal plan summary lines
+            txt.tag_configure("LP_LABEL_BOLD", font=bold)
 
         # call once after widget is created:
         apply_preview_styles(self.hoi_preview_text)        
