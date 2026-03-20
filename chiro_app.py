@@ -786,8 +786,8 @@ class App(tk.Tk):
 
     def _center_preview_on_heading_index(self, index: str) -> None:
         """
-        Scroll the Live Preview so that the line at `index` appears roughly
-        in the vertical center of the Text widget.
+        Scroll the Live Preview so the line at `index` is placed at (or near)
+        the top of the Text widget's visible area.
         """
         txt = getattr(self, "hoi_preview_text", None)
         if txt is None or not txt.winfo_exists():
@@ -805,13 +805,8 @@ class App(tk.Tk):
             return
 
         heading_frac = (target_line - 1) / total_lines
-        first_frac, last_frac = txt.yview()
-        visible_frac = last_frac - first_frac
-
-        centered_frac = heading_frac - (visible_frac / 2.0)
-        centered_frac = max(0.0, min(centered_frac, 1.0))
-
-        txt.yview_moveto(centered_frac)
+        top_frac = max(0.0, min(heading_frac, 1.0))
+        txt.yview_moveto(top_frac)
     
     # If we did not converge, leave view as close as we got
     
