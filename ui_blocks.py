@@ -554,6 +554,12 @@ class DescriptorBlock:
             for m, v in self.muscle_vars.items():
                 v.set(m in saved)
 
+            # Avoids Duplication of Subjectives; After load: drop narrative that only duplicates the current auto paragraph
+            auto_now = (self.get_auto_generated_text() or "").strip()
+            narr_now = (self.get_narrative() or "").strip()
+            if narr_now and auto_now and narr_now.casefold() == auto_now.casefold():
+                self.narrative_text.delete("1.0", tk.END)
+
             # Load narrative verbatim
             self.narrative_text.delete("1.0", tk.END)
             self.narrative_text.insert(tk.END, data.get("narrative", ""))

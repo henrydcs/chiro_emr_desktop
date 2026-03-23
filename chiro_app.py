@@ -2886,11 +2886,38 @@ class App(tk.Tk):
         template_soap = template_dict.get("soap")
         if template_soap is None:
             template_soap = {k: v for k, v in template_dict.items() if k != "template_name"}
+
+        # Optional: reset active Subjectives blocks to "(none)" so region change clears
+        # narrative (same idea as toggling region in the UI). Only affects merged
+        # "subjectives" when the template does NOT override that key.
+        try:
+            subj_page = getattr(self, "subjectives_page", None)
+            if subj_page is not None:
+                for block in getattr(subj_page, "blocks", []) or []:
+                    if callable(getattr(block, "is_active", None)) and block.is_active():
+                        block.region_var.set("(none)")
+                # Traces usually run immediately; this flushes pending geometry if needed.
+                self.update_idletasks()
+        except Exception:
+            pass
+
         current = self.make_payload() or {}
         current_soap = current.get("soap") or {}
         merged_soap = dict(current_soap)
         for k, v in template_soap.items():
             merged_soap[k] = v
+
+        # If template carries subjectives blocks with stale "narrative" alongside
+        # structured fields, strip narratives before applying (descriptor-driven auto text).
+        if "subjectives" in template_soap:
+            subj = merged_soap.get("subjectives")
+            if isinstance(subj, dict):
+                blocks = subj.get("blocks")
+                if isinstance(blocks, list):
+                    for bd in blocks:
+                        if isinstance(bd, dict):
+                            bd["narrative"] = ""
+
         self._apply_soap_to_ui(merged_soap)
 
     def _open_templates_popup(self):

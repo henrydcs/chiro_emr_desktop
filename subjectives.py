@@ -250,7 +250,34 @@ class SubjectivesPage(ttk.Frame):
             out.append(txt)
         return out
 
+    
+    def _narrative_without_sentences_already_in_auto(self, auto: str, user_narr: str) -> str:
+        """
+        For Live Preview: drop narrative sentences that already appear (case-insensitive)
+        as substrings of the auto paragraph, so template 'stale' narrative does not repeat.
+        """
+        a = (auto or "").strip()
+        u = (user_narr or "").strip()
+        if not u:
+            return ""
+        if not a:
+            return u
 
+        auto_cf = a.casefold()
+
+        def _sentences(text: str) -> list[str]:
+            parts = re.split(r"(?<=[.!?])\s+", (text or "").strip())
+            return [p.strip() for p in parts if p.strip()]
+
+        kept: list[str] = []
+        for sent in _sentences(u):
+            if len(sent) >= 8 and sent.casefold() in auto_cf:
+                continue
+            kept.append(sent)
+
+        return " ".join(kept).strip()
+    
+    
     def _tokens_from_block_for_preview(self, b) -> list[str]:
         toks: list[str] = []
 
@@ -362,6 +389,8 @@ class SubjectivesPage(ttk.Frame):
 
                 # Auto-generated region text with bolded selected items
                 runs.extend(self._emphasis_runs(auto + "\n\n", block_tokens))
+
+                user_narr = self._narrative_without_sentences_already_in_auto(auto, user_narr)
 
                 # Narrative under same region gets same token emphasis (matches PDF intent)
                 if user_narr:
