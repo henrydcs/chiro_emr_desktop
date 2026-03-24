@@ -1519,11 +1519,36 @@ class ObjectivesBlock(ttk.Frame):
         self._build_notes_area()
 
     def _build_section_frames(self):
-        self.section_container = ttk.Frame(self)
-        self.section_container.pack(fill="both", expand=True, padx=10, pady=(0, 10))
+        scroll_wrap = ttk.Frame(self)
+        scroll_wrap.pack(fill="both", expand=True, padx=10, pady=(0, 10))
+        scroll_wrap.grid_rowconfigure(0, weight=1)
+        scroll_wrap.grid_columnconfigure(0, weight=1)
+
+        self._section_canvas = tk.Canvas(scroll_wrap, highlightthickness=0)
+        vsb = ttk.Scrollbar(scroll_wrap, orient="vertical", command=self._section_canvas.yview)
+        self._section_canvas.configure(yscrollcommand=vsb.set)
+
+        self._section_canvas.grid(row=0, column=0, sticky="nsew")
+        vsb.grid(row=0, column=1, sticky="ns")
+
+        self.section_container = ttk.Frame(self._section_canvas)
+        self._section_canvas_window = self._section_canvas.create_window(
+            (0, 0), window=self.section_container, anchor="nw"
+        )
+
+        def _sync_scrollregion(_event=None):
+            self._section_canvas.configure(scrollregion=self._section_canvas.bbox("all"))
+
+        self.section_container.bind("<Configure>", _sync_scrollregion)
+
+        def _fill_canvas_width(event):
+            self._section_canvas.itemconfig(self._section_canvas_window, width=event.width)
+
+        self._section_canvas.bind("<Configure>", _fill_canvas_width)
+
         self.section_container.grid_rowconfigure(0, weight=1)
         self.section_container.grid_columnconfigure(0, weight=1)
-        
+
         self.palp_frame = ttk.LabelFrame(self.section_container, text="Palpation")
         self.ortho_frame = ttk.LabelFrame(self.section_container, text="Orthopedic Exam")
         self.rom_frame = ttk.LabelFrame(self.section_container, text="Range of Motion")
@@ -1531,6 +1556,18 @@ class ObjectivesBlock(ttk.Frame):
         for f in (self.palp_frame, self.ortho_frame, self.rom_frame):
             f.grid(row=0, column=0, sticky="nsew")
             f.grid_columnconfigure(0, weight=1)
+
+        def _on_mousewheel(event):
+            self._section_canvas.yview_scroll(int(-1 * (event.delta / 120)), "units")
+
+        def _bind_wheel(_e=None):
+            self._section_canvas.bind_all("<MouseWheel>", _on_mousewheel)
+
+        def _unbind_wheel(_e=None):
+            self._section_canvas.unbind_all("<MouseWheel>")
+
+        self._section_canvas.bind("<Enter>", _bind_wheel)
+        self._section_canvas.bind("<Leave>", _unbind_wheel)
 
     def _clear_frame(self, frame):
         for c in frame.winfo_children():

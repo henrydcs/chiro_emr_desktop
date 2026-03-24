@@ -1093,7 +1093,7 @@ class PlanPage(ttk.Frame):
         root = self.winfo_toplevel()
         popup = tk.Toplevel(root)
         popup.title("Services Provided Today")
-        popup.geometry("500x550")
+        popup.geometry("500x600")
         popup.grab_set()
 
         frame = ttk.Frame(popup, padding=20)
@@ -1362,7 +1362,7 @@ class PlanPage(ttk.Frame):
     def open_therapy_details_popup(self, parent_win, therapy_name, list_idx):
         t_win = tk.Toplevel(parent_win)
         t_win.title(f"Setup: {therapy_name}")
-        t_win.geometry("500x500")
+        t_win.geometry("500x600")
         t_win.grab_set()
 
         body_parts = [
