@@ -1461,7 +1461,7 @@ class HOIPage(ttk.Frame):
             p1 = " ".join(p1_parts)
 
         elif injury == "Slip and Fall":
-            parts = [f"{reports} to have been sustained a slip and fall injury on {doi}."]
+            parts = [f"{reports} to have been involved in a slip and fall injury on {doi}."]
 
             if self.sf_circumstance_var.get() != "(none)":
                 parts.append(f"The patient states the incident involved {self.sf_circumstance_var.get().lower()}")
@@ -1475,7 +1475,7 @@ class HOIPage(ttk.Frame):
             p1 = " ".join(parts)
 
         elif injury == "Dog Bite":
-            parts = [f"{reports} {pro['subj']} sustained injuries due to a dog bite on {doi}."]
+            parts = [f"{reports} to have sustained injuries due to a dog bite on {doi}."]
 
             if self.db_location_var.get() != "(none)":
                 parts.append(f"The patient states the bite involved the {self.db_location_var.get().lower()}")
@@ -1488,8 +1488,17 @@ class HOIPage(ttk.Frame):
 
             p1 = " ".join(parts)
 
+        elif injury == "Work Injury":
+            parts = [f"{reports} to have sustained an injury during the regular course of employment duties on {doi}."]
+            
+            typed_course = _clean(self.course_notes_var.get())
+            if typed_course:
+                parts.append(self._ensure_period(typed_course))
+
+            p1 = " ".join(parts)
+
         else:
-            parts = [f"{reports} sustained the following mechanism of injury on {doi}."]
+            parts = [f"{reports} to have sustained the following mechanism of injury on {doi}."]
 
             typed_course = _clean(self.course_notes_var.get())
             if typed_course:
