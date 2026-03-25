@@ -711,7 +711,7 @@ class PlanPage(ttk.Frame):
         if therapy_name:
             self.open_therapy_details_popup(root, therapy_name, list_idx)
         else:
-            self.open_services_main_popup()
+            self.open_therapy_details_popup(root, therapy_name, list_idx)
 
     def focus_exam_popup(self) -> None:
         """Live Preview: open Services Provided Today popup (exam fields live there)."""
