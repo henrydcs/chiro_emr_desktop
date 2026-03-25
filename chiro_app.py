@@ -14,6 +14,8 @@
 
 # git log --oneline --decorate -5  
 
+# git pull origin master (for office computer on 03/25)
+
 
 # python chiro_app.py or
 

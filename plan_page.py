@@ -1392,8 +1392,10 @@ class PlanPage(ttk.Frame):
             row = ttk.Frame(t_win, padding=2)
             row.pack(fill="x", padx=20)
 
-            ttk.Checkbutton(row, text=part, variable=b_var, width=20, command=on_toggle).pack(side="left")
             ttk.Entry(row, textvariable=s_var, width=5).pack(side="right")
+            ttk.Checkbutton(row, text=part, variable=b_var, command=on_toggle).pack(
+                side="left", fill="x", expand=True
+            )
 
             active_therapy_vars[part] = (b_var, s_var)
 
