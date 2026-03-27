@@ -841,7 +841,7 @@ class App(tk.Tk):
         """
         When the user clicks inside the Live Preview, check whether the
         click landed on a main heading line or an important sub-heading.
-        If so, center that heading and optionally switch/focus the left panel.
+        If so, switch/focus the left panel without scrolling the preview.
         """
         txt = getattr(self, "hoi_preview_text", None)
         if txt is None or not txt.winfo_exists():
@@ -858,8 +858,7 @@ class App(tk.Tk):
         for heading_text, section_name in heading_map.items():
             tag_name = f"HEAD_{section_name.upper().replace(' ', '_').replace('/', '_')}"
             if tag_name in tags:
-                self._center_preview_on_heading_index(line_start)
-                self.show_page(section_name)
+                self.show_page(section_name, scroll_live_preview=False)
 
                 # Also let subheading logic run for more granular focus
                 try:
@@ -868,8 +867,6 @@ class App(tk.Tk):
                 except Exception:
                     line_content = ""
                 self._handle_preview_subheading_click(section_name, line_content)
-                # Re-center after left-panel layout settles (same heading as nav click).
-                self.after_idle(lambda sn=section_name: self._center_preview_on_section(sn))
                 return
 
         # 2) Fallback: match by exact line text (in case tag wasn't applied)
@@ -881,10 +878,8 @@ class App(tk.Tk):
 
         if line_content in heading_map:
             section_name = heading_map[line_content]
-            self._center_preview_on_heading_index(line_start)
-            self.show_page(section_name)
+            self.show_page(section_name, scroll_live_preview=False)
             self._handle_preview_subheading_click(section_name, line_content)
-            self.after_idle(lambda sn=section_name: self._center_preview_on_section(sn))
             return
 
         
@@ -897,49 +892,49 @@ class App(tk.Tk):
         if assess_line:
             # ASSESSMENT heading -> Assessment sub-section
             if assess_line.upper().startswith("ASSESSMENT"):
-                self.show_page("Diagnosis")
+                self.show_page("Diagnosis", scroll_live_preview=False)
                 if hasattr(self, "diagnosis_page") and hasattr(self.diagnosis_page, "focus_assessment_block"):
                     self.diagnosis_page.focus_assessment_block()
                 return
 
             # Diagnosis -> Dx Block
             if assess_line.startswith("Diagnosis"):
-                self.show_page("Diagnosis")
+                self.show_page("Diagnosis", scroll_live_preview=False)
                 if hasattr(self, "diagnosis_page") and hasattr(self.diagnosis_page, "focus_diagnosis_block"):
                     self.diagnosis_page.focus_diagnosis_block()
                 return
 
             # Causation
             if assess_line.startswith("Causation"):
-                self.show_page("Diagnosis")
+                self.show_page("Diagnosis", scroll_live_preview=False)
                 if hasattr(self, "diagnosis_page") and hasattr(self.diagnosis_page, "focus_causation_block"):
                     self.diagnosis_page.focus_causation_block()
                 return
 
             # Prognosis
             if assess_line.startswith("Prognosis"):
-                self.show_page("Diagnosis")
+                self.show_page("Diagnosis", scroll_live_preview=False)
                 if hasattr(self, "diagnosis_page") and hasattr(self.diagnosis_page, "focus_prognosis_block"):
                     self.diagnosis_page.focus_prognosis_block()
                 return
 
             # Imaging
             if assess_line.startswith("Imaging"):
-                self.show_page("Diagnosis")
+                self.show_page("Diagnosis", scroll_live_preview=False)
                 if hasattr(self, "diagnosis_page") and hasattr(self.diagnosis_page, "focus_imaging_block"):
                     self.diagnosis_page.focus_imaging_block()
                 return
 
             # Referrals
             if assess_line.startswith("Referrals"):
-                self.show_page("Diagnosis")
+                self.show_page("Diagnosis", scroll_live_preview=False)
                 if hasattr(self, "diagnosis_page") and hasattr(self.diagnosis_page, "focus_referrals_block"):
                     self.diagnosis_page.focus_referrals_block()
                 return
 
             # Current Work Status / Work Duties
             if "Current Work Status" in assess_line or "Work Duties" in assess_line:
-                self.show_page("Diagnosis")
+                self.show_page("Diagnosis", scroll_live_preview=False)
                 if hasattr(self, "diagnosis_page") and hasattr(self.diagnosis_page, "focus_work_status_block"):
                     self.diagnosis_page.focus_work_status_block()
                 return
@@ -949,14 +944,14 @@ class App(tk.Tk):
         if plan_line:
             # Care Type(s): -> Treatment block
             if plan_line.startswith("Care Type(s):"):
-                self.show_page("Plan")
+                self.show_page("Plan", scroll_live_preview=False)
                 if hasattr(self, "plan_page") and hasattr(self.plan_page, "focus_care_types_block"):
                     self.plan_page.focus_care_types_block()
                 return
 
             # Regions: -> Regions Treated block
             if plan_line.startswith("Regions:"):
-                self.show_page("Plan")
+                self.show_page("Plan", scroll_live_preview=False)
                 if hasattr(self, "plan_page") and hasattr(self.plan_page, "focus_regions_treated_block"):
                     self.plan_page.focus_regions_treated_block()
                 return
@@ -967,28 +962,28 @@ class App(tk.Tk):
                 or plan_line.startswith("Duration:")
                 or plan_line.startswith("Re-evaluation:")
             ):
-                self.show_page("Plan")
+                self.show_page("Plan", scroll_live_preview=False)
                 if hasattr(self, "plan_page") and hasattr(self.plan_page, "focus_schedule_block"):
                     self.plan_page.focus_schedule_block()
                 return
 
             # Goals: -> Goals block
             if plan_line.startswith("Goals:"):
-                self.show_page("Plan")
+                self.show_page("Plan", scroll_live_preview=False)
                 if hasattr(self, "plan_page") and hasattr(self.plan_page, "focus_goals_block"):
                     self.plan_page.focus_goals_block()
                 return
 
             # Work Duties: -> Current Work Status block (Assessment page)
             if plan_line.startswith("Work Duties:"):
-                self.show_page("Diagnosis")
+                self.show_page("Diagnosis", scroll_live_preview=False)
                 if hasattr(self, "diagnosis_page") and hasattr(self.diagnosis_page, "focus_work_status_block"):
                     self.diagnosis_page.focus_work_status_block()
                 return
 
                         # Services Provided Today -> Services Provided Today block + popup
             if plan_line.startswith("Services Provided Today"):
-                self.show_page("Plan")
+                self.show_page("Plan", scroll_live_preview=False)
                 if hasattr(self, "plan_page") and hasattr(self.plan_page, "focus_services_block"):
                     self.plan_page.focus_services_block()
                 return
@@ -998,7 +993,7 @@ class App(tk.Tk):
                 plan_line.strip().startswith("Segment(s) Adjusted")
                 or "Technique(s):" in plan_line
             ):
-                self.show_page("Plan")
+                self.show_page("Plan", scroll_live_preview=False)
                 if hasattr(self, "plan_page") and hasattr(self.plan_page, "focus_cmt_details_popup"):
                     self.plan_page.focus_cmt_details_popup()
                 return
@@ -1008,14 +1003,14 @@ class App(tk.Tk):
                 plan_line.startswith("Chiropractic Manipulative Treatment")
                 or plan_line.strip().startswith("Adjustment Code:")
             ):
-                self.show_page("Plan")
+                self.show_page("Plan", scroll_live_preview=False)
                 if hasattr(self, "plan_page") and hasattr(self.plan_page, "focus_cmt_popup"):
                     self.plan_page.focus_cmt_popup()
                 return
 
             # Therapeutic Modalities heading -> main Services popup
             if plan_line.startswith("Therapeutic Modalities"):
-                self.show_page("Plan")
+                self.show_page("Plan", scroll_live_preview=False)
                 if hasattr(self, "plan_page") and hasattr(self.plan_page, "focus_services_block"):
                     self.plan_page.focus_services_block()
                     self.plan_page.open_services_main_popup()
@@ -1023,7 +1018,7 @@ class App(tk.Tk):
 
             # Modality Code lines -> open that specific therapy popup
             if plan_line.strip().startswith("Modality Code:"):
-                self.show_page("Plan")
+                self.show_page("Plan", scroll_live_preview=False)
                 if hasattr(self, "plan_page") and hasattr(self.plan_page, "focus_therapy_popup"):
                     code = ""
                     try:
@@ -1035,7 +1030,7 @@ class App(tk.Tk):
 
             # Therapy body-part / minutes lines (indented, contain " — " and "minutes")
             if "minutes" in plan_line.lower() and "—" in plan_line:
-                self.show_page("Plan")
+                self.show_page("Plan", scroll_live_preview=False)
                 if hasattr(self, "plan_page") and hasattr(self.plan_page, "focus_services_block"):
                     self.plan_page.focus_services_block()
                     self.plan_page.open_services_main_popup()
@@ -1046,7 +1041,7 @@ class App(tk.Tk):
                 plan_line.startswith("Examination and Management")
                 or plan_line.strip().startswith("Exam Code:")
             ):
-                self.show_page("Plan")
+                self.show_page("Plan", scroll_live_preview=False)
                 if hasattr(self, "plan_page") and hasattr(self.plan_page, "focus_exam_popup"):
                     self.plan_page.focus_exam_popup()
                 return
@@ -1056,7 +1051,7 @@ class App(tk.Tk):
 
         # "Patient points to" sentence -> Subjectives, points view
         if "points to" in (line_content or "").lower():
-            self.show_page("Subjectives")
+            self.show_page("Subjectives", scroll_live_preview=False)
             if hasattr(self, "subjectives_page") and hasattr(self.subjectives_page, "focus_points_to"):
                 self.subjectives_page.focus_points_to(line_content)
             return
@@ -1069,7 +1064,7 @@ class App(tk.Tk):
 
         if line_content in REGION_LABELS.values():
             section_name = "Subjectives"
-            self.show_page("Subjectives")
+            self.show_page("Subjectives", scroll_live_preview=False)
             self._handle_preview_subheading_click(section_name, line_content)
             return
 
@@ -1087,7 +1082,7 @@ class App(tk.Tk):
             _parts = _obj_line.split()
             _tag = _normalize_obj_tag(_parts[-1]) if _parts else ""
             if _tag:
-                self.show_page("Objectives")
+                self.show_page("Objectives", scroll_live_preview=False)
                 if hasattr(self, "objectives_page") and hasattr(self.objectives_page, "focus_palpation_region"):
                     self.objectives_page.focus_palpation_region(_tag)
             return
@@ -1095,7 +1090,7 @@ class App(tk.Tk):
             _parts = _obj_line.split()
             _tag = _normalize_obj_tag(_parts[-1]) if _parts else ""
             if _tag:
-                self.show_page("Objectives")
+                self.show_page("Objectives", scroll_live_preview=False)
                 if hasattr(self, "objectives_page") and hasattr(self.objectives_page, "focus_orthopedic_region"):
                     self.objectives_page.focus_orthopedic_region(_tag)
             return
@@ -1103,7 +1098,7 @@ class App(tk.Tk):
             _parts = _obj_line.split()
             _tag = _normalize_obj_tag(_parts[-1]) if _parts else ""
             if _tag:
-                self.show_page("Objectives")
+                self.show_page("Objectives", scroll_live_preview=False)
                 if hasattr(self, "objectives_page") and hasattr(self.objectives_page, "focus_rom_region"):
                     self.objectives_page.focus_rom_region(_tag)
             return
@@ -1123,13 +1118,12 @@ class App(tk.Tk):
             or _obj_line.startswith("Grip Strength")
             or "Spinal Palpatory Inspection" in _obj_line
         ):
-            self.show_page("Objectives")
+            self.show_page("Objectives", scroll_live_preview=False)
             self._handle_preview_subheading_click("Objectives", line_content)
             return
 
         # HOI subheading + keywords inside the MOI narrative...
         lower = (line_content or "").lower()
-        ...
 
         if (
             "mechanism of injury" in lower
@@ -1139,7 +1133,7 @@ class App(tk.Tk):
         ):
             # Always use the HOI page for these keywords
             section_name = "HOI History"
-            self.show_page("HOI History")
+            self.show_page("HOI History", scroll_live_preview=False)
 
             # Column within the line where the user clicked (0-based)
             try:
@@ -2326,15 +2320,15 @@ class App(tk.Tk):
 
     # ---------- Page switching ----------
 
-    def show_page(self, page_name: str):
+    def show_page(self, page_name: str, *, scroll_live_preview: bool = True):
         if page_name not in self.pages:
             return
         self.current_page.set(page_name)
         self.pages[page_name].tkraise()
         self._refresh_page_button_styles()
 
-        # Also center the Live Preview on the corresponding heading, if any.
-        self._center_preview_on_section(page_name)
+        if scroll_live_preview:
+            self._center_preview_on_section(page_name)
 
 
     def _refresh_page_button_styles(self):
