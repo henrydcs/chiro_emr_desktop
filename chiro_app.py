@@ -695,7 +695,7 @@ class App(tk.Tk):
 
                 # Add top/bottom spacer strips (light blue) to allow centering
                 # of first/last headings with visible empty space.
-                self._augment_preview_with_spacers(txt)
+                # self._augment_preview_with_spacers(txt)
 
                 # Tag heading lines and build the index registry for centering.
                 self._retag_preview_headings(txt)
@@ -714,33 +714,33 @@ class App(tk.Tk):
             self._refreshing_preview = False
 
 
-    def _augment_preview_with_spacers(self, txt: "tk.Text") -> None:
-        """
-        Ensure there is some light-blue "empty" space at the top and bottom
-        of the Live Preview so that the first / last headings can be scrolled
-        toward the vertical center.
+    # def _augment_preview_with_spacers(self, txt: "tk.Text") -> None:
+    #     """
+    #     Ensure there is some light-blue "empty" space at the top and bottom
+    #     of the Live Preview so that the first / last headings can be scrolled
+    #     toward the vertical center.
 
-        Implementation: we insert a few blank lines at top and bottom, tagged
-        with a special SPACER_BG tag that uses a light-blue background.
-        """
-        # Configure the spacer tag once
-        txt.tag_configure("SPACER_BG", background="#e0f0ff")
+    #     Implementation: we insert a few blank lines at top and bottom, tagged
+    #     with a special SPACER_BG tag that uses a light-blue background.
+    #     """
+    #     # Configure the spacer tag once
+    #     txt.tag_configure("SPACER_BG", background="#e0f0ff")
 
-        # Insert top spacer only if not already present
-        first_line = txt.get("1.0", "2.0")
-        if "SPACER_MARKER_TOP" not in first_line:
-            txt.insert("1.0", "SPACER_MARKER_TOP\n", ("SPACER_BG",))
-            for _ in range(6):
-                txt.insert("2.0", "\n", ("SPACER_BG",))
+    #     # Insert top spacer only if not already present
+    #     first_line = txt.get("1.0", "2.0")
+    #     if "SPACER_MARKER_TOP" not in first_line:
+    #         txt.insert("1.0", "SPACER_MARKER_TOP\n", ("SPACER_BG",))
+    #         for _ in range(6):
+    #             txt.insert("2.0", "\n", ("SPACER_BG",))
 
-        # Insert bottom spacer only if not already present
-        # (Look at the last couple of lines for the marker.)
-        last_start = txt.index("end-2l")
-        last_text = txt.get(last_start, "end-1c")
-        if "SPACER_MARKER_BOTTOM" not in last_text:
-            txt.insert("end-1c", "\nSPACER_MARKER_BOTTOM", ("SPACER_BG",))
-            for _ in range(6):
-                txt.insert("end-1c", "\n", ("SPACER_BG",))
+    #     # Insert bottom spacer only if not already present
+    #     # (Look at the last couple of lines for the marker.)
+    #     last_start = txt.index("end-2l")
+    #     last_text = txt.get(last_start, "end-1c")
+    #     if "SPACER_MARKER_BOTTOM" not in last_text:
+    #         txt.insert("end-1c", "\nSPACER_MARKER_BOTTOM", ("SPACER_BG",))
+    #         for _ in range(6):
+    #             txt.insert("end-1c", "\n", ("SPACER_BG",))
 
     def _retag_preview_headings(self, txt: "tk.Text") -> None:
         """
