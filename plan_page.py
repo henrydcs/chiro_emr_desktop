@@ -81,6 +81,7 @@ class PlanPage(ttk.Frame):
         "Modalities (e-stim / heat and/or ice, spinal traction therapy)",
         "Home exercise program (HEP)",
         "Referral / co-management",
+        "Final Evaluation - Released from Active Chiropractic Care. The patient will continue treatment with his pain management doctor."
     ]
 
     REGIONS = [

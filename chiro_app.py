@@ -2,6 +2,9 @@
 
 #Git Hub to Work Between Computers
 
+# VS Code Dark High Contrast; press control k then immediately press control t; then choose Browse Other Themes and choose Dark High Contrast
+
+
 #Start of Day
 #git pull
 
