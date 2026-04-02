@@ -1151,7 +1151,9 @@ class PlanPage(ttk.Frame):
         )
                 
         em_options = [
-            "99203:Office or other outpatient visit for the evaluation and management (E/M) of a new patient, which requires a medically appropriate history and/or examination and low level of medical decision making (MDM)",
+            "99202: Office or other outpatient visit for the evaluation and management of a new patient, which requires a medically appropriate history and/or examination and straightforward medical decision making",      
+            "99202-25: Office or other outpatient visit for the evaluation and management of a new patient, which requires a medically appropriate history and/or examination and straightforward medical decision making",
+            "99203: Office or other outpatient visit for the evaluation and management (E/M) of a new patient, which requires a medically appropriate history and/or examination and low level of medical decision making (MDM)",
             "99203-25: Office or other outpatient visit for the evaluation and management (E/M) of a new patient, which requires a medically appropriate history and/or examination and low level of medical decision making (MDM)",
             "99212: Office/outpatient visit (straightforward)",
             "99212-25: Office/outpatient visit (straightforward)",
