@@ -1158,6 +1158,7 @@ class PlanPage(ttk.Frame):
             "99212: Office/outpatient visit (straightforward)",
             "99212-25: Office/outpatient visit (straightforward)",
             "99213: Office/outpatient visit (low complexity)",
+            "99213-25: Office/outpatient visit (low complexity)",
             "99214: Office/outpatient visit (moderate complexity)",
         ]
 

@@ -89,8 +89,8 @@ DX_LIST: list[tuple[str, str]] = [
     ("--------------------------------", "---------------------------"),   
 
     # Incident / mechanism (useful in PI documentation)
-    ("Driver injured in unspecified motor-vehicle accident, traffic (initial encounter)", "V89.2XXA"),
-    ("Passenger injured in unspecified motor-vehicle accident, traffic (initial encounter)", "V89.2XXA"),
+    ("Driver injured in unspecified motor-vehicle accident, traffic (initial encounter)", "V49.40XA"),
+    ("Passenger injured in unspecified motor-vehicle accident, traffic (initial encounter)", "V49.59XA"),
     ("Fall on same level from slipping/tripping (initial encounter)", "W01.0XXA"),
     ("Dog bite (initial encounter)", "W54.0XXA"),
     ("--------------------------------", "---------------------------"), 
