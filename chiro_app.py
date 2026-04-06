@@ -3,6 +3,7 @@
 #Git Hub to Work Between Computers
 
 # VS Code Dark High Contrast; press control k then immediately press control t; then choose Browse Other Themes and choose Dark High Contrast
+# If using Cursor in VS Code, press control/shift P, then type theme color or search theme color
 
 
 #Start of Day
@@ -55,6 +56,7 @@ from patient_storage import new_patient_id, get_patient_root, find_patient_root
 from tk_docs_page import TkDocsPage
 from pdf_export import REPORTLAB_OK, build_combined_pdf
 from pdf_export import diagnosis_struct_to_live_preview_runs
+import copy
 from master_save import MasterSaveController
 from config import (
     UI_PAGES,
@@ -104,6 +106,9 @@ TEMPLATE_CATEGORIES = [
     ("finals", "Finals"),
 ]
 
+# Only "initials" templates may replace diagnosis from the template file;
+# other categories keep diagnosis aligned with the previous saved exam (see apply_template_to_current_exam).
+TEMPLATE_CATEGORY_INITIALS_SLUG = "initials"
 
 def get_templates_root() -> Path:
     """
@@ -2875,16 +2880,75 @@ class App(tk.Tk):
         except Exception:
             pass
 
-    def apply_template_to_current_exam(self, template_dict: dict):
+    def _previous_exam_in_nav_order(self) -> str | None:
+        """Exam name immediately before the current one in self.exams (index order), if any."""
+        cur = (self.current_exam.get() or "").strip()
+        exams = getattr(self, "exams", None) or []
+        if not cur or not exams:
+            return None
+        for i, name in enumerate(exams):
+            if name.lower() == cur.lower():
+                return exams[i - 1] if i > 0 else None
+        return None
+
+    def _load_soap_dict_from_saved_exam(self, exam_name: str) -> dict | None:
+        """Load soap dict from disk for a named exam, or None if missing/unreadable."""
+        path = self.compute_exam_path(exam_name)
+        if not path or not os.path.exists(path):
+            return None
+        try:
+            with open(path, "r", encoding="utf-8") as f:
+                payload = json.load(f) or {}
+            soap = payload.get("soap")
+            return soap if isinstance(soap, dict) else None
+        except Exception:
+            return None
+
+    def _overlay_diagnosis_from_prior_saved_exam(self, merged_soap: dict) -> None:
+        """
+        Replace merged_soap diagnosis keys with those from the previous exam's saved JSON.
+        Mutates merged_soap in place.
+        """
+        prev_name = self._previous_exam_in_nav_order()
+        if not prev_name:
+            return
+        prev_soap = self._load_soap_dict_from_saved_exam(prev_name)
+        if not prev_soap:
+            return
+        dx_struct = prev_soap.get("diagnosis_struct")
+        if isinstance(dx_struct, dict):
+            merged_soap["diagnosis_struct"] = copy.deepcopy(dx_struct)
+        else:
+            merged_soap.pop("diagnosis_struct", None)
+        merged_soap["diagnosis"] = prev_soap.get("diagnosis", "")
+    
+    def apply_template_to_current_exam(
+        self,
+        template_dict: dict,
+        template_category_slug: str | None = None,
+    ):
         """
         Merge template (partial soap) into current exam payload and refresh UI.
-        Does not save to file or change exam type. Template can be { "soap": {...} } or direct soap keys.
+
+        - Templates in folder slug TEMPLATE_CATEGORY_INITIALS_SLUG may update diagnosis from the file.
+        - All other categories: ignore diagnosis in the template and, after merge, copy diagnosis
+          from the *previous* exam's saved JSON (nav order in self.exams) so it stays aligned with
+          the last visit; you can still edit diagnosis in the UI afterward.
         """
         if not template_dict:
             return
         template_soap = template_dict.get("soap")
         if template_soap is None:
             template_soap = {k: v for k, v in template_dict.items() if k != "template_name"}
+
+        template_soap = dict(template_soap)
+        preserve_dx_from_prior_exam = (
+            template_category_slug is not None
+            and template_category_slug != TEMPLATE_CATEGORY_INITIALS_SLUG
+        )
+        if preserve_dx_from_prior_exam:
+            template_soap.pop("diagnosis_struct", None)
+            template_soap.pop("diagnosis", None)
 
         # Optional: reset active Subjectives blocks to "(none)" so region change clears
         # narrative (same idea as toggling region in the UI). Only affects merged
@@ -2895,7 +2959,6 @@ class App(tk.Tk):
                 for block in getattr(subj_page, "blocks", []) or []:
                     if callable(getattr(block, "is_active", None)) and block.is_active():
                         block.region_var.set("(none)")
-                # Traces usually run immediately; this flushes pending geometry if needed.
                 self.update_idletasks()
         except Exception:
             pass
@@ -2916,6 +2979,9 @@ class App(tk.Tk):
                     for bd in blocks:
                         if isinstance(bd, dict):
                             bd["narrative"] = ""
+
+        if preserve_dx_from_prior_exam:
+            self._overlay_diagnosis_from_prior_saved_exam(merged_soap)
 
         self._apply_soap_to_ui(merged_soap)
 
@@ -2989,7 +3055,9 @@ class App(tk.Tk):
                 apply_btn = ttk.Button(
                     row,
                     text=label,
-                    command=lambda d=data.copy(), p=popup: self._apply_template_and_close(d, p),
+                    command=lambda d=data.copy(), p=popup, cat=slug: self._apply_template_and_close(
+                        d, p, cat
+                    ),
                 )
                 apply_btn.pack(side="left", fill="x", expand=True)
 
@@ -3122,8 +3190,13 @@ class App(tk.Tk):
         except Exception as e:
             messagebox.showerror("Save Template", f"Could not save template:\n{e}", parent=self)
 
-    def _apply_template_and_close(self, template_dict: dict, popup: tk.Toplevel):
-        self.apply_template_to_current_exam(template_dict)
+    def _apply_template_and_close(
+        self,
+        template_dict: dict,
+        popup: tk.Toplevel,
+        template_category_slug: str | None = None,
+    ):
+        self.apply_template_to_current_exam(template_dict, template_category_slug)
         try:
             popup.destroy()
         except Exception:
