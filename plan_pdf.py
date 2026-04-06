@@ -38,6 +38,19 @@ def _services_ctx(d: dict) -> dict:
     s = d.get("services") if isinstance(d, dict) else None
     return s if isinstance(s, dict) else {}
 
+def _split_em_code_option(em_code: str) -> tuple[str, str]:
+    """
+    em_code is stored like '99203-25: Description text...'.
+    Returns (code_part, description_part). Description may be ''.
+    """
+    s = _clean(em_code)
+    if not s:
+        return ("", "")
+    if ":" not in s:
+        return (s, "")
+    left, right = s.split(":", 1)
+    return (left.strip(), right.strip())
+
 
 def _format_cmt_code_label(cmt_code: str) -> str:
     # "98941: Spinal, 3-4 regions" -> "Spinal, 3-4 Regions (98941)"
@@ -371,12 +384,19 @@ def _build_services_flowables(d: dict, B) -> list:
         # Section title (matches Chiropractic CMT style)
         story.append(Paragraph("<b>Examination and Management</b>", SUBHEAD))
 
-        # Exam Code line
         if exam_code:
-            code_num = exam_code.split(":")[0].strip()
-            story.append(
-                Paragraph(f"Exam Code: <b>{esc(code_num)}</b>", LINE)
-            )
+            code_num, em_desc = _split_em_code_option(exam_code)
+            if code_num and em_desc:
+                story.append(
+                    Paragraph(
+                        f"Exam Code: <b>{esc(code_num)}</b> \u2014 {esc(em_desc)}",
+                        LINE,
+                    )
+                )
+            elif code_num:
+                story.append(
+                    Paragraph(f"Exam Code: <b>{esc(code_num)}</b>", LINE)
+                )
 
         # Notes line (indented same level)
         if exam_notes:
@@ -479,8 +499,11 @@ def _services_to_plain_text(d: dict) -> str:
             lines.append("")
         lines.append("Examination and Management")
         if exam_code:
-            code_num = (exam_code or "").split(":")[0].strip()
-            lines.append(f"  Exam Code: {code_num}")
+            code_num, em_desc = _split_em_code_option(exam_code)
+            if code_num and em_desc:
+                lines.append(f"  Exam Code: {code_num} — {em_desc}")
+            elif code_num:
+                lines.append(f"  Exam Code: {code_num}")
         if exam_notes:
             lines.append(f"  Notes: {exam_notes}")
 
