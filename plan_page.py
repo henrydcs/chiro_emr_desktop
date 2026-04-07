@@ -1156,7 +1156,7 @@ class PlanPage(ttk.Frame):
             "99203: Office or other outpatient visit for the evaluation and management (E/M) of a new patient, which requires a medically appropriate history and/or examination and low level of medical decision making (MDM)",
             "99203-25: Office or other outpatient visit for the evaluation and management (E/M) of a new patient, which requires a medically appropriate history and/or examination and low level of medical decision making (MDM). Performed Initial Evaluation.",
             "99212: Office/outpatient visit (straightforward)",
-            "99212-25: Office/outpatient visit (straightforward)",
+            "99212-25: A significant, separately identifiable evaluation and management service was performed alongside today's CMT to conduct a formal re-evaluation of the patient’s progress, encompassing a medically appropriate history, physical examination, and low-level medical decision-making to update the treatment plan.",
             "99213: Office/outpatient visit (low complexity)",
             "99213-25: Office/outpatient visit (low complexity)",
             "99214: Office/outpatient visit (moderate complexity)",
