@@ -68,6 +68,9 @@ RADIC_SYMPTOMS = ["None", "Numbness", "Tingling", "Weakness", "Sypmtoms", "Disco
 
 RADIC_LOCATIONS = [
     "(select)",
+    "Bilateral upper trapezius muscles",
+    "Left upper trapezius muscle", 
+    "Right upper trapezius muscle",
     "Bilateral shoulders", "Left shoulder", "Right shoulder",    
     "Bilateral arms", "Left arm", "Right arm",
     "Bilateral elbows", "Left elbow", "Right elbow",
