@@ -54,7 +54,14 @@ from config import PATIENTS_ID_ROOT
 from doc_vault_page import upsert_vault_file
 from patient_storage import new_patient_id, get_patient_root, find_patient_root
 from tk_docs_page import TkDocsPage
-from pdf_export import REPORTLAB_OK, build_combined_pdf
+from pdf_export import (
+    REPORTLAB_OK,
+    build_combined_pdf,
+    build_imaging_recommendation_letter_pdf,
+    imaging_dx_choices_by_body_part,
+    imaging_modalities_in_payload,
+    imaging_recommendation_letter_should_generate,
+)
 from pdf_export import diagnosis_struct_to_live_preview_runs
 import copy
 from master_save import MasterSaveController
@@ -294,6 +301,8 @@ class App(tk.Tk):
         self._loading = False
 
         self.last_exam_pdf_paths: dict[str, str] = {}
+        self.last_imaging_letter_pdf_paths: dict[str, list[str]] = {}
+        self.imaging_letter_dx_selections: dict[str, dict[str, dict[str, str]]] = {}
         self.last_all_exams_pdf_path = ""
 
         self._mousewheel_target = None
@@ -1524,6 +1533,12 @@ class App(tk.Tk):
         if not hasattr(self, "last_exam_pdf_paths") or not isinstance(self.last_exam_pdf_paths, dict):
             self.last_exam_pdf_paths = {}
         self.last_exam_pdf_paths[exam_name] = ""
+        if not hasattr(self, "last_imaging_letter_pdf_paths") or not isinstance(self.last_imaging_letter_pdf_paths, dict):
+            self.last_imaging_letter_pdf_paths = {}
+        self.last_imaging_letter_pdf_paths[exam_name] = []
+        if not hasattr(self, "imaging_letter_dx_selections") or not isinstance(self.imaging_letter_dx_selections, dict):
+            self.imaging_letter_dx_selections = {}
+        self.imaging_letter_dx_selections[exam_name] = {}
 
         # Switch to it (no file exists yet -> clear exam content)
         self.current_exam.set(exam_name)
@@ -1613,6 +1628,18 @@ class App(tk.Tk):
                                 os.remove(os.path.join(vault_dir, fn))
                             except Exception:
                                 pass
+
+                vault_img = os.path.join(patient_root, "vault", "imaging")
+                if os.path.isdir(vault_img):
+                    for fn in os.listdir(vault_img):
+                        low = fn.lower()
+                        if not low.endswith(".pdf"):
+                            continue
+                        if f"__{exam_slug}__letter_" in low or low.endswith(f"__{exam_slug}__imaging_recommendation.pdf"):
+                            try:
+                                os.remove(os.path.join(vault_img, fn))
+                            except Exception:
+                                pass
         except Exception:
             pass
 
@@ -1627,6 +1654,17 @@ class App(tk.Tk):
         try:
             if hasattr(self, "last_exam_pdf_paths") and isinstance(self.last_exam_pdf_paths, dict):
                 self.last_exam_pdf_paths.pop(exam_name, None)
+        except Exception:
+            pass
+
+        try:
+            if hasattr(self, "last_imaging_letter_pdf_paths") and isinstance(self.last_imaging_letter_pdf_paths, dict):
+                self.last_imaging_letter_pdf_paths.pop(exam_name, None)
+        except Exception:
+            pass
+        try:
+            if hasattr(self, "imaging_letter_dx_selections") and isinstance(self.imaging_letter_dx_selections, dict):
+                self.imaging_letter_dx_selections.pop(exam_name, None)
         except Exception:
             pass
 
@@ -1794,7 +1832,371 @@ class App(tk.Tk):
                 pass
             messagebox.showerror("Export PDF Failed", f"Could not create the PDF:\n\n{e}")
 
-    
+    def _purge_stale_imaging_letters_vault(self, patient_root: str, exam: str) -> None:
+        """Remove prior letter PDFs for this exam (per-modality names + legacy single file)."""
+        exam_slug = safe_slug(exam).lower()
+        vault_dir = os.path.join(patient_root, "vault", "imaging")
+        if not os.path.isdir(vault_dir):
+            return
+        try:
+            for fn in os.listdir(vault_dir):
+                low = fn.lower()
+                if not low.endswith(".pdf"):
+                    continue
+                if f"__{exam_slug}__letter_" in low or low.endswith(f"__{exam_slug}__imaging_recommendation.pdf"):
+                    try:
+                        os.remove(os.path.join(vault_dir, fn))
+                    except Exception:
+                        pass
+        except Exception:
+            pass
+
+    def _resolve_imaging_letter_vault_paths(self, patient_root: str, exam: str) -> list[str]:
+        """All imaging letter PDFs for this exam (per-modality + legacy naming)."""
+        exam_slug = safe_slug(exam).lower()
+        vault_dir = os.path.join(patient_root, "vault", "imaging")
+        if not os.path.isdir(vault_dir):
+            return []
+        matches: list[str] = []
+        try:
+            for fn in os.listdir(vault_dir):
+                low = fn.lower()
+                if not low.endswith(".pdf"):
+                    continue
+                if f"__{exam_slug}__letter_" in low or low.endswith(f"__{exam_slug}__imaging_recommendation.pdf"):
+                    matches.append(os.path.join(vault_dir, fn))
+        except Exception:
+            return []
+        if not matches:
+            return []
+        try:
+            return sorted(matches, key=os.path.getmtime)
+        except Exception:
+            return matches
+
+    def _prompt_imaging_dx_selection_for_modality(self, payload: dict, exam: str, modality: str) -> dict[str, str] | None:
+        """
+        Ask user to choose exactly one diagnosis (Label + ICD shown) for each requested body part.
+        Returns {body_part: icd}. Returns None on cancel.
+        """
+        body_parts, choices_map = imaging_dx_choices_by_body_part(payload, modality)
+        if not body_parts:
+            return {}
+
+        missing = [bp for bp in body_parts if not choices_map.get(bp)]
+        if missing:
+            messagebox.showwarning(
+                "Imaging Letter Diagnosis Selection",
+                "No eligible diagnosis choices were found for:\n- "
+                + "\n- ".join(missing)
+                + "\n\nAdd/adjust diagnosis entries, then export again.",
+                parent=self,
+            )
+            return None
+
+        exam_map = self.imaging_letter_dx_selections.get(exam, {}) if isinstance(self.imaging_letter_dx_selections, dict) else {}
+        prior_map = exam_map.get((modality or "").strip().lower(), {}) if isinstance(exam_map, dict) else {}
+
+        dialog = tk.Toplevel(self)
+        dialog.title(f"Select Diagnostic Codes - {modality}")
+        dialog.transient(self)
+        dialog.grab_set()
+        dialog.resizable(False, False)
+
+        outer = ttk.Frame(dialog, padding=12)
+        outer.grid(row=0, column=0, sticky="nsew")
+        ttk.Label(
+            outer,
+            text=f"Choose one diagnosis for each requested body part ({modality}):",
+        ).grid(row=0, column=0, columnspan=2, sticky="w", pady=(0, 8))
+
+        display_to_icd: dict[str, dict[str, str]] = {}
+        vars_by_bp: dict[str, tk.StringVar] = {}
+
+        row = 1
+        for bp in body_parts:
+            bp_choices = choices_map.get(bp) or []
+            display_to_icd[bp] = {c.get("display", ""): c.get("icd", "") for c in bp_choices if isinstance(c, dict)}
+            displays = [c.get("display", "") for c in bp_choices if isinstance(c, dict) and c.get("display")]
+            if not displays:
+                continue
+
+            prior_icd = (prior_map.get(bp) or "").strip() if isinstance(prior_map, dict) else ""
+            default_display = displays[0]
+            if prior_icd:
+                for c in bp_choices:
+                    if isinstance(c, dict) and (c.get("icd") or "").strip() == prior_icd:
+                        d = (c.get("display") or "").strip()
+                        if d:
+                            default_display = d
+                            break
+
+            ttk.Label(outer, text=f"{bp}:").grid(row=row, column=0, sticky="w", pady=3, padx=(0, 8))
+            v = tk.StringVar(value=default_display)
+            vars_by_bp[bp] = v
+            cb = ttk.Combobox(
+                outer,
+                textvariable=v,
+                state="readonly",
+                values=displays,
+                width=72,
+            )
+            cb.grid(row=row, column=1, sticky="w", pady=3)
+            row += 1
+
+        result: dict[str, str] | None = None
+
+        def _on_ok():
+            nonlocal result
+            picked: dict[str, str] = {}
+            for bp in body_parts:
+                disp = (vars_by_bp.get(bp).get() if bp in vars_by_bp else "").strip()
+                icd = (display_to_icd.get(bp, {}).get(disp) or "").strip()
+                if not icd:
+                    messagebox.showwarning("Selection Required", f"Select a diagnosis for {bp}.", parent=dialog)
+                    return
+                picked[bp] = icd
+            result = picked
+            dialog.destroy()
+
+        def _on_cancel():
+            dialog.destroy()
+
+        btns = ttk.Frame(outer)
+        btns.grid(row=row, column=0, columnspan=2, sticky="e", pady=(10, 0))
+        ttk.Button(btns, text="Cancel", command=_on_cancel).grid(row=0, column=0, padx=(0, 6))
+        ttk.Button(btns, text="OK", command=_on_ok).grid(row=0, column=1)
+
+        dialog.protocol("WM_DELETE_WINDOW", _on_cancel)
+        dialog.update_idletasks()
+        try:
+            dialog.minsize(dialog.winfo_reqwidth(), dialog.winfo_reqheight())
+        except Exception:
+            pass
+        self.wait_window(dialog)
+        return result
+
+    def _prompt_single_imaging_dx_choice(self, modality: str, body_part: str, choices: list[dict], current_icd: str = "") -> str | None:
+        """Prompt for one diagnosis choice (Label + ICD) for a single body part."""
+        displays = [c.get("display", "") for c in choices if isinstance(c, dict) and c.get("display")]
+        if not displays:
+            return None
+        display_to_icd = {c.get("display", ""): c.get("icd", "") for c in choices if isinstance(c, dict)}
+        default_display = displays[0]
+        if current_icd:
+            for c in choices:
+                if isinstance(c, dict) and (c.get("icd") or "").strip() == (current_icd or "").strip():
+                    d = (c.get("display") or "").strip()
+                    if d:
+                        default_display = d
+                        break
+
+        dialog = tk.Toplevel(self)
+        dialog.title(f"Select Diagnosis - {modality}")
+        dialog.transient(self)
+        dialog.grab_set()
+        dialog.resizable(False, False)
+
+        outer = ttk.Frame(dialog, padding=12)
+        outer.grid(row=0, column=0, sticky="nsew")
+        ttk.Label(
+            outer,
+            text=f"Choose diagnosis for {modality} of {body_part}:",
+        ).grid(row=0, column=0, sticky="w", pady=(0, 8))
+        choice_var = tk.StringVar(value=default_display)
+        cb = ttk.Combobox(
+            outer,
+            textvariable=choice_var,
+            state="readonly",
+            values=displays,
+            width=72,
+        )
+        cb.grid(row=1, column=0, sticky="w")
+
+        picked_icd: str | None = None
+
+        def _on_ok():
+            nonlocal picked_icd
+            disp = (choice_var.get() or "").strip()
+            icd = (display_to_icd.get(disp) or "").strip()
+            if not icd:
+                messagebox.showwarning("Selection Required", f"Select a diagnosis for {body_part}.", parent=dialog)
+                return
+            picked_icd = icd
+            dialog.destroy()
+
+        def _on_cancel():
+            dialog.destroy()
+
+        btns = ttk.Frame(outer)
+        btns.grid(row=2, column=0, sticky="e", pady=(10, 0))
+        ttk.Button(btns, text="Cancel", command=_on_cancel).grid(row=0, column=0, padx=(0, 6))
+        ttk.Button(btns, text="OK", command=_on_ok).grid(row=0, column=1)
+        dialog.protocol("WM_DELETE_WINDOW", _on_cancel)
+        self.wait_window(dialog)
+        return picked_icd
+
+    def _on_imaging_recommendation_added(self, modality: str, body_part: str) -> None:
+        """
+        Triggered from Diagnosis page Add button so selection happens at data-entry time,
+        not repeatedly at export/master-save.
+        """
+        exam = (self.current_exam.get() or "").strip()
+        if not exam:
+            return
+        payload = self.make_payload() or {}
+        body_parts, choices_map = imaging_dx_choices_by_body_part(payload, modality)
+        if body_part not in body_parts:
+            return
+        bp_choices = choices_map.get(body_part) or []
+        if not bp_choices:
+            messagebox.showwarning(
+                "Imaging Letter Diagnosis Selection",
+                f"No eligible diagnosis choices were found for {modality} of {body_part}.\n\n"
+                "Add/adjust diagnosis entries, then click this recommendation again to pick one.",
+                parent=self,
+            )
+            return
+        exam_map = self.imaging_letter_dx_selections.get(exam, {})
+        if not isinstance(exam_map, dict):
+            exam_map = {}
+        mod_key = (modality or "").strip().lower()
+        mod_map = exam_map.get(mod_key, {})
+        if not isinstance(mod_map, dict):
+            mod_map = {}
+        current_icd = (mod_map.get(body_part) or "").strip()
+        picked = self._prompt_single_imaging_dx_choice(modality, body_part, bp_choices, current_icd)
+        if not picked:
+            return
+        mod_map[body_part] = picked
+        exam_map[mod_key] = mod_map
+        self.imaging_letter_dx_selections[exam] = exam_map
+        try:
+            self.write_settings({"imaging_letter_dx_selections": self.imaging_letter_dx_selections})
+        except Exception:
+            pass
+
+    def _on_imaging_recommendation_clicked(self, modality: str, body_part: str) -> None:
+        """
+        When user clicks an existing imaging recommendation, offer a quick way to change
+        the assigned diagnosis without deleting/re-adding the recommendation.
+        """
+        if not messagebox.askyesno(
+            "Imaging Recommendation",
+            f"Change selected diagnosis for {modality} of {body_part}?",
+            parent=self,
+        ):
+            return
+        self._on_imaging_recommendation_added(modality, body_part)
+
+    def _resolve_imaging_dx_selection_for_modality(self, payload: dict, exam: str, modality: str) -> dict[str, str] | None:
+        """
+        Return valid selections for this modality, using stored picks.
+        If picks are missing/invalid, prompt once for that modality.
+        """
+        body_parts, choices_map = imaging_dx_choices_by_body_part(payload, modality)
+        if not body_parts:
+            return {}
+        exam_map = self.imaging_letter_dx_selections.get(exam, {})
+        if not isinstance(exam_map, dict):
+            exam_map = {}
+        mod_key = (modality or "").strip().lower()
+        mod_map = exam_map.get(mod_key, {})
+        if not isinstance(mod_map, dict):
+            mod_map = {}
+
+        resolved: dict[str, str] = {}
+        missing = False
+        for bp in body_parts:
+            valid_icds = {
+                (c.get("icd") or "").strip()
+                for c in (choices_map.get(bp) or [])
+                if isinstance(c, dict) and (c.get("icd") or "").strip()
+            }
+            chosen = (mod_map.get(bp) or "").strip()
+            if chosen and chosen in valid_icds:
+                resolved[bp] = chosen
+            else:
+                missing = True
+        if not missing and len(resolved) == len(body_parts):
+            return resolved
+
+        picked = self._prompt_imaging_dx_selection_for_modality(payload, exam, modality)
+        if picked is None:
+            return None
+        return picked
+
+    def _export_imaging_recommendation_letter_vault(self, payload: dict, patient_root: str) -> list[str]:
+        """Build one letter PDF per imaging modality into vault/imaging. Returns list of vault paths."""
+        if not patient_root or not REPORTLAB_OK:
+            return []
+        exam = (payload.get("exam") or self.current_exam.get() or "").strip()
+        if not exam:
+            return []
+        if not imaging_recommendation_letter_should_generate(payload):
+            try:
+                self.last_imaging_letter_pdf_paths[exam] = []
+            except Exception:
+                pass
+            return []
+
+        modalities = imaging_modalities_in_payload(payload)
+        if not modalities:
+            try:
+                self.last_imaging_letter_pdf_paths[exam] = []
+            except Exception:
+                pass
+            return []
+
+        ensure_patient_dirs(patient_root)
+        pdf_dir = os.path.join(patient_root, PATIENT_SUBDIR_PDFS)
+        os.makedirs(pdf_dir, exist_ok=True)
+
+        date_str = normalize_mmddyyyy(self.exam_date_var.get()) or today_mmddyyyy()
+        date_slug = safe_slug(date_str)
+        exam_slug = safe_slug(exam)
+
+        vault_paths: list[str] = []
+        exam_selection_map = self.imaging_letter_dx_selections.get(exam, {})
+        if not isinstance(exam_selection_map, dict):
+            exam_selection_map = {}
+        selected_by_modality: dict[str, dict[str, str]] = {}
+        for mod in modalities:
+            mod_key = (mod or "").strip().lower()
+            picked = self._resolve_imaging_dx_selection_for_modality(payload, exam, mod)
+            if picked is None:
+                return []
+            selected_by_modality[mod_key] = dict(picked)
+
+        self._purge_stale_imaging_letters_vault(patient_root, exam)
+
+        for mod in modalities:
+            mod_slug = safe_slug(mod).lower().replace(" ", "_")
+            mod_key = (mod or "").strip().lower()
+            picked = selected_by_modality.get(mod_key, {})
+            exam_selection_map[mod_key] = dict(picked)
+            vault_name = f"{date_slug}__{exam_slug}__letter_{mod_slug}.pdf"
+            tmp_path = os.path.join(pdf_dir, f".tmp_imaging_letter__{exam_slug}__{mod_slug}.pdf")
+            try:
+                if build_imaging_recommendation_letter_pdf(tmp_path, payload, mod, picked):
+                    vp = upsert_vault_file(patient_root, "imaging", tmp_path, vault_name)
+                    vault_paths.append(vp)
+            except Exception as e:
+                print("Imaging letter vault upsert failed:", e)
+            finally:
+                try:
+                    if os.path.exists(tmp_path):
+                        os.remove(tmp_path)
+                except Exception:
+                    pass
+
+        self.imaging_letter_dx_selections[exam] = exam_selection_map
+        try:
+            self.last_imaging_letter_pdf_paths[exam] = list(vault_paths)
+        except Exception:
+            pass
+        return vault_paths
+
     def export_current_exam_to_pdf_overwrite(self):
         if not self._ensure_reportlab():
             return
@@ -1852,24 +2254,30 @@ class App(tk.Tk):
 
                 vault_path = upsert_vault_file(patient_root, "pdfs", path, vault_name)
 
-                # If user is on Doc Vault page and viewing pdfs, refresh list
-                if getattr(self.current_page, "get", lambda: "")() == "Doc Vault":
-                    try:
-                        if getattr(self.doc_vault_page.folder_panel, "folder_key", None) == "pdfs":
-                            self.doc_vault_page.refresh_current_folder()
-                    except Exception:
-                        pass
-
                 self.status_var.set(f"PDF saved + updated in Vault: {os.path.basename(vault_path)}")
         except Exception as e:
             print("Vault upsert failed:", e)
 
+        try:
+            self._export_imaging_recommendation_letter_vault(payload, patient_root)
+        except Exception as e:
+            print("Imaging letter export failed:", e)
+
+        if getattr(self.current_page, "get", lambda: "")() == "Doc Vault":
+            try:
+                fk = getattr(self.doc_vault_page.folder_panel, "folder_key", None)
+                if fk in ("pdfs", "imaging"):
+                    self.doc_vault_page.refresh_current_folder()
+            except Exception:
+                pass
 
         self.last_exam_pdf_paths[exam] = path
         self.write_settings({
             "last_exam_pdfs": self.last_exam_pdf_paths,
-            "last_all_exams_pdf": self.last_all_exams_pdf_path
-        })        
+            "last_all_exams_pdf": self.last_all_exams_pdf_path,
+            "last_imaging_letter_pdfs": self.last_imaging_letter_pdf_paths,
+            "imaging_letter_dx_selections": self.imaging_letter_dx_selections,
+        })
 
     # ---------- Providers for HOI ----------
     def _patient_info_from_demo(self) -> dict:
@@ -1967,7 +2375,28 @@ class App(tk.Tk):
             messagebox.showerror("Error", f"Could not open PDF:\n{e}")
 
     def open_current_exam_pdf(self):
-        self.open_pdf_file(self.last_exam_pdf_paths.get(self.current_exam.get(), ""))
+        exam = (self.current_exam.get() or "").strip()
+        main_pdf = self.last_exam_pdf_paths.get(exam, "")
+        self.open_pdf_file(main_pdf)
+
+        raw = self.last_imaging_letter_pdf_paths.get(exam)
+        if isinstance(raw, str):
+            letter_paths = [raw] if raw.strip() else []
+        elif isinstance(raw, list):
+            letter_paths = [p for p in raw if isinstance(p, str) and p.strip()]
+        else:
+            letter_paths = []
+
+        valid = [p for p in letter_paths if p and os.path.isfile(p)]
+        patient_root = self.get_current_patient_root()
+        if patient_root and not valid:
+            resolved = self._resolve_imaging_letter_vault_paths(patient_root, exam)
+            if resolved:
+                self.last_imaging_letter_pdf_paths[exam] = resolved
+                valid = resolved
+
+        for lp in valid:
+            self.open_pdf_file(lp)
 
     def open_all_exams_pdf(self):
         self.open_pdf_file(self.last_all_exams_pdf_path)
@@ -2206,7 +2635,12 @@ class App(tk.Tk):
         self.subjectives_page = SubjectivesPage(self.content, _subjectives_on_change, app=self)
         self.family_social_page = TextPage(self.content, "Family/Social History", self.schedule_autosave)
         self.objectives_page = ObjectivesPage(self.content, self.schedule_autosave)
-        self.diagnosis_page = DiagnosisPage(self.content, self.schedule_autosave)
+        self.diagnosis_page = DiagnosisPage(
+            self.content,
+            self.schedule_autosave,
+            on_add_imaging_callback=self._on_imaging_recommendation_added,
+            on_click_imaging_callback=self._on_imaging_recommendation_clicked,
+        )
 
         self.plan_page = PlanPage(self.content, on_change=self.schedule_autosave)
 
@@ -2779,6 +3213,51 @@ class App(tk.Tk):
 
             for exam in self.exams:
                 self.last_exam_pdf_paths[exam] = pdf_map.get(exam, "") or ""
+
+        img_map = settings.get("last_imaging_letter_pdfs", {})
+        if isinstance(img_map, dict):
+            if not hasattr(self, "exams") or not self.exams:
+                self.exams = list(EMPTY_EXAMS)
+            if not hasattr(self, "last_imaging_letter_pdf_paths") or not isinstance(self.last_imaging_letter_pdf_paths, dict):
+                self.last_imaging_letter_pdf_paths = {}
+            for exam in self.exams:
+                v = img_map.get(exam)
+                if isinstance(v, str):
+                    self.last_imaging_letter_pdf_paths[exam] = [v] if v.strip() else []
+                elif isinstance(v, list):
+                    self.last_imaging_letter_pdf_paths[exam] = [
+                        x for x in v if isinstance(x, str) and x.strip()
+                    ]
+                else:
+                    self.last_imaging_letter_pdf_paths[exam] = []
+
+        sel_map = settings.get("imaging_letter_dx_selections", {})
+        self.imaging_letter_dx_selections = {}
+        if isinstance(sel_map, dict):
+            for exam, mod_map in sel_map.items():
+                if not isinstance(exam, str) or not isinstance(mod_map, dict):
+                    continue
+                exam_clean = exam.strip()
+                if not exam_clean:
+                    continue
+                cleaned_mods: dict[str, dict[str, str]] = {}
+                for mod_key, bp_map in mod_map.items():
+                    if not isinstance(mod_key, str) or not isinstance(bp_map, dict):
+                        continue
+                    mk = mod_key.strip().lower()
+                    if not mk:
+                        continue
+                    cleaned_bp: dict[str, str] = {}
+                    for bp, icd in bp_map.items():
+                        if not isinstance(bp, str) or not isinstance(icd, str):
+                            continue
+                        bp2 = bp.strip()
+                        icd2 = icd.strip()
+                        if bp2 and icd2:
+                            cleaned_bp[bp2] = icd2
+                    if cleaned_bp:
+                        cleaned_mods[mk] = cleaned_bp
+                self.imaging_letter_dx_selections[exam_clean] = cleaned_mods
 
         self.last_all_exams_pdf_path = settings.get("last_all_exams_pdf", "") or ""
         self._apply_exam_color_theme()
@@ -3592,23 +4071,31 @@ class App(tk.Tk):
 
                 vault_path = upsert_vault_file(patient_root, "pdfs", path, vault_name)
 
-                # If user is on Doc Vault page and viewing pdfs, refresh list
-                if getattr(self.current_page, "get", lambda: "")() == "Doc Vault":
-                    try:
-                        if getattr(self.doc_vault_page.folder_panel, "folder_key", None) == "pdfs":
-                            self.doc_vault_page.refresh_current_folder()
-                    except Exception:
-                        pass
-
                 self.status_var.set(f"PDF saved + updated in Vault: {os.path.basename(vault_path)}")
         except Exception as e:
             print("Vault upsert failed:", e)
 
+        try:
+            pr = self.get_current_patient_root()
+            if pr:
+                self._export_imaging_recommendation_letter_vault(payload, pr)
+        except Exception as e:
+            print("Imaging letter export failed:", e)
+
+        if getattr(self.current_page, "get", lambda: "")() == "Doc Vault":
+            try:
+                fk = getattr(self.doc_vault_page.folder_panel, "folder_key", None)
+                if fk in ("pdfs", "imaging"):
+                    self.doc_vault_page.refresh_current_folder()
+            except Exception:
+                pass
 
         self.last_exam_pdf_paths[self.current_exam.get()] = path
         self.write_settings({
             "last_exam_pdfs": self.last_exam_pdf_paths,
-            "last_all_exams_pdf": self.last_all_exams_pdf_path
+            "last_all_exams_pdf": self.last_all_exams_pdf_path,
+            "last_imaging_letter_pdfs": self.last_imaging_letter_pdf_paths,
+            "imaging_letter_dx_selections": self.imaging_letter_dx_selections,
         })
         messagebox.showinfo("Success", f"PDF saved:\n{path}")
 
@@ -3750,6 +4237,8 @@ class App(tk.Tk):
         self.reset_entire_form_ui_only()
         self.current_case_path = None
         self.last_exam_pdf_paths = {e: "" for e in self.exams}
+        self.last_imaging_letter_pdf_paths = {e: [] for e in self.exams}
+        self.imaging_letter_dx_selections = {e: {} for e in self.exams}
         self.last_all_exams_pdf_path = ""
         self.status_var.set("New case started. Previous cases/files are unchanged.")
         self.current_patient_id = None

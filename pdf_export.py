@@ -16,7 +16,8 @@ from HOIpdf import build_rof_flowables
 
 from config import (
     LOGO_PATH, CLINIC_NAME, CLINIC_ADDR, CLINIC_PHONE_FAX,
-    REGION_LABELS
+    PROVIDER_NAME,
+    REGION_LABELS,
 )
 from utils import normalize_mmddyyyy, today_mmddyyyy, build_sentence
 
@@ -29,6 +30,7 @@ try:
     from reportlab.lib.styles import getSampleStyleSheet, ParagraphStyle
     from reportlab.lib.pagesizes import LETTER
     from reportlab.lib.units import inch
+    from reportlab.lib.enums import TA_LEFT
     from reportlab.lib import colors
     from reportlab.pdfgen import canvas as canvas_module
     from reportlab.lib.utils import ImageReader
@@ -139,6 +141,498 @@ def _referral_sentence(dx_struct: dict) -> str:
             parts.append(p)
     joined = _join_with_and(parts)
     return f"Due to medical necessity, the patient will need to be referred to the following provider(s): {joined}." if joined else ""
+
+
+# =======================================================
+# Auto imaging recommendation letter (exam data only; no extra UI)
+# =======================================================
+def _ordered_imaging_groups(dx_struct: dict) -> list[tuple[str, list[str]]]:
+    """Return [(modality, [body parts...]), ...] preserving first-seen modality order."""
+    dx_struct = dx_struct or {}
+    recs = dx_struct.get("imaging_recs") or []
+    if not isinstance(recs, list):
+        return []
+    order: list[str] = []
+    groups: dict[str, list[str]] = {}
+    for r in recs:
+        if not isinstance(r, dict):
+            continue
+        mod = (r.get("modality") or "").strip()
+        bp = (r.get("body_part") or "").strip()
+        if not mod or not bp or mod == "(select)" or bp == "(select)":
+            continue
+        if mod not in groups:
+            groups[mod] = []
+            order.append(mod)
+        if bp not in groups[mod]:
+            groups[mod].append(bp)
+    return [(m, groups[m]) for m in order]
+
+
+def imaging_recommendation_letter_should_generate(payload: dict) -> bool:
+    soap = (payload or {}).get("soap") or {}
+    dx_struct = soap.get("diagnosis_struct") or {}
+    return bool(_ordered_imaging_groups(dx_struct if isinstance(dx_struct, dict) else {}))
+
+
+def _article_for_modality(mod: str) -> str:
+    m = (mod or "").strip().lower()
+    if m in ("x-ray", "mri", "ultrasound"):
+        return "an"
+    return "a"
+
+
+def _injury_event_phrase(hoi_struct: dict) -> str:
+    t = ((hoi_struct or {}).get("type") or {}).get("injury_type") or ""
+    t = (t or "").strip()
+    if not t or t == "(none)":
+        return "the reported injury event"
+    return {
+        "Auto Accident": "a motor vehicle collision",
+        "Slip and Fall": "a slip-and-fall incident",
+        "Dog Bite": "a dog bite",
+        "Work Injury": "a work-related injury",
+        "Other": "the reported injury event",
+    }.get(t, t.lower())
+
+
+def _doi_for_imaging_letter(patient: dict, hoi_struct: dict) -> str:
+    hdoi = normalize_mmddyyyy(((hoi_struct or {}).get("doi") or {}).get("date") or "")
+    pdoi = normalize_mmddyyyy((patient or {}).get("doi") or "")
+    return hdoi or pdoi
+
+
+# Match diagnosis rows to imaging body parts (labels + ICD prefixes for spine).
+# Used only for the imaging recommendation letter "Diagnostic Codes" line.
+_IMAGING_BODY_PART_MATCH_HINTS: dict[str, tuple[str, ...]] = {
+    "Cervical Spine": (
+        "cervical",
+        "neck",
+        "neck ",
+        " neck",
+        "whiplash",
+        "cervicogenic",
+        "radiculopathy, cervical",
+        "(c/s)",
+        "c/s)",
+    ),
+    "Thoracic Spine": (
+        "thoracic",
+        "mid-back",
+        "mid back",
+        "t-spine",
+        "t spine",
+        "radiculopathy, thoracic",
+    ),
+    "Lumbar Spine": (
+        "lumbar",
+        "low back",
+        "lumb",
+        "sacroiliac",
+        "si joint",
+        "radiculopathy, lumbar",
+        "sacral",
+    ),
+    "Right Shoulder": ("right shoulder",),
+    "Left Shoulder": ("left shoulder",),
+    "B/L Shoulders": ("right shoulder", "left shoulder", "b/l shoulder", "bilateral shoulder", "b/l shoulders"),
+    "Right Elbow": ("right elbow",),
+    "Left Elbow": ("left elbow",),
+    "B/L Elbows": ("right elbow", "left elbow", "b/l elbow", "bilateral elbow"),
+    "Right Wrist": ("right wrist",),
+    "Left Wrist": ("left wrist",),
+    "B/L Wrists": ("right wrist", "left wrist", "b/l wrist", "bilateral wrist"),
+    "Right Hip": ("right hip",),
+    "Left Hip": ("left hip",),
+    "B/L Hips": ("right hip", "left hip", "b/l hip", "bilateral hip"),
+    "Right Knee": ("right knee",),
+    "Left Knee": ("left knee",),
+    "B/L Knees": ("right knee", "left knee", "b/l knee", "bilateral knee"),
+    "Right Ankle": ("right ankle",),
+    "Left Ankle": ("left ankle",),
+    "B/L Ankles": ("right ankle", "left ankle", "b/l ankle", "bilateral ankle"),
+}
+
+# Secondary match: ICD-10 text starts with these (aligned with common chiropractic dx list).
+_SPINE_ICD_PREFIXES: dict[str, tuple[str, ...]] = {
+    "Cervical Spine": (
+        "S13", "S14", "S16", "M50", "M54.12", "M54.2", "M48.02", "M47.812",
+    ),
+    "Thoracic Spine": (
+        "S22", "S23", "S24", "M51.24", "M54.14", "M54.6", "M47.814",
+    ),
+    "Lumbar Spine": (
+        "S32", "S33", "M51.26", "M54.16", "M54.50", "M53.3", "M51.36", "M48.061", "M47.816",
+    ),
+}
+
+
+def _dx_block_text_for_imaging_match(block: dict) -> str:
+    parts = [
+        (block.get("edit_text") or "").strip(),
+        (block.get("dx_label") or "").strip(),
+    ]
+    return " ".join(parts).lower()
+
+
+def _icd_matches_prefixes(icd_raw: str, prefixes: tuple[str, ...]) -> bool:
+    icd = (icd_raw or "").strip().upper().replace(" ", "")
+    if not icd:
+        return False
+    return any(icd.startswith(p.upper().replace(" ", "")) for p in prefixes)
+
+
+def _diagnosis_block_matches_imaging_body_part(block: dict, body_part: str) -> bool:
+    """True if this dx row is clinically tied to the requested imaging region."""
+    hints = _IMAGING_BODY_PART_MATCH_HINTS.get(body_part)
+    if hints:
+        text = _dx_block_text_for_imaging_match(block)
+        if any(h.lower() in text for h in hints):
+            return True
+    spine_prefs = _SPINE_ICD_PREFIXES.get(body_part)
+    if spine_prefs:
+        icd = (block.get("icd10") or "").strip()
+        if _icd_matches_prefixes(icd, spine_prefs):
+            return True
+    return False
+
+
+def _ordered_imaging_body_parts_unique(dx_struct: dict) -> list[str]:
+    """Order-preserving unique body_part values from imaging_recs."""
+    out: list[str] = []
+    seen: set[str] = set()
+    for r in dx_struct.get("imaging_recs") or []:
+        if not isinstance(r, dict):
+            continue
+        bp = (r.get("body_part") or "").strip()
+        if not bp or bp == "(select)":
+            continue
+        if bp not in seen:
+            seen.add(bp)
+            out.append(bp)
+    return out
+
+
+def imaging_modalities_in_payload(payload: dict) -> list[str]:
+    """First-seen order of distinct modalities in imaging_recs (display casing preserved)."""
+    out: list[str] = []
+    seen: set[str] = set()
+    soap = (payload or {}).get("soap") or {}
+    dx = soap.get("diagnosis_struct") or {}
+    for r in (dx.get("imaging_recs") or []) if isinstance(dx, dict) else []:
+        if not isinstance(r, dict):
+            continue
+        m = (r.get("modality") or "").strip()
+        if not m or m == "(select)":
+            continue
+        k = m.lower()
+        if k not in seen:
+            seen.add(k)
+            out.append(m)
+    return out
+
+
+def _payload_with_single_imaging_modality(payload: dict, modality: str) -> dict:
+    """Shallow copy of payload with imaging_recs limited to one modality (for per-modality letters)."""
+    modality_key = (modality or "").strip().lower()
+    p = dict(payload or {})
+    soap = dict(p.get("soap") or {})
+    dx = dict(soap.get("diagnosis_struct") or {})
+    recs = dx.get("imaging_recs") or []
+    filtered = [
+        dict(r)
+        for r in (recs if isinstance(recs, list) else [])
+        if isinstance(r, dict) and (r.get("modality") or "").strip().lower() == modality_key
+    ]
+    dx["imaging_recs"] = filtered
+    soap["diagnosis_struct"] = dx
+    p["soap"] = soap
+    return p
+
+
+# --- Imaging letter diagnostic code selection ---
+# Letter ICDs are always taken only from diagnosis_struct.blocks (in chart order); we never
+# invent codes. Selection is region-based and user-pick-driven.
+
+
+def _icd_codes_for_imaging_body_parts_only(dx_struct: dict) -> list[str]:
+    """
+    ICD-10 codes only (no labels), in diagnosis block order, deduped,
+    limited to rows that match at least one requested imaging body region.
+    """
+    requested = _ordered_imaging_body_parts_unique(dx_struct)
+    return _icd_codes_for_modality_and_regions(dx_struct, None, requested)
+
+
+def _icd_codes_for_modality_and_regions(
+    dx_struct: dict, modality: str | None, body_parts: list[str]
+) -> list[str]:
+    """
+    modality: None or lowercase. Matching is strictly region-based against existing diagnosis rows.
+    body_parts: regions requested for this letter (this imaging type only).
+    """
+    if not isinstance(dx_struct, dict):
+        return []
+    if not body_parts:
+        return []
+
+    blocks = dx_struct.get("blocks") or []
+    if not isinstance(blocks, list):
+        return []
+
+    out: list[str] = []
+    seen_icd: set[str] = set()
+
+    for b in blocks:
+        if not isinstance(b, dict):
+            continue
+        icd = (b.get("icd10") or "").strip()
+        if not icd or icd in seen_icd:
+            continue
+        for bp in body_parts:
+            if not _diagnosis_block_matches_imaging_body_part(b, bp):
+                continue
+            out.append(icd)
+            seen_icd.add(icd)
+            break
+
+    return out
+
+
+def imaging_dx_choices_by_body_part(payload: dict, modality: str) -> tuple[list[str], dict[str, list[dict[str, str]]]]:
+    """
+    Returns ordered body parts for a single modality and available diagnosis choices per body part.
+    Each choice is sourced from existing diagnosis_struct.blocks only:
+      {"icd": "...", "label": "...", "display": "Label - ICD"}.
+    """
+    sub = _payload_with_single_imaging_modality(payload or {}, modality or "")
+    full_dx = ((payload or {}).get("soap") or {}).get("diagnosis_struct") or {}
+    sub_dx = ((sub or {}).get("soap") or {}).get("diagnosis_struct") or {}
+    if not isinstance(full_dx, dict) or not isinstance(sub_dx, dict):
+        return [], {}
+
+    body_parts = _ordered_imaging_body_parts_unique(sub_dx)
+    if not body_parts:
+        return [], {}
+
+    blocks = full_dx.get("blocks") or []
+    if not isinstance(blocks, list):
+        return body_parts, {bp: [] for bp in body_parts}
+
+    out: dict[str, list[dict[str, str]]] = {}
+
+    for bp in body_parts:
+        seen_icd: set[str] = set()
+        choices: list[dict[str, str]] = []
+        for b in blocks:
+            if not isinstance(b, dict):
+                continue
+            if not _diagnosis_block_matches_imaging_body_part(b, bp):
+                continue
+            icd = (b.get("icd10") or "").strip()
+            if not icd or icd in seen_icd:
+                continue
+            label = (b.get("dx_label") or "").strip() or (b.get("edit_text") or "").strip() or icd
+            display = f"{label} - {icd}" if label and label != icd else icd
+            choices.append({"icd": icd, "label": label, "display": display})
+            seen_icd.add(icd)
+        out[bp] = choices
+    return body_parts, out
+
+
+def imaging_recommendation_letter_title_and_body(payload: dict) -> tuple[str, str] | None:
+    """
+    Build title + a single general paragraph from existing exam fields only.
+    Returns None if there are no structured imaging recommendations.
+    """
+    payload = payload or {}
+    patient = payload.get("patient") or {}
+    soap = payload.get("soap") or {}
+    hoi_struct = soap.get("hoi_struct") or {}
+    dx_struct = soap.get("diagnosis_struct") or {}
+    if not isinstance(dx_struct, dict):
+        return None
+
+    groups = _ordered_imaging_groups(dx_struct)
+    if not groups:
+        return None
+
+    clauses: list[str] = []
+    for mod, body_parts in groups:
+        art = _article_for_modality(mod)
+        if len(body_parts) == 1:
+            clauses.append(f"{art} {mod} of the {body_parts[0]}")
+        else:
+            clauses.append(f"{art} {mod} of the {_join_with_and(body_parts)}")
+    studies = _join_with_and(clauses)
+    if not studies:
+        return None
+
+    inj = _injury_event_phrase(hoi_struct if isinstance(hoi_struct, dict) else {})
+    doi = _doi_for_imaging_letter(patient if isinstance(patient, dict) else {}, hoi_struct if isinstance(hoi_struct, dict) else {})
+    doi_part = f" The documented date of injury is {doi}." if doi else ""
+
+    body = (
+        f"The patient remains under clinical care following {inj}.{doi_part} "
+        f"We are submitting this notice to recommend {studies}, for further evaluation and to assist with ongoing medical management."
+    )
+
+    if len(groups) == 1:
+        mod0 = groups[0][0]
+        ml = (mod0 or "").strip().lower()
+        if ml == "x-ray":
+            title = "X-Ray Recommendation Letter"
+        elif ml == "mri":
+            title = "MRI Recommendation Letter"
+        elif ml == "ct":
+            title = "CT Recommendation Letter"
+        elif ml == "ultrasound":
+            title = "Ultrasound Recommendation Letter"
+        else:
+            title = f"{mod0} Recommendation Letter"
+    else:
+        title = "Imaging Recommendation Letter"
+
+    return title, body
+
+
+def build_imaging_recommendation_letter_pdf(
+    path: str,
+    payload: dict,
+    modality: str,
+    selected_icd_by_body_part: dict[str, str] | None = None,
+) -> bool:
+    """
+    One-page letter for a single imaging modality (MRI, X-ray, etc.).
+    `payload` is the full exam payload; pass modality matching imaging_recs rows.
+    Diagnostic codes use full diagnosis blocks; MRI applies disc/radiculopathy vs sprain rules.
+    """
+    if not REPORTLAB_OK:
+        return False
+    sub = _payload_with_single_imaging_modality(payload, modality)
+    tb = imaging_recommendation_letter_title_and_body(sub)
+    if not tb:
+        return False
+    title, body = tb
+
+    patient = payload.get("patient") or {}
+    if not isinstance(patient, dict):
+        patient = {}
+    exam_date = normalize_mmddyyyy(patient.get("exam_date", "")) or today_mmddyyyy()
+    exam_name = title.strip()
+
+    last = (patient.get("last_name") or "").strip()
+    first = (patient.get("first_name") or "").strip()
+    display = (patient.get("display_name") or "").strip() or f"{last}, {first}".strip(", ")
+    doi = _doi_for_imaging_letter(patient, (payload.get("soap") or {}).get("hoi_struct") or {})
+    dob = normalize_mmddyyyy(patient.get("dob", ""))
+
+    re_line = f"RE: {last}, {first}".strip()
+    if doi:
+        re_line += f" | DOI: {doi}"
+    if dob:
+        re_line += f" | DOB: {dob}"
+
+    patient_header = {
+        "display_name": display,
+        "first_name": first,
+        "last_name": last,
+        "dob": dob,
+        "doi": patient.get("doi") or "",
+        "provider": (patient.get("provider") or "").strip(),
+        "exam_date": exam_date,
+    }
+
+    try:
+        styles = getSampleStyleSheet()
+        title_style = ParagraphStyle(
+            name="ImagingLetterTitle",
+            parent=styles["Title"],
+            fontName="Helvetica-Bold",
+            fontSize=14,
+            leading=17,
+            spaceAfter=10,
+            alignment=1,
+        )
+        if "ImagingLetterTitle" not in styles.byName:
+            styles.add(title_style)
+
+        letter_body = ParagraphStyle(
+            name="ImagingLetterBody",
+            parent=styles["BodyText"],
+            fontName="Helvetica",
+            fontSize=11,
+            leading=14,
+            alignment=TA_LEFT,
+            spaceAfter=0,
+        )
+        if "ImagingLetterBody" not in styles.byName:
+            styles.add(letter_body)
+
+        story = []
+        story.append(ExamStart(exam_name, patient_header, exam_date))
+        story.append(Spacer(1, 0.22 * inch))
+        story.append(Paragraph(xml_escape(title.strip()), styles["ImagingLetterTitle"]))
+        story.append(Spacer(1, 0.12 * inch))
+        re_safe = xml_escape(re_line.strip()).replace("\n", "<br/>")
+        story.append(Paragraph(f"<b>{re_safe}</b>", styles["ImagingLetterBody"]))
+        story.append(Spacer(1, 0.14 * inch))
+        story.append(Paragraph(xml_escape("To Whom It May Concern,"), styles["ImagingLetterBody"]))
+        story.append(Spacer(1, 0.12 * inch))
+
+        safe_body = xml_escape(body.strip()).replace("\n\n", "<br/><br/>").replace("\n", "<br/>")
+        story.append(Paragraph(safe_body, styles["ImagingLetterBody"]))
+
+        full_dx = (payload.get("soap") or {}).get("diagnosis_struct") or {}
+        sub_dx = (sub.get("soap") or {}).get("diagnosis_struct") or {}
+        body_parts = (
+            _ordered_imaging_body_parts_unique(sub_dx)
+            if isinstance(sub_dx, dict)
+            else []
+        )
+        if selected_icd_by_body_part and body_parts:
+            icd_only = []
+            for bp in body_parts:
+                picked = (selected_icd_by_body_part.get(bp) or "").strip()
+                if picked:
+                    icd_only.append(picked)
+        elif isinstance(full_dx, dict) and body_parts:
+            icd_only = _icd_codes_for_modality_and_regions(
+                full_dx,
+                (modality or "").strip().lower(),
+                body_parts,
+            )
+        else:
+            icd_only = []
+        if icd_only:
+            codes_markup = "<br/>".join(xml_escape(c) for c in icd_only)
+            story.append(Spacer(1, 0.14 * inch))
+            story.append(
+                Paragraph("<b>Diagnostic Codes:</b>", styles["ImagingLetterBody"])
+            )
+            story.append(Spacer(1, 0.06 * inch))
+            story.append(Paragraph(codes_markup, styles["ImagingLetterBody"]))
+
+        story.append(Spacer(1, 0.18 * inch))
+        story.append(Paragraph(xml_escape("Sincerely,"), styles["ImagingLetterBody"]))
+        story.append(Spacer(1, 0.28 * inch))
+        prov = ((patient.get("provider") or "").strip() or (PROVIDER_NAME or "").strip())
+        if prov:
+            story.append(Paragraph(xml_escape(prov), styles["ImagingLetterBody"]))
+
+        doc = SimpleDocTemplate(
+            path,
+            pagesize=LETTER,
+            rightMargin=72,
+            leftMargin=72,
+            topMargin=170,
+            bottomMargin=72,
+        )
+        doc.build(story, canvasmaker=HeaderExamNumberedCanvas)
+        return True
+    except Exception:
+        return False
+
 
 # =======================================================
 # Subjectives: "semi-bold" token markup

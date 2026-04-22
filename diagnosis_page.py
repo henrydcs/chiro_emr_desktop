@@ -293,9 +293,18 @@ class DiagnosisPage(ttk.Frame):
     - Auto-build Diagnosis Text (editable) unless user starts typing into it
     """
 
-    def __init__(self, parent, on_change_callback, max_blocks: int = 21):
+    def __init__(
+        self,
+        parent,
+        on_change_callback,
+        max_blocks: int = 21,
+        on_add_imaging_callback=None,
+        on_click_imaging_callback=None,
+    ):
         super().__init__(parent)
         self.on_change_callback = on_change_callback
+        self.on_add_imaging_callback = on_add_imaging_callback
+        self.on_click_imaging_callback = on_click_imaging_callback
         self.max_blocks = max_blocks
 
         self._loading = False
@@ -380,6 +389,12 @@ class DiagnosisPage(ttk.Frame):
         self.imaging_recs.append({"modality": mod, "body_part": part})
         self._refresh_imaging_list()
         self._changed()
+        try:
+            cb = getattr(self, "on_add_imaging_callback", None)
+            if callable(cb):
+                cb(mod, part)
+        except Exception:
+            pass
 
     def _remove_imaging_rec(self):
         sel = list(self.imaging_list.curselection())
@@ -390,6 +405,25 @@ class DiagnosisPage(ttk.Frame):
                 self.imaging_recs.pop(i)
         self._refresh_imaging_list()
         self._changed()
+
+    def _on_imaging_list_click(self, _evt=None):
+        sel = list(self.imaging_list.curselection())
+        if not sel:
+            return
+        i = sel[0]
+        if i < 0 or i >= len(self.imaging_recs):
+            return
+        rec = self.imaging_recs[i] if isinstance(self.imaging_recs[i], dict) else {}
+        mod = _clean(rec.get("modality", ""))
+        part = _clean(rec.get("body_part", ""))
+        if not mod or not part:
+            return
+        try:
+            cb = getattr(self, "on_click_imaging_callback", None)
+            if callable(cb):
+                cb(mod, part)
+        except Exception:
+            pass
 
     def _refresh_ref_list(self):
         self.ref_list.delete(0, "end")
@@ -718,6 +752,7 @@ class DiagnosisPage(ttk.Frame):
 
         self.imaging_list = tk.Listbox(img_box, height=4)
         self.imaging_list.grid(row=2, column=0, sticky="ew", padx=8, pady=(0, 8))
+        self.imaging_list.bind("<ButtonRelease-1>", self._on_imaging_list_click)
         if not hasattr(self, "imaging_notes_var"):
             self.imaging_notes_var = tk.StringVar(value="")
         ttk.Label(img_box, text="Notes (general text):").grid(row=3, column=0, sticky="w", padx=8, pady=(14, 4))
