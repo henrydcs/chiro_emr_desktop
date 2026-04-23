@@ -399,6 +399,46 @@ def _icd_codes_for_modality_and_regions(
     return out
 
 
+def _norm_imaging_body_part_key(s: str) -> str:
+    return " ".join((s or "").strip().lower().split())
+
+
+def _icd_from_body_part_selection_map(sel: dict[str, str] | None, body_part: str) -> str:
+    """Lookup stored ICD for this imaging body part; keys matched with normalized spacing/case."""
+    if not sel or not isinstance(sel, dict):
+        return ""
+    bp = (body_part or "").strip()
+    if bp in sel and isinstance(sel[bp], str):
+        return (sel[bp] or "").strip()
+    nk = _norm_imaging_body_part_key(bp)
+    for k, v in sel.items():
+        if not isinstance(k, str):
+            continue
+        if _norm_imaging_body_part_key(k) != nk:
+            continue
+        if isinstance(v, str):
+            return (v or "").strip()
+    return ""
+
+
+def _icd_first_match_for_single_body_part(dx_struct: dict, body_part: str) -> str:
+    """First diagnosis row ICD that matches exactly one imaging body region (no cross-part dedupe)."""
+    if not isinstance(dx_struct, dict):
+        return ""
+    blocks = dx_struct.get("blocks") or []
+    if not isinstance(blocks, list):
+        return ""
+    for b in blocks:
+        if not isinstance(b, dict):
+            continue
+        icd = (b.get("icd10") or "").strip()
+        if not icd:
+            continue
+        if _diagnosis_block_matches_imaging_body_part(b, body_part):
+            return icd
+    return ""
+
+
 def imaging_dx_choices_by_body_part(payload: dict, modality: str) -> tuple[list[str], dict[str, list[dict[str, str]]]]:
     """
     Returns ordered body parts for a single modality and available diagnosis choices per body part.
@@ -474,7 +514,7 @@ def imaging_recommendation_letter_title_and_body(payload: dict) -> tuple[str, st
 
     body = (
         f"The patient remains under clinical care following {inj}.{doi_part} "
-        f"We are submitting this notice to recommend {studies}, for further evaluation and to assist with ongoing medical management."
+        f"We are submitting this notice to recommend {studies} for further evaluation and to assist with ongoing therapeutic management."
     )
 
     if len(groups) == 1:
@@ -505,7 +545,7 @@ def build_imaging_recommendation_letter_pdf(
     """
     One-page letter for a single imaging modality (MRI, X-ray, etc.).
     `payload` is the full exam payload; pass modality matching imaging_recs rows.
-    Diagnostic codes use full diagnosis blocks; MRI applies disc/radiculopathy vs sprain rules.
+    Diagnostic codes: one line per requested body part (stored picks, then first chart match per region).
     """
     if not REPORTLAB_OK:
         return False
@@ -590,20 +630,16 @@ def build_imaging_recommendation_letter_pdf(
             if isinstance(sub_dx, dict)
             else []
         )
-        if selected_icd_by_body_part and body_parts:
-            icd_only = []
+        icd_only: list[str] = []
+        if isinstance(full_dx, dict) and body_parts:
+            # One code per imaging body part (letter order matches imaging_recs order).
             for bp in body_parts:
-                picked = (selected_icd_by_body_part.get(bp) or "").strip()
-                if picked:
-                    icd_only.append(picked)
-        elif isinstance(full_dx, dict) and body_parts:
-            icd_only = _icd_codes_for_modality_and_regions(
-                full_dx,
-                (modality or "").strip().lower(),
-                body_parts,
-            )
-        else:
-            icd_only = []
+                picked = ""
+                if selected_icd_by_body_part is not None:
+                    picked = _icd_from_body_part_selection_map(selected_icd_by_body_part, bp)
+                if not picked:
+                    picked = _icd_first_match_for_single_body_part(full_dx, bp)
+                icd_only.append(picked if picked else "—")
         if icd_only:
             codes_markup = "<br/>".join(xml_escape(c) for c in icd_only)
             story.append(Spacer(1, 0.14 * inch))

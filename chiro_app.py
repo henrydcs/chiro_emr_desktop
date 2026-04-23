@@ -1874,108 +1874,6 @@ class App(tk.Tk):
         except Exception:
             return matches
 
-    def _prompt_imaging_dx_selection_for_modality(self, payload: dict, exam: str, modality: str) -> dict[str, str] | None:
-        """
-        Ask user to choose exactly one diagnosis (Label + ICD shown) for each requested body part.
-        Returns {body_part: icd}. Returns None on cancel.
-        """
-        body_parts, choices_map = imaging_dx_choices_by_body_part(payload, modality)
-        if not body_parts:
-            return {}
-
-        missing = [bp for bp in body_parts if not choices_map.get(bp)]
-        if missing:
-            messagebox.showwarning(
-                "Imaging Letter Diagnosis Selection",
-                "No eligible diagnosis choices were found for:\n- "
-                + "\n- ".join(missing)
-                + "\n\nAdd/adjust diagnosis entries, then export again.",
-                parent=self,
-            )
-            return None
-
-        exam_map = self.imaging_letter_dx_selections.get(exam, {}) if isinstance(self.imaging_letter_dx_selections, dict) else {}
-        prior_map = exam_map.get((modality or "").strip().lower(), {}) if isinstance(exam_map, dict) else {}
-
-        dialog = tk.Toplevel(self)
-        dialog.title(f"Select Diagnostic Codes - {modality}")
-        dialog.transient(self)
-        dialog.grab_set()
-        dialog.resizable(False, False)
-
-        outer = ttk.Frame(dialog, padding=12)
-        outer.grid(row=0, column=0, sticky="nsew")
-        ttk.Label(
-            outer,
-            text=f"Choose one diagnosis for each requested body part ({modality}):",
-        ).grid(row=0, column=0, columnspan=2, sticky="w", pady=(0, 8))
-
-        display_to_icd: dict[str, dict[str, str]] = {}
-        vars_by_bp: dict[str, tk.StringVar] = {}
-
-        row = 1
-        for bp in body_parts:
-            bp_choices = choices_map.get(bp) or []
-            display_to_icd[bp] = {c.get("display", ""): c.get("icd", "") for c in bp_choices if isinstance(c, dict)}
-            displays = [c.get("display", "") for c in bp_choices if isinstance(c, dict) and c.get("display")]
-            if not displays:
-                continue
-
-            prior_icd = (prior_map.get(bp) or "").strip() if isinstance(prior_map, dict) else ""
-            default_display = displays[0]
-            if prior_icd:
-                for c in bp_choices:
-                    if isinstance(c, dict) and (c.get("icd") or "").strip() == prior_icd:
-                        d = (c.get("display") or "").strip()
-                        if d:
-                            default_display = d
-                            break
-
-            ttk.Label(outer, text=f"{bp}:").grid(row=row, column=0, sticky="w", pady=3, padx=(0, 8))
-            v = tk.StringVar(value=default_display)
-            vars_by_bp[bp] = v
-            cb = ttk.Combobox(
-                outer,
-                textvariable=v,
-                state="readonly",
-                values=displays,
-                width=72,
-            )
-            cb.grid(row=row, column=1, sticky="w", pady=3)
-            row += 1
-
-        result: dict[str, str] | None = None
-
-        def _on_ok():
-            nonlocal result
-            picked: dict[str, str] = {}
-            for bp in body_parts:
-                disp = (vars_by_bp.get(bp).get() if bp in vars_by_bp else "").strip()
-                icd = (display_to_icd.get(bp, {}).get(disp) or "").strip()
-                if not icd:
-                    messagebox.showwarning("Selection Required", f"Select a diagnosis for {bp}.", parent=dialog)
-                    return
-                picked[bp] = icd
-            result = picked
-            dialog.destroy()
-
-        def _on_cancel():
-            dialog.destroy()
-
-        btns = ttk.Frame(outer)
-        btns.grid(row=row, column=0, columnspan=2, sticky="e", pady=(10, 0))
-        ttk.Button(btns, text="Cancel", command=_on_cancel).grid(row=0, column=0, padx=(0, 6))
-        ttk.Button(btns, text="OK", command=_on_ok).grid(row=0, column=1)
-
-        dialog.protocol("WM_DELETE_WINDOW", _on_cancel)
-        dialog.update_idletasks()
-        try:
-            dialog.minsize(dialog.winfo_reqwidth(), dialog.winfo_reqheight())
-        except Exception:
-            pass
-        self.wait_window(dialog)
-        return result
-
     def _prompt_single_imaging_dx_choice(self, modality: str, body_part: str, choices: list[dict], current_icd: str = "") -> str | None:
         """Prompt for one diagnosis choice (Label + ICD) for a single body part."""
         displays = [c.get("display", "") for c in choices if isinstance(c, dict) and c.get("display")]
@@ -2089,10 +1987,10 @@ class App(tk.Tk):
             return
         self._on_imaging_recommendation_added(modality, body_part)
 
-    def _resolve_imaging_dx_selection_for_modality(self, payload: dict, exam: str, modality: str) -> dict[str, str] | None:
+    def _stored_imaging_dx_for_modality(self, payload: dict, exam: str, modality: str) -> dict[str, str]:
         """
-        Return valid selections for this modality, using stored picks.
-        If picks are missing/invalid, prompt once for that modality.
+        Return stored ICD picks that are still valid against current diagnosis options.
+        Never prompts (Add / click-to-change are the only UI entry points).
         """
         body_parts, choices_map = imaging_dx_choices_by_body_part(payload, modality)
         if not body_parts:
@@ -2106,7 +2004,6 @@ class App(tk.Tk):
             mod_map = {}
 
         resolved: dict[str, str] = {}
-        missing = False
         for bp in body_parts:
             valid_icds = {
                 (c.get("icd") or "").strip()
@@ -2116,15 +2013,7 @@ class App(tk.Tk):
             chosen = (mod_map.get(bp) or "").strip()
             if chosen and chosen in valid_icds:
                 resolved[bp] = chosen
-            else:
-                missing = True
-        if not missing and len(resolved) == len(body_parts):
-            return resolved
-
-        picked = self._prompt_imaging_dx_selection_for_modality(payload, exam, modality)
-        if picked is None:
-            return None
-        return picked
+        return resolved
 
     def _export_imaging_recommendation_letter_vault(self, payload: dict, patient_root: str) -> list[str]:
         """Build one letter PDF per imaging modality into vault/imaging. Returns list of vault paths."""
@@ -2163,9 +2052,7 @@ class App(tk.Tk):
         selected_by_modality: dict[str, dict[str, str]] = {}
         for mod in modalities:
             mod_key = (mod or "").strip().lower()
-            picked = self._resolve_imaging_dx_selection_for_modality(payload, exam, mod)
-            if picked is None:
-                return []
+            picked = self._stored_imaging_dx_for_modality(payload, exam, mod)
             selected_by_modality[mod_key] = dict(picked)
 
         self._purge_stale_imaging_letters_vault(patient_root, exam)
