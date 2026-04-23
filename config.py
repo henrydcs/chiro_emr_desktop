@@ -78,57 +78,91 @@ RADIC_LOCATIONS = [
     "Bilateral wrists", "Left wrist", "Right wrist",
     "Bilateral hands", "Left hand", "Right hand",
     "Left and Right fingers", "Left finger", "Right finger",
-    "Left and Right toes", "Left toe", "Right toe",
-    "Bilateral feet", "Left foot", "Right foot",
-    "Bilateral ankles", "Left ankle", "Right ankle",
-    "Bilateral legs", "Left leg", "Right leg",
-    "Bilateral knees", "Left knee", "Right knee",    
     "Bilateral hips", "Left hip", "Right hip",
+    "Bilateral thighs", "Left thigh", "Right thigh",
+    "Bilateral knees", "Left knee", "Right knee", 
+    "Bilateral legs", "Left leg", "Right leg", 
+    "Bilateral ankles", "Left ankle", "Right ankle",
+    "Bilateral feet", "Left foot", "Right foot",
+    "Left and Right toes", "Left toe", "Right toe",             
+    
 ]
 
 REGION_OPTIONS = [
     "(none)",
-    "CS", "TS", "LS",
+    "Head", "CS", "TS", "LS", "Sacrum",
 
     "R_SHOULDER", "L_SHOULDER", "BL_SHOULDER",
+    "R_ARM", "L_ARM", "BL_ARMS",
     "R_ELBOW", "L_ELBOW", "BL_ELBOW",
+    "R_FOREARM", "L_FOREARM", "BL_FOREARMS",
     "R_WRIST", "L_WRIST", "BL_WRIST",
+    "R_HAND", "L_HAND", "BL_HANDS",
 
     "R_HIP", "L_HIP", "BL_HIP",
+    'R_THIGH', 'L_THIGH', "BL_THIGH",
     "R_KNEE", "L_KNEE", "BL_KNEE",
+    "R_LEG", "L_LEG", "BL_LEGS",
     "R_ANKLE", "L_ANKLE", "BL_ANKLE",
+    "R_FOOT", "L_FOOT", "BL_FEET",
 ]
 
 
 
 REGION_LABELS = {
+    "Head": "Head",
     "CS": "Cervical Spine",
     "TS": "Thoracic Spine",
     "LS": "Lumbar Spine",
+    "Sacrum": "Sacrum",
 
     "R_SHOULDER": "Right Shoulder",
     "L_SHOULDER": "Left Shoulder",
     "BL_SHOULDER": "Bilateral Shoulders",
 
+    "R_ARM": "Right Arm",
+    "L_ARM": "Left Arm",
+    "BL_ARMS": "Bilateral Arms",
+
     "R_ELBOW": "Right Elbow",
     "L_ELBOW": "Left Elbow",
     "BL_ELBOW": "Bilateral Elbows",
+
+    "R_FOREARM": "Right Forearm",
+    "L_FOREARM": "Left Forearm",
+    "BL_FOREARMS": "Bilateral Forearms",
 
     "R_WRIST": "Right Wrist",
     "L_WRIST": "Left Wrist",
     "BL_WRIST": "Bilateral Wrists",
 
+    "R_HAND": "Right Hand",
+    "L_HAND": "Left Hand",
+    "BL_HANDS": "Bilateral Hands",
+
     "R_HIP": "Right Hip",
     "L_HIP": "Left Hip",
     "BL_HIP": "Bilateral Hips",
+
+    "R_THIGH": "Right Thigh",
+    "L_THIGH": "Left Thigh",
+    "BL_THIGH": "Bilateral Thighs",
 
     "R_KNEE": "Right Knee",
     "L_KNEE": "Left Knee",
     "BL_KNEE": "Bilateral Knees",
 
+    "R_LEG": "Right Leg",
+    "L_LEG": "Left Leg",
+    "BL_LEGS": "Bilateral Legs",
+
     "R_ANKLE": "Right Ankle",
     "L_ANKLE": "Left Ankle",
     "BL_ANKLE": "Bilateral Ankles",
+
+    "R_FOOT": "Right Foot",
+    "L_FOOT": "Left Foot",
+    "BL_FEET": "Bilateral Feet",
 }
 
 
