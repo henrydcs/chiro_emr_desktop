@@ -59,6 +59,7 @@ from pdf_export import (
     build_combined_pdf,
     build_imaging_recommendation_letter_pdf,
     imaging_dx_choices_by_body_part,
+    imaging_recommendation_letter_editable_text,
     imaging_modalities_in_payload,
     imaging_recommendation_letter_should_generate,
 )
@@ -303,6 +304,7 @@ class App(tk.Tk):
         self.last_exam_pdf_paths: dict[str, str] = {}
         self.last_imaging_letter_pdf_paths: dict[str, list[str]] = {}
         self.imaging_letter_dx_selections: dict[str, dict[str, dict[str, str]]] = {}
+        self.imaging_letter_text_overrides: dict[str, dict[str, str]] = {}
         self.last_all_exams_pdf_path = ""
 
         self._mousewheel_target = None
@@ -1539,6 +1541,9 @@ class App(tk.Tk):
         if not hasattr(self, "imaging_letter_dx_selections") or not isinstance(self.imaging_letter_dx_selections, dict):
             self.imaging_letter_dx_selections = {}
         self.imaging_letter_dx_selections[exam_name] = {}
+        if not hasattr(self, "imaging_letter_text_overrides") or not isinstance(self.imaging_letter_text_overrides, dict):
+            self.imaging_letter_text_overrides = {}
+        self.imaging_letter_text_overrides[exam_name] = {}
 
         # Switch to it (no file exists yet -> clear exam content)
         self.current_exam.set(exam_name)
@@ -1665,6 +1670,11 @@ class App(tk.Tk):
         try:
             if hasattr(self, "imaging_letter_dx_selections") and isinstance(self.imaging_letter_dx_selections, dict):
                 self.imaging_letter_dx_selections.pop(exam_name, None)
+        except Exception:
+            pass
+        try:
+            if hasattr(self, "imaging_letter_text_overrides") and isinstance(self.imaging_letter_text_overrides, dict):
+                self.imaging_letter_text_overrides.pop(exam_name, None)
         except Exception:
             pass
 
@@ -1987,6 +1997,78 @@ class App(tk.Tk):
             return
         self._on_imaging_recommendation_added(modality, body_part)
 
+    def _open_imaging_recommendation_letter_editor(self, modality: str) -> None:
+        """Open editable text popup for a modality-specific imaging recommendation letter."""
+        exam = (self.current_exam.get() or "").strip()
+        if not exam:
+            return
+        payload = self.make_payload() or {}
+        mod_key = (modality or "").strip().lower()
+
+        exam_pick_map = self.imaging_letter_dx_selections.get(exam, {})
+        if not isinstance(exam_pick_map, dict):
+            exam_pick_map = {}
+        selected = exam_pick_map.get(mod_key, {})
+        if not isinstance(selected, dict):
+            selected = {}
+
+        exam_override_map = self.imaging_letter_text_overrides.get(exam, {})
+        if not isinstance(exam_override_map, dict):
+            exam_override_map = {}
+        current_text = (exam_override_map.get(mod_key) or "").strip()
+        if not current_text:
+            current_text = imaging_recommendation_letter_editable_text(payload, modality, selected)
+
+        dlg = tk.Toplevel(self)
+        dlg.title(f"{modality} Recommendation Letter Editor")
+        dlg.transient(self)
+        dlg.grab_set()
+
+        outer = ttk.Frame(dlg, padding=10)
+        outer.grid(row=0, column=0, sticky="nsew")
+        dlg.rowconfigure(0, weight=1)
+        dlg.columnconfigure(0, weight=1)
+        outer.rowconfigure(1, weight=1)
+        outer.columnconfigure(0, weight=1)
+
+        ttk.Label(
+            outer,
+            text="Edit the letter text (from salutation through signature):",
+        ).grid(row=0, column=0, sticky="w", pady=(0, 6))
+
+        txt = tk.Text(outer, wrap="word", width=92, height=24, font=("Segoe UI", 10))
+        txt.grid(row=1, column=0, sticky="nsew")
+        txt.insert("1.0", current_text)
+
+        btns = ttk.Frame(outer)
+        btns.grid(row=2, column=0, sticky="e", pady=(8, 0))
+
+        def _reset_default():
+            fresh = imaging_recommendation_letter_editable_text(payload, modality, selected)
+            txt.delete("1.0", "end")
+            txt.insert("1.0", fresh)
+
+        def _save_close():
+            val = txt.get("1.0", "end").strip()
+            if not hasattr(self, "imaging_letter_text_overrides") or not isinstance(self.imaging_letter_text_overrides, dict):
+                self.imaging_letter_text_overrides = {}
+            em = self.imaging_letter_text_overrides.get(exam, {})
+            if not isinstance(em, dict):
+                em = {}
+            em[mod_key] = val
+            self.imaging_letter_text_overrides[exam] = em
+            try:
+                self.write_settings({"imaging_letter_text_overrides": self.imaging_letter_text_overrides})
+            except Exception:
+                pass
+            dlg.destroy()
+
+        ttk.Button(btns, text="Reset Default", command=_reset_default).grid(row=0, column=0, padx=(0, 6))
+        ttk.Button(btns, text="Cancel", command=dlg.destroy).grid(row=0, column=1, padx=(0, 6))
+        ttk.Button(btns, text="Save", command=_save_close).grid(row=0, column=2)
+
+        self.wait_window(dlg)
+
     def _stored_imaging_dx_for_modality(self, payload: dict, exam: str, modality: str) -> dict[str, str]:
         """
         Return stored ICD picks that are still valid against current diagnosis options.
@@ -2062,10 +2144,20 @@ class App(tk.Tk):
             mod_key = (mod or "").strip().lower()
             picked = selected_by_modality.get(mod_key, {})
             exam_selection_map[mod_key] = dict(picked)
+            exam_override_map = self.imaging_letter_text_overrides.get(exam, {})
+            if not isinstance(exam_override_map, dict):
+                exam_override_map = {}
+            letter_text_override = (exam_override_map.get(mod_key) or "").strip()
             vault_name = f"{date_slug}__{exam_slug}__letter_{mod_slug}.pdf"
             tmp_path = os.path.join(pdf_dir, f".tmp_imaging_letter__{exam_slug}__{mod_slug}.pdf")
             try:
-                if build_imaging_recommendation_letter_pdf(tmp_path, payload, mod, picked):
+                if build_imaging_recommendation_letter_pdf(
+                    tmp_path,
+                    payload,
+                    mod,
+                    picked,
+                    letter_text_override,
+                ):
                     vp = upsert_vault_file(patient_root, "imaging", tmp_path, vault_name)
                     vault_paths.append(vp)
             except Exception as e:
@@ -2164,6 +2256,7 @@ class App(tk.Tk):
             "last_all_exams_pdf": self.last_all_exams_pdf_path,
             "last_imaging_letter_pdfs": self.last_imaging_letter_pdf_paths,
             "imaging_letter_dx_selections": self.imaging_letter_dx_selections,
+            "imaging_letter_text_overrides": self.imaging_letter_text_overrides,
         })
 
     # ---------- Providers for HOI ----------
@@ -2527,6 +2620,7 @@ class App(tk.Tk):
             self.schedule_autosave,
             on_add_imaging_callback=self._on_imaging_recommendation_added,
             on_click_imaging_callback=self._on_imaging_recommendation_clicked,
+            on_open_imaging_letter_callback=self._open_imaging_recommendation_letter_editor,
         )
 
         self.plan_page = PlanPage(self.content, on_change=self.schedule_autosave)
@@ -3145,6 +3239,24 @@ class App(tk.Tk):
                     if cleaned_bp:
                         cleaned_mods[mk] = cleaned_bp
                 self.imaging_letter_dx_selections[exam_clean] = cleaned_mods
+
+        txt_map = settings.get("imaging_letter_text_overrides", {})
+        self.imaging_letter_text_overrides = {}
+        if isinstance(txt_map, dict):
+            for exam, mod_map in txt_map.items():
+                if not isinstance(exam, str) or not isinstance(mod_map, dict):
+                    continue
+                exam_clean = exam.strip()
+                if not exam_clean:
+                    continue
+                cleaned_mods: dict[str, str] = {}
+                for mod_key, raw_text in mod_map.items():
+                    if not isinstance(mod_key, str) or not isinstance(raw_text, str):
+                        continue
+                    mk = mod_key.strip().lower()
+                    if mk:
+                        cleaned_mods[mk] = raw_text
+                self.imaging_letter_text_overrides[exam_clean] = cleaned_mods
 
         self.last_all_exams_pdf_path = settings.get("last_all_exams_pdf", "") or ""
         self._apply_exam_color_theme()
@@ -3983,6 +4095,7 @@ class App(tk.Tk):
             "last_all_exams_pdf": self.last_all_exams_pdf_path,
             "last_imaging_letter_pdfs": self.last_imaging_letter_pdf_paths,
             "imaging_letter_dx_selections": self.imaging_letter_dx_selections,
+            "imaging_letter_text_overrides": self.imaging_letter_text_overrides,
         })
         messagebox.showinfo("Success", f"PDF saved:\n{path}")
 
@@ -4126,6 +4239,7 @@ class App(tk.Tk):
         self.last_exam_pdf_paths = {e: "" for e in self.exams}
         self.last_imaging_letter_pdf_paths = {e: [] for e in self.exams}
         self.imaging_letter_dx_selections = {e: {} for e in self.exams}
+        self.imaging_letter_text_overrides = {e: {} for e in self.exams}
         self.last_all_exams_pdf_path = ""
         self.status_var.set("New case started. Previous cases/files are unchanged.")
         self.current_patient_id = None

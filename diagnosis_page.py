@@ -304,11 +304,13 @@ class DiagnosisPage(ttk.Frame):
         max_blocks: int = 21,
         on_add_imaging_callback=None,
         on_click_imaging_callback=None,
+        on_open_imaging_letter_callback=None,
     ):
         super().__init__(parent)
         self.on_change_callback = on_change_callback
         self.on_add_imaging_callback = on_add_imaging_callback
         self.on_click_imaging_callback = on_click_imaging_callback
+        self.on_open_imaging_letter_callback = on_open_imaging_letter_callback
         self.max_blocks = max_blocks
 
         self._loading = False
@@ -384,6 +386,40 @@ class DiagnosisPage(ttk.Frame):
             part = _clean(it.get("body_part", ""))
             if mod and part:
                 self.imaging_list.insert("end", f"{mod} of {part}")
+        self._refresh_imaging_letter_buttons()
+
+    def _refresh_imaging_letter_buttons(self):
+        if not hasattr(self, "imaging_letter_btns"):
+            return
+        for child in self.imaging_letter_btns.winfo_children():
+            child.destroy()
+        mods: list[str] = []
+        seen: set[str] = set()
+        for it in self.imaging_recs:
+            if not isinstance(it, dict):
+                continue
+            mod = _clean(it.get("modality", ""))
+            if not mod:
+                continue
+            k = mod.lower()
+            if k in seen:
+                continue
+            seen.add(k)
+            mods.append(mod)
+        for mod in mods:
+            ttk.Button(
+                self.imaging_letter_btns,
+                text=f"{mod} Recommendation Letter",
+                command=lambda m=mod: self._open_imaging_letter_editor(m),
+            ).pack(side="left", padx=(8, 0))
+
+    def _open_imaging_letter_editor(self, modality: str):
+        cb = getattr(self, "on_open_imaging_letter_callback", None)
+        if callable(cb):
+            try:
+                cb(modality)
+            except Exception:
+                pass
 
     def _add_imaging_rec(self):
         mod = _clean(self.img_mod_var.get())
@@ -753,6 +789,8 @@ class DiagnosisPage(ttk.Frame):
         img_btns.grid(row=1, column=0, sticky="w", padx=8, pady=(0, 6))
         ttk.Button(img_btns, text="Add", command=self._add_imaging_rec).pack(side="left")
         ttk.Button(img_btns, text="Remove Selected", command=self._remove_imaging_rec).pack(side="left", padx=(8, 0))
+        self.imaging_letter_btns = ttk.Frame(img_btns)
+        self.imaging_letter_btns.pack(side="left")
 
         self.imaging_list = tk.Listbox(img_box, height=4)
         self.imaging_list.grid(row=2, column=0, sticky="ew", padx=8, pady=(0, 8))

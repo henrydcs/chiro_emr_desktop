@@ -536,11 +536,64 @@ def imaging_recommendation_letter_title_and_body(payload: dict) -> tuple[str, st
     return title, body
 
 
+def imaging_recommendation_letter_editable_text(
+    payload: dict,
+    modality: str,
+    selected_icd_by_body_part: dict[str, str] | None = None,
+) -> str:
+    """
+    Draft editable letter text from salutation through signature (no title/header/footer).
+    """
+    sub = _payload_with_single_imaging_modality(payload, modality)
+    tb = imaging_recommendation_letter_title_and_body(sub)
+    if not tb:
+        return ""
+    _title, body = tb
+
+    patient = (payload or {}).get("patient") or {}
+    if not isinstance(patient, dict):
+        patient = {}
+
+    full_dx = (payload.get("soap") or {}).get("diagnosis_struct") or {}
+    sub_dx = (sub.get("soap") or {}).get("diagnosis_struct") or {}
+    body_parts = (
+        _ordered_imaging_body_parts_unique(sub_dx)
+        if isinstance(sub_dx, dict)
+        else []
+    )
+    icd_only: list[str] = []
+    if isinstance(full_dx, dict) and body_parts:
+        for bp in body_parts:
+            picked = ""
+            if selected_icd_by_body_part is not None:
+                picked = _icd_from_body_part_selection_map(selected_icd_by_body_part, bp)
+            if not picked:
+                picked = _icd_first_match_for_single_body_part(full_dx, bp)
+            icd_only.append(picked if picked else "—")
+
+    lines: list[str] = []
+    lines.append("To Whom It May Concern,")
+    lines.append("")
+    lines.append(body.strip())
+    if icd_only:
+        lines.append("")
+        lines.append("Diagnostic Codes:")
+        lines.extend(icd_only)
+    lines.append("")
+    lines.append("Sincerely,")
+    lines.append("")
+    prov = ((patient.get("provider") or "").strip() or (PROVIDER_NAME or "").strip())
+    if prov:
+        lines.append(prov)
+    return "\n".join(lines).strip()
+
+
 def build_imaging_recommendation_letter_pdf(
     path: str,
     payload: dict,
     modality: str,
     selected_icd_by_body_part: dict[str, str] | None = None,
+    editable_letter_text: str | None = None,
 ) -> bool:
     """
     One-page letter for a single imaging modality (MRI, X-ray, etc.).
@@ -616,45 +669,28 @@ def build_imaging_recommendation_letter_pdf(
         story.append(Spacer(1, 0.12 * inch))
         re_safe = xml_escape(re_line.strip()).replace("\n", "<br/>")
         story.append(Paragraph(f"<b>{re_safe}</b>", styles["ImagingLetterBody"]))
-        story.append(Spacer(1, 0.14 * inch))
-        story.append(Paragraph(xml_escape("To Whom It May Concern,"), styles["ImagingLetterBody"]))
-        story.append(Spacer(1, 0.12 * inch))
-
-        safe_body = xml_escape(body.strip()).replace("\n\n", "<br/><br/>").replace("\n", "<br/>")
-        story.append(Paragraph(safe_body, styles["ImagingLetterBody"]))
-
-        full_dx = (payload.get("soap") or {}).get("diagnosis_struct") or {}
-        sub_dx = (sub.get("soap") or {}).get("diagnosis_struct") or {}
-        body_parts = (
-            _ordered_imaging_body_parts_unique(sub_dx)
-            if isinstance(sub_dx, dict)
-            else []
-        )
-        icd_only: list[str] = []
-        if isinstance(full_dx, dict) and body_parts:
-            # One code per imaging body part (letter order matches imaging_recs order).
-            for bp in body_parts:
-                picked = ""
-                if selected_icd_by_body_part is not None:
-                    picked = _icd_from_body_part_selection_map(selected_icd_by_body_part, bp)
-                if not picked:
-                    picked = _icd_first_match_for_single_body_part(full_dx, bp)
-                icd_only.append(picked if picked else "—")
-        if icd_only:
-            codes_markup = "<br/>".join(xml_escape(c) for c in icd_only)
-            story.append(Spacer(1, 0.14 * inch))
-            story.append(
-                Paragraph("<b>Diagnostic Codes:</b>", styles["ImagingLetterBody"])
+        letter_text = (editable_letter_text or "").strip()
+        if not letter_text:
+            letter_text = imaging_recommendation_letter_editable_text(
+                payload,
+                modality,
+                selected_icd_by_body_part,
             )
-            story.append(Spacer(1, 0.06 * inch))
-            story.append(Paragraph(codes_markup, styles["ImagingLetterBody"]))
+        lines = letter_text.replace("\r\n", "\n").split("\n")
+        if lines:
+            story.append(Spacer(1, 0.14 * inch))
+            for line in lines:
+                if not line.strip():
+                    # Preserve user-inserted blank lines from popup editor.
+                    story.append(Spacer(1, 0.12 * inch))
+                    continue
+                safe_line = xml_escape(line)
+                if line.strip().lower() == "diagnostic codes:":
+                    story.append(Paragraph(f"<b>{safe_line}</b>", styles["ImagingLetterBody"]))
+                else:
+                    story.append(Paragraph(safe_line, styles["ImagingLetterBody"]))
 
         story.append(Spacer(1, 0.18 * inch))
-        story.append(Paragraph(xml_escape("Sincerely,"), styles["ImagingLetterBody"]))
-        story.append(Spacer(1, 0.28 * inch))
-        prov = ((patient.get("provider") or "").strip() or (PROVIDER_NAME or "").strip())
-        if prov:
-            story.append(Paragraph(xml_escape(prov), styles["ImagingLetterBody"]))
 
         doc = SimpleDocTemplate(
             path,
