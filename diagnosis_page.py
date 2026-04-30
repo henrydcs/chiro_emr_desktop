@@ -307,12 +307,14 @@ class DiagnosisPage(ttk.Frame):
         on_add_imaging_callback=None,
         on_click_imaging_callback=None,
         on_open_imaging_letter_callback=None,
+        on_imaging_recs_removed_callback=None,
     ):
         super().__init__(parent)
         self.on_change_callback = on_change_callback
         self.on_add_imaging_callback = on_add_imaging_callback
         self.on_click_imaging_callback = on_click_imaging_callback
         self.on_open_imaging_letter_callback = on_open_imaging_letter_callback
+        self.on_imaging_recs_removed_callback = on_imaging_recs_removed_callback
         self.max_blocks = max_blocks
 
         self._loading = False
@@ -447,6 +449,24 @@ class DiagnosisPage(ttk.Frame):
                 self.imaging_recs.pop(i)
         self._refresh_imaging_list()
         self._changed()
+        self._notify_imaging_recs_removed()
+
+    def _remove_all_imaging_recs(self):
+        if not self.imaging_recs:
+            return
+        self.imaging_recs.clear()
+        self._refresh_imaging_list()
+        self._changed()
+        self._notify_imaging_recs_removed()
+
+    def _notify_imaging_recs_removed(self):
+        cb = getattr(self, "on_imaging_recs_removed_callback", None)
+        if not callable(cb):
+            return
+        try:
+            cb()
+        except Exception:
+            pass
 
     def _on_imaging_list_click(self, _evt=None):
         sel = list(self.imaging_list.curselection())
@@ -791,12 +811,13 @@ class DiagnosisPage(ttk.Frame):
         img_btns.grid(row=1, column=0, sticky="w", padx=8, pady=(0, 6))
         ttk.Button(img_btns, text="Add", command=self._add_imaging_rec).pack(side="left")
         ttk.Button(img_btns, text="Remove Selected", command=self._remove_imaging_rec).pack(side="left", padx=(8, 0))
+        ttk.Button(img_btns, text="Remove All", command=self._remove_all_imaging_recs).pack(side="left", padx=(8, 0))
         self.imaging_letter_btns = ttk.Frame(img_btns)
         self.imaging_letter_btns.pack(side="left")
 
         self.imaging_list = tk.Listbox(img_box, height=4)
         self.imaging_list.grid(row=2, column=0, sticky="ew", padx=8, pady=(0, 8))
-        self.imaging_list.bind("<ButtonRelease-1>", self._on_imaging_list_click)
+        self.imaging_list.bind("<Double-Button-1>", self._on_imaging_list_click)
         if not hasattr(self, "imaging_notes_var"):
             self.imaging_notes_var = tk.StringVar(value="")
         ttk.Label(img_box, text="Notes (general text):").grid(row=3, column=0, sticky="w", padx=8, pady=(14, 4))

@@ -24,6 +24,7 @@
 # python chiro_app.py or
 
 # cd chiro_emr_desktop
+# python chiro_app.py
 
 # git status
 # git add -A
@@ -1915,6 +1916,125 @@ class App(tk.Tk):
         except Exception:
             return matches
 
+    def _unique_archive_suffix(self) -> str:
+        return datetime.now().strftime("%Y%m%d_%H%M%S") + "_" + os.urandom(2).hex()
+
+    def _rename_vault_file_archived(self, path: str) -> None:
+        if not path or not os.path.isfile(path):
+            return
+        base, ext = os.path.splitext(path)
+        dest = f"{base}__archived_{self._unique_archive_suffix()}{ext}"
+        if os.path.exists(dest):
+            dest = f"{base}__archived_{self._unique_archive_suffix()}{ext}"
+        os.replace(path, dest)
+
+    def _archive_imaging_letters_off_chart(
+        self,
+        patient_root: str,
+        exam: str,
+        active_mod_file_slugs: set[str],
+    ) -> None:
+        """
+        Rename auto-generated imaging letters for this exam whose modality is no longer on the chart.
+        Avoids overwriting history when a modality is re-added (new letter gets a fresh dated filename).
+        """
+        exam_slug = safe_slug(exam).lower()
+        vault_dir = os.path.join(patient_root, "vault", "imaging")
+        if not os.path.isdir(vault_dir):
+            return
+        try:
+            for fn in os.listdir(vault_dir):
+                low = fn.lower()
+                if not low.endswith(".pdf"):
+                    continue
+                if "__archived_" in low:
+                    continue
+                path = os.path.join(vault_dir, fn)
+                if not os.path.isfile(path):
+                    continue
+                if low.endswith(f"__{exam_slug}__imaging_recommendation.pdf"):
+                    self._rename_vault_file_archived(path)
+                    continue
+                if f"__{exam_slug}__letter_" not in low:
+                    continue
+                m = re.search(rf"__{re.escape(exam_slug)}__letter_(.+)\.pdf$", low)
+                if not m:
+                    continue
+                slug = m.group(1)
+                if slug not in active_mod_file_slugs:
+                    self._rename_vault_file_archived(path)
+        except Exception:
+            pass
+
+    def _vault_imaging_basename_stale(self, basename: str) -> bool:
+        """True if this filename is a record letter for the current exam that is archived or off the chart."""
+        exam = (self.current_exam.get() or "").strip()
+        if not exam or basename.startswith("("):
+            return False
+        fn_low = basename.lower()
+        ex_slug = safe_slug(exam).lower()
+        if f"__{ex_slug}__" not in fn_low:
+            return False
+        if "__archived_" in fn_low:
+            return True
+        payload = self.make_payload() or {}
+        active_slugs = {safe_slug(m).lower().replace(" ", "_") for m in imaging_modalities_in_payload(payload)}
+        if fn_low.endswith(f"__{ex_slug}__imaging_recommendation.pdf"):
+            return True
+        if f"__{ex_slug}__letter_" not in fn_low or not fn_low.endswith(".pdf"):
+            return False
+        m = re.search(rf"__{re.escape(ex_slug)}__letter_(.+)\.pdf$", fn_low)
+        if not m:
+            return False
+        return m.group(1) not in active_slugs
+
+    def _sort_vault_imaging_files(self, folder_key: str, files: list[str]) -> list[str]:
+        if folder_key != "imaging":
+            return sorted(files, key=lambda x: x.lower())
+
+        def sort_key(fn: str) -> tuple:
+            try:
+                stale = self._vault_imaging_basename_stale(fn)
+            except Exception:
+                stale = False
+            return (1 if stale else 0, fn.lower())
+
+        return sorted(files, key=sort_key)
+
+    def _vault_list_item_meta(self, folder_key: str, basename: str) -> dict | str | None:
+        if folder_key != "imaging":
+            return None
+        try:
+            if self._vault_imaging_basename_stale(basename):
+                return {"foreground": "#b91c1c", "stale": True}
+        except Exception:
+            pass
+        return None
+
+    def _filter_active_imaging_letter_paths(self, paths: list[str], exam: str) -> list[str]:
+        """Paths for auto imaging letters that still match the chart (excludes archived letters)."""
+        exam = (exam or "").strip()
+        if not exam or not paths:
+            return list(paths or [])
+        ex_slug = safe_slug(exam).lower()
+        payload = self.make_payload() or {}
+        active_slugs = {safe_slug(m).lower().replace(" ", "_") for m in imaging_modalities_in_payload(payload)}
+        out: list[str] = []
+        for p in paths:
+            if not p or not os.path.isfile(p):
+                continue
+            base = os.path.basename(p).lower()
+            if "__archived_" in base:
+                continue
+            if base.endswith(f"__{ex_slug}__imaging_recommendation.pdf"):
+                continue
+            if f"__{ex_slug}__letter_" in base and base.endswith(".pdf"):
+                m = re.search(rf"__{re.escape(ex_slug)}__letter_(.+)\.pdf$", base)
+                if not m or m.group(1) not in active_slugs:
+                    continue
+            out.append(p)
+        return out
+
     def _purge_stale_modalities_letter_vault(self, patient_root: str, exam: str) -> None:
         exam_slug = safe_slug(exam).lower()
         vault_dir = os.path.join(patient_root, "vault", "messages")
@@ -2225,24 +2345,30 @@ class App(tk.Tk):
 
     def _export_imaging_recommendation_letter_vault(self, payload: dict, patient_root: str) -> list[str]:
         """Build one letter PDF per imaging modality into vault/imaging. Returns list of vault paths."""
-        if not patient_root or not REPORTLAB_OK:
-            return []
         exam = (payload.get("exam") or self.current_exam.get() or "").strip()
         if not exam:
             return []
-        if not imaging_recommendation_letter_should_generate(payload):
+
+        modalities = imaging_modalities_in_payload(payload)
+        should = imaging_recommendation_letter_should_generate(payload)
+
+        active_file_slugs: set[str] = set()
+        if should and modalities:
+            active_file_slugs = {safe_slug(m).lower().replace(" ", "_") for m in modalities}
+
+        if patient_root:
+            self._archive_imaging_letters_off_chart(patient_root, exam, active_file_slugs)
+
+        if not should or not modalities:
             try:
                 self.last_imaging_letter_pdf_paths[exam] = []
+                self.imaging_letter_dx_selections[exam] = {}
+                self.imaging_letter_text_overrides[exam] = {}
             except Exception:
                 pass
             return []
 
-        modalities = imaging_modalities_in_payload(payload)
-        if not modalities:
-            try:
-                self.last_imaging_letter_pdf_paths[exam] = []
-            except Exception:
-                pass
+        if not patient_root or not REPORTLAB_OK:
             return []
 
         ensure_patient_dirs(patient_root)
@@ -2254,26 +2380,26 @@ class App(tk.Tk):
         exam_slug = safe_slug(exam)
 
         vault_paths: list[str] = []
-        exam_selection_map = self.imaging_letter_dx_selections.get(exam, {})
-        if not isinstance(exam_selection_map, dict):
-            exam_selection_map = {}
         selected_by_modality: dict[str, dict[str, str]] = {}
         for mod in modalities:
             mod_key = (mod or "").strip().lower()
             picked = self._stored_imaging_dx_for_modality(payload, exam, mod)
             selected_by_modality[mod_key] = dict(picked)
 
-        self._purge_stale_imaging_letters_vault(patient_root, exam)
+        keep_keys = {(m or "").strip().lower() for m in modalities}
+        em_ov = self.imaging_letter_text_overrides.get(exam, {})
+        if not isinstance(em_ov, dict):
+            em_ov = {}
+        trimmed_ov = {k: v for k, v in em_ov.items() if k in keep_keys}
+        self.imaging_letter_text_overrides[exam] = trimmed_ov
 
+        exam_selection_map: dict[str, dict[str, str]] = {}
         for mod in modalities:
             mod_slug = safe_slug(mod).lower().replace(" ", "_")
             mod_key = (mod or "").strip().lower()
             picked = selected_by_modality.get(mod_key, {})
             exam_selection_map[mod_key] = dict(picked)
-            exam_override_map = self.imaging_letter_text_overrides.get(exam, {})
-            if not isinstance(exam_override_map, dict):
-                exam_override_map = {}
-            letter_text_override = (exam_override_map.get(mod_key) or "").strip()
+            letter_text_override = (trimmed_ov.get(mod_key) or "").strip()
             vault_name = f"{date_slug}__{exam_slug}__letter_{mod_slug}.pdf"
             tmp_path = os.path.join(pdf_dir, f".tmp_imaging_letter__{exam_slug}__{mod_slug}.pdf")
             try:
@@ -2301,6 +2427,27 @@ class App(tk.Tk):
         except Exception:
             pass
         return vault_paths
+
+    def _on_imaging_recs_changed_cleanup(self) -> None:
+        """After imaging rows are removed in Diagnosis, sync vault PDFs and saved letter state."""
+        payload = self.make_payload() or {}
+        pr = self.get_current_patient_root() or ""
+        try:
+            self._export_imaging_recommendation_letter_vault(payload, pr)
+        except Exception as e:
+            print("Imaging letter sync after imaging edit failed:", e)
+        try:
+            self.write_settings({
+                "last_imaging_letter_pdfs": self.last_imaging_letter_pdf_paths,
+                "imaging_letter_dx_selections": self.imaging_letter_dx_selections,
+                "imaging_letter_text_overrides": self.imaging_letter_text_overrides,
+            })
+        except Exception:
+            pass
+        try:
+            self.doc_vault_page.refresh_current_folder()
+        except Exception:
+            pass
 
     def _export_modalities_recommendation_letter_vault(self, payload: dict, patient_root: str) -> str:
         """Build one combined modalities recommendation letter into vault/modalities."""
@@ -2413,13 +2560,10 @@ class App(tk.Tk):
         except Exception as e:
             print("Modalities letter export failed:", e)
 
-        if getattr(self.current_page, "get", lambda: "")() == "Doc Vault":
-            try:
-                fk = getattr(self.doc_vault_page.folder_panel, "folder_key", None)
-                if fk in ("pdfs", "imaging", "messages"):
-                    self.doc_vault_page.refresh_current_folder()
-            except Exception:
-                pass
+        try:
+            self.doc_vault_page.refresh_current_folder()
+        except Exception:
+            pass
 
         self.last_exam_pdf_paths[exam] = path
         self.write_settings({
@@ -2541,9 +2685,19 @@ class App(tk.Tk):
             letter_paths = []
 
         valid = [p for p in letter_paths if p and os.path.isfile(p)]
+        filtered = self._filter_active_imaging_letter_paths(valid, exam)
+        if len(filtered) != len(valid):
+            try:
+                self.last_imaging_letter_pdf_paths[exam] = filtered
+            except Exception:
+                pass
+        valid = filtered
+
         patient_root = self.get_current_patient_root()
         if patient_root and not valid:
             resolved = self._resolve_imaging_letter_vault_paths(patient_root, exam)
+            if resolved:
+                resolved = self._filter_active_imaging_letter_paths(resolved, exam)
             if resolved:
                 self.last_imaging_letter_pdf_paths[exam] = resolved
                 valid = resolved
@@ -2806,6 +2960,7 @@ class App(tk.Tk):
             on_add_imaging_callback=self._on_imaging_recommendation_added,
             on_click_imaging_callback=self._on_imaging_recommendation_clicked,
             on_open_imaging_letter_callback=self._open_imaging_recommendation_letter_editor,
+            on_imaging_recs_removed_callback=self._on_imaging_recs_changed_cleanup,
         )
 
         self.plan_page = PlanPage(self.content, on_change=self.schedule_autosave)
@@ -2819,7 +2974,9 @@ class App(tk.Tk):
         self.doc_vault_page = DocVaultPage(
             self.content,
             self.schedule_autosave,
-            get_patient_root_fn=self.get_current_patient_root
+            get_patient_root_fn=self.get_current_patient_root,
+            list_item_style_fn=self._vault_list_item_meta,
+            sort_files_fn=self._sort_vault_imaging_files,
         )        
 
         # --- Tk Docs timeline page ---
@@ -4283,13 +4440,10 @@ class App(tk.Tk):
         except Exception as e:
             print("Imaging letter export failed:", e)
 
-        if getattr(self.current_page, "get", lambda: "")() == "Doc Vault":
-            try:
-                fk = getattr(self.doc_vault_page.folder_panel, "folder_key", None)
-                if fk in ("pdfs", "imaging", "messages"):
-                    self.doc_vault_page.refresh_current_folder()
-            except Exception:
-                pass
+        try:
+            self.doc_vault_page.refresh_current_folder()
+        except Exception:
+            pass
 
         self.last_exam_pdf_paths[self.current_exam.get()] = path
         self.write_settings({

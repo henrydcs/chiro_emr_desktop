@@ -72,11 +72,22 @@ def unique_dest_path(dest_dir: str, filename: str) -> str:
         i += 1
 
 class FolderPanel(ttk.Frame):
-    def __init__(self, parent, *, get_folder_path_fn, set_status_fn):
+    def __init__(
+        self,
+        parent,
+        *,
+        get_folder_path_fn,
+        set_status_fn,
+        list_item_style_fn=None,
+        sort_files_fn=None,
+    ):
         super().__init__(parent)
         self.get_folder_path_fn = get_folder_path_fn
         self.set_status_fn = set_status_fn
+        self.list_item_style_fn = list_item_style_fn
+        self.sort_files_fn = sort_files_fn
         self.folder_key: str | None = None
+        self._row_basename: list[str] = []
         self._build()
 
     def _build(self):
@@ -101,7 +112,8 @@ class FolderPanel(ttk.Frame):
 
         ttk.Label(
             self,
-            text="Tip: Enter Last/First/DOB/DOI in the main app to activate this vault.",
+            text="Tip: Enter Last/First/DOB/DOI in the main app to activate this vault.\n"
+            "In Imaging, names in red are letters no longer tied to the chart (removed recommendations); use Delete to remove.",
             justify="left",
         ).pack(anchor="w", pady=(8, 0))
 
@@ -129,6 +141,7 @@ class FolderPanel(ttk.Frame):
 
     def refresh(self):
         self.listbox.delete(0, tk.END)
+        self._row_basename = []
         d = self._current_dir()
         if not d or not os.path.isdir(d):
             self._show_placeholder("(Enter patient demographics to enable the vault.)")
@@ -139,11 +152,41 @@ class FolderPanel(ttk.Frame):
         except Exception:
             files = []
 
+        if self.sort_files_fn and self.folder_key:
+            try:
+                files = self.sort_files_fn(self.folder_key, files)
+            except Exception:
+                files = sorted(files, key=lambda x: x.lower())
+
         any_file = False
+        row = 0
         for f in files:
             fp = os.path.join(d, f)
             if os.path.isfile(fp):
-                self.listbox.insert(tk.END, f)
+                disp = f
+                fg = None
+                if self.list_item_style_fn and self.folder_key:
+                    try:
+                        meta = self.list_item_style_fn(self.folder_key, f)
+                        if isinstance(meta, dict):
+                            fg = meta.get("foreground")
+                            if meta.get("stale"):
+                                disp = f"{f}  — off chart"
+                        elif isinstance(meta, str):
+                            fg = meta
+                    except Exception:
+                        pass
+                self.listbox.insert(tk.END, disp)
+                self._row_basename.append(f)
+                if fg:
+                    try:
+                        self.listbox.itemconfig(row, foreground=fg, selectforeground=fg)
+                    except tk.TclError:
+                        try:
+                            self.listbox.itemconfig(row, fg=fg)
+                        except tk.TclError:
+                            pass
+                row += 1
                 any_file = True
 
         if not any_file:
@@ -189,7 +232,10 @@ class FolderPanel(ttk.Frame):
             messagebox.showinfo("Open", "Select a file from the list.")
             return
 
-        fname = self.listbox.get(sel[0])
+        idx = sel[0]
+        fname = self.listbox.get(idx)
+        if idx < len(self._row_basename):
+            fname = self._row_basename[idx]
         if fname.startswith("("):
             return
 
@@ -213,7 +259,10 @@ class FolderPanel(ttk.Frame):
             messagebox.showinfo("Delete", "Select a file from the list.")
             return
 
-        fname = self.listbox.get(sel[0])
+        idx = sel[0]
+        fname = self.listbox.get(idx)
+        if idx < len(self._row_basename):
+            fname = self._row_basename[idx]
         if fname.startswith("("):
             return
 
@@ -250,10 +299,12 @@ class DocVaultPage(ttk.Frame):
     Patient-linked doc vault page (no duplicate demographics).
     Uses chiro_app patient_root as the "case folder".
     """
-    def __init__(self, parent, on_change_callback, get_patient_root_fn):
+    def __init__(self, parent, on_change_callback, get_patient_root_fn, list_item_style_fn=None, sort_files_fn=None):
         super().__init__(parent)
         self.on_change_callback = on_change_callback
         self.get_patient_root_fn = get_patient_root_fn  # returns patient_root or None
+        self.list_item_style_fn = list_item_style_fn
+        self.sort_files_fn = sort_files_fn
 
         self._build_ui()
 
@@ -320,6 +371,8 @@ class DocVaultPage(ttk.Frame):
             right,
             get_folder_path_fn=self._folder_path,
             set_status_fn=self.set_status,
+            list_item_style_fn=self.list_item_style_fn,
+            sort_files_fn=self.sort_files_fn,
         )
         self.folder_panel.pack(fill="both", expand=True, pady=(8, 0))
 
