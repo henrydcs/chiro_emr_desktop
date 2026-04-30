@@ -1916,6 +1916,48 @@ class App(tk.Tk):
         except Exception:
             return matches
 
+    def _parse_imaging_vault_auto_letter(self, fn_lower: str) -> dict | None:
+        """
+        If basename matches our vault imaging letter naming, return
+        { exam_slug, mod_slug (None if legacy combined), is_legacy, is_archived }.
+        """
+        if not fn_lower.endswith(".pdf"):
+            return None
+        stem = fn_lower[:-4]
+        is_archived = "__archived_" in stem
+        stem_core = stem.split("__archived_")[0] if is_archived else stem
+
+        suff = "__imaging_recommendation"
+        if stem_core.endswith(suff):
+            prefix = stem_core[: -len(suff)]
+            parts = prefix.split("__", 1)
+            if len(parts) < 2:
+                return None
+            return {
+                "exam_slug": parts[1],
+                "mod_slug": None,
+                "is_legacy": True,
+                "is_archived": is_archived,
+            }
+
+        marker = "__letter_"
+        if marker not in stem_core:
+            return None
+        idx = stem_core.index(marker)
+        prefix = stem_core[:idx]
+        mod_slug = stem_core[idx + len(marker) :]
+        if not mod_slug:
+            return None
+        parts = prefix.split("__", 1)
+        if len(parts) < 2:
+            return None
+        return {
+            "exam_slug": parts[1],
+            "mod_slug": mod_slug,
+            "is_legacy": False,
+            "is_archived": is_archived,
+        }
+
     def _unique_archive_suffix(self) -> str:
         return datetime.now().strftime("%Y%m%d_%H%M%S") + "_" + os.urandom(2).hex()
 
@@ -1967,26 +2009,33 @@ class App(tk.Tk):
             pass
 
     def _vault_imaging_basename_stale(self, basename: str) -> bool:
-        """True if this filename is a record letter for the current exam that is archived or off the chart."""
+        """Red / off-chart: other-visit letters, archived, legacy, or modality removed for this visit."""
         exam = (self.current_exam.get() or "").strip()
         if not exam or basename.startswith("("):
             return False
         fn_low = basename.lower()
-        ex_slug = safe_slug(exam).lower()
-        if f"__{ex_slug}__" not in fn_low:
+        current_ex = safe_slug(exam).lower()
+
+        info = self._parse_imaging_vault_auto_letter(fn_low)
+        if info is None:
             return False
-        if "__archived_" in fn_low:
+
+        if info["exam_slug"] != current_ex:
             return True
+
+        if info["is_archived"]:
+            return True
+
+        if info["is_legacy"]:
+            return True
+
+        mod_slug = info["mod_slug"]
+        if not mod_slug:
+            return True
+
         payload = self.make_payload() or {}
         active_slugs = {safe_slug(m).lower().replace(" ", "_") for m in imaging_modalities_in_payload(payload)}
-        if fn_low.endswith(f"__{ex_slug}__imaging_recommendation.pdf"):
-            return True
-        if f"__{ex_slug}__letter_" not in fn_low or not fn_low.endswith(".pdf"):
-            return False
-        m = re.search(rf"__{re.escape(ex_slug)}__letter_(.+)\.pdf$", fn_low)
-        if not m:
-            return False
-        return m.group(1) not in active_slugs
+        return mod_slug not in active_slugs
 
     def _sort_vault_imaging_files(self, folder_key: str, files: list[str]) -> list[str]:
         if folder_key != "imaging":
@@ -2024,14 +2073,17 @@ class App(tk.Tk):
             if not p or not os.path.isfile(p):
                 continue
             base = os.path.basename(p).lower()
-            if "__archived_" in base:
+            info = self._parse_imaging_vault_auto_letter(base)
+            if info is None:
+                out.append(p)
                 continue
-            if base.endswith(f"__{ex_slug}__imaging_recommendation.pdf"):
+            if info["exam_slug"] != ex_slug:
                 continue
-            if f"__{ex_slug}__letter_" in base and base.endswith(".pdf"):
-                m = re.search(rf"__{re.escape(ex_slug)}__letter_(.+)\.pdf$", base)
-                if not m or m.group(1) not in active_slugs:
-                    continue
+            if info["is_archived"] or info["is_legacy"]:
+                continue
+            mod_slug = info.get("mod_slug")
+            if not mod_slug or mod_slug not in active_slugs:
+                continue
             out.append(p)
         return out
 

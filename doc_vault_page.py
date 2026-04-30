@@ -113,7 +113,7 @@ class FolderPanel(ttk.Frame):
         ttk.Label(
             self,
             text="Tip: Enter Last/First/DOB/DOI in the main app to activate this vault.\n"
-            "In Imaging, names in red are letters no longer tied to the chart (removed recommendations); use Delete to remove.",
+            "In Imaging, red / “off chart” rows are archived letters or letters from other visits; black rows match this visit’s active imaging.",
             justify="left",
         ).pack(anchor="w", pady=(8, 0))
 

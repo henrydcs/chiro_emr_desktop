@@ -815,7 +815,7 @@ class DiagnosisPage(ttk.Frame):
         self.imaging_letter_btns = ttk.Frame(img_btns)
         self.imaging_letter_btns.pack(side="left")
 
-        self.imaging_list = tk.Listbox(img_box, height=4)
+        self.imaging_list = tk.Listbox(img_box, height=4, selectmode=tk.EXTENDED)
         self.imaging_list.grid(row=2, column=0, sticky="ew", padx=8, pady=(0, 8))
         self.imaging_list.bind("<Double-Button-1>", self._on_imaging_list_click)
         if not hasattr(self, "imaging_notes_var"):
