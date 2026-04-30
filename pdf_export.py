@@ -266,6 +266,57 @@ _SPINE_ICD_PREFIXES: dict[str, tuple[str, ...]] = {
     ),
 }
 
+_DX_LIST_ICD_CACHE: dict[str, str] | None = None
+
+
+def _dx_list_label_to_icd_map() -> dict[str, str]:
+    """Exact label -> ICD from diagnosis_page.DX_LIST (separator / blank-code rows skipped)."""
+    global _DX_LIST_ICD_CACHE
+    if _DX_LIST_ICD_CACHE is not None:
+        return _DX_LIST_ICD_CACHE
+    out: dict[str, str] = {}
+    try:
+        from diagnosis_page import DX_LIST
+    except ImportError:
+        _DX_LIST_ICD_CACHE = {}
+        return _DX_LIST_ICD_CACHE
+    for lbl, code in DX_LIST:
+        lbl = (lbl or "").strip()
+        code = (code or "").strip()
+        if not lbl or not code:
+            continue
+        if lbl.startswith("-") or code.startswith("-"):
+            continue
+        out[lbl] = code
+    _DX_LIST_ICD_CACHE = out
+    return out
+
+
+def _resolve_icd_from_dx_block(block: dict) -> str:
+    """
+    ICD for PDF/preview/imaging: use saved icd10 when set; otherwise parse dx_display
+    ('Label — ICD'); otherwise exact-match edit_text / dx_label against DX_LIST.
+    Does not invent codes outside DX_LIST / stored fields.
+    """
+    if not isinstance(block, dict):
+        return ""
+    code = (block.get("icd10") or "").strip()
+    if code:
+        return code
+    disp = (block.get("dx_display") or "").strip()
+    if " — " in disp:
+        right = disp.split(" — ", 1)[1].strip()
+        if right and not right.startswith("-"):
+            return right
+    lut = _dx_list_label_to_icd_map()
+    for key in (
+        (block.get("edit_text") or "").strip(),
+        (block.get("dx_label") or "").strip(),
+    ):
+        if key and key in lut:
+            return lut[key]
+    return ""
+
 
 def _dx_block_text_for_imaging_match(block: dict) -> str:
     parts = [
@@ -291,7 +342,7 @@ def _diagnosis_block_matches_imaging_body_part(block: dict, body_part: str) -> b
             return True
     spine_prefs = _SPINE_ICD_PREFIXES.get(body_part)
     if spine_prefs:
-        icd = (block.get("icd10") or "").strip()
+        icd = _resolve_icd_from_dx_block(block)
         if _icd_matches_prefixes(icd, spine_prefs):
             return True
     return False
@@ -351,8 +402,8 @@ def _payload_with_single_imaging_modality(payload: dict, modality: str) -> dict:
 
 
 # --- Imaging letter diagnostic code selection ---
-# Letter ICDs are always taken only from diagnosis_struct.blocks (in chart order); we never
-# invent codes. Selection is region-based and user-pick-driven.
+# ICDs come from diagnosis_struct.blocks (chart order). Empty icd10 is resolved from dx_display
+# or DX_LIST via _resolve_icd_from_dx_block; selection is region-based and user-pick-driven.
 
 
 def _icd_codes_for_imaging_body_parts_only(dx_struct: dict) -> list[str]:
@@ -386,7 +437,7 @@ def _icd_codes_for_modality_and_regions(
     for b in blocks:
         if not isinstance(b, dict):
             continue
-        icd = (b.get("icd10") or "").strip()
+        icd = _resolve_icd_from_dx_block(b)
         if not icd or icd in seen_icd:
             continue
         for bp in body_parts:
@@ -431,7 +482,7 @@ def _icd_first_match_for_single_body_part(dx_struct: dict, body_part: str) -> st
     for b in blocks:
         if not isinstance(b, dict):
             continue
-        icd = (b.get("icd10") or "").strip()
+        icd = _resolve_icd_from_dx_block(b)
         if not icd:
             continue
         if _diagnosis_block_matches_imaging_body_part(b, body_part):
@@ -469,7 +520,7 @@ def imaging_dx_choices_by_body_part(payload: dict, modality: str) -> tuple[list[
                 continue
             if not _diagnosis_block_matches_imaging_body_part(b, bp):
                 continue
-            icd = (b.get("icd10") or "").strip()
+            icd = _resolve_icd_from_dx_block(b)
             if not icd or icd in seen_icd:
                 continue
             label = (b.get("dx_label") or "").strip() or (b.get("edit_text") or "").strip() or icd
@@ -478,6 +529,36 @@ def imaging_dx_choices_by_body_part(payload: dict, modality: str) -> tuple[list[
             seen_icd.add(icd)
         out[bp] = choices
     return body_parts, out
+
+
+def imaging_dx_all_ui_choices(payload: dict) -> list[dict[str, str]]:
+    """
+    Every diagnosis row from the chart (soap.diagnosis_struct.blocks), in UI order — one entry
+    per block. Rows that share the same ICD (e.g. cervical vs lumbar disc) are all included;
+    duplicate display strings get a numeric suffix so the combobox can distinguish them.
+    """
+    soap = (payload or {}).get("soap") or {}
+    dx_struct = soap.get("diagnosis_struct") or {}
+    if not isinstance(dx_struct, dict):
+        return []
+    blocks = dx_struct.get("blocks") or []
+    if not isinstance(blocks, list):
+        return []
+    out: list[dict[str, str]] = []
+    display_use_count: dict[str, int] = {}
+    for b in blocks:
+        if not isinstance(b, dict):
+            continue
+        icd = _resolve_icd_from_dx_block(b)
+        if not icd:
+            continue
+        label = (b.get("dx_label") or "").strip() or (b.get("edit_text") or "").strip() or icd
+        base_display = f"{label} - {icd}" if label and label != icd else icd
+        n = display_use_count.get(base_display, 0)
+        display_use_count[base_display] = n + 1
+        display = base_display if n == 0 else f"{base_display} ({n + 1})"
+        out.append({"icd": icd, "label": label, "display": display})
+    return out
 
 
 def imaging_recommendation_letter_title_and_body(payload: dict) -> tuple[str, str] | None:
@@ -586,6 +667,189 @@ def imaging_recommendation_letter_editable_text(
     if prov:
         lines.append(prov)
     return "\n".join(lines).strip()
+
+
+def _modalities_groups_from_payload(payload: dict) -> list[tuple[str, list[str]]]:
+    """Return [(modality name, [body parts...]), ...] from plan_struct.services.therapy_data."""
+    soap = (payload or {}).get("soap") or {}
+    plan = soap.get("plan") or soap.get("plan_struct") or {}
+    services = (plan.get("services") or {}) if isinstance(plan, dict) else {}
+    therapy_data = (services.get("therapy_data") or {}) if isinstance(services, dict) else {}
+    if not isinstance(therapy_data, dict):
+        return []
+
+    def _is_checked_value(v) -> bool:
+        # Handles bool, 0/1, and common string encodings from legacy saves.
+        if isinstance(v, bool):
+            return v
+        if isinstance(v, (int, float)):
+            return bool(v)
+        if isinstance(v, str):
+            t = v.strip().lower()
+            if t in ("1", "true", "yes", "y", "on", "checked"):
+                return True
+            if t in ("0", "false", "no", "n", "off", "unchecked", ""):
+                return False
+        return bool(v)
+
+    out: list[tuple[str, list[str]]] = []
+    for therapy_key, parts_map in therapy_data.items():
+        if not isinstance(parts_map, dict):
+            continue
+        raw_key = (therapy_key or "").strip()
+        modality = raw_key.split(": ", 1)[1].strip() if ": " in raw_key else raw_key
+        if not modality:
+            continue
+        body_parts: list[str] = []
+        seen: set[str] = set()
+        for bp, pair in parts_map.items():
+            bps = (bp or "").strip()
+            if not bps or bps in seen:
+                continue
+            checked = False
+            if isinstance(pair, (list, tuple)) and pair:
+                checked = _is_checked_value(pair[0])
+                # Legacy fallback: if checked flag missing but minutes exists, treat as selected.
+                if not checked and len(pair) > 1 and (str(pair[1]).strip() if pair[1] is not None else ""):
+                    checked = True
+            elif isinstance(pair, dict):
+                checked = _is_checked_value(pair.get("checked"))
+                if not checked:
+                    checked = bool((pair.get("minutes") or pair.get("time") or "").strip())
+            elif isinstance(pair, bool):
+                checked = pair
+            elif isinstance(pair, str):
+                checked = _is_checked_value(pair)
+            if checked:
+                seen.add(bps)
+                body_parts.append(bps)
+        if body_parts:
+            out.append((modality, body_parts))
+    return out
+
+
+def modalities_recommendation_letter_should_generate(payload: dict) -> bool:
+    return bool(_modalities_groups_from_payload(payload))
+
+
+def modalities_recommendation_letter_editable_text(payload: dict) -> str:
+    groups = _modalities_groups_from_payload(payload)
+    patient = (payload or {}).get("patient") or {}
+    if not isinstance(patient, dict):
+        patient = {}
+    lines: list[str] = []
+    lines.append("Therapy Staff,")
+    lines.append("")
+    lines.append("The patient is prescribed the following physiotherapy regimen. Please carry out this treatment plan exactly as directed.")
+    lines.append("")
+    for mod, parts in groups:
+        lines.append(f"• {mod}: {_join_with_and(parts)}")
+    lines.append("")
+    lines.append("Thank you,")
+    lines.append("")
+    lines.append("")
+    lines.append("")
+    prov = ((patient.get("provider") or "").strip() or (PROVIDER_NAME or "").strip())
+    if prov:
+        lines.append(prov)
+    return "\n".join(lines).strip()
+
+
+def build_modalities_recommendation_letter_pdf(
+    path: str,
+    payload: dict,
+    editable_letter_text: str | None = None,
+) -> bool:
+    """One-page modalities instruction letter (single combined letter for all selected therapies)."""
+    if not REPORTLAB_OK:
+        return False
+    if not modalities_recommendation_letter_should_generate(payload):
+        return False
+
+    patient = (payload or {}).get("patient") or {}
+    if not isinstance(patient, dict):
+        patient = {}
+    exam_date = normalize_mmddyyyy(patient.get("exam_date", "")) or today_mmddyyyy()
+    exam_name = "Current Physiotherapy Modalities"
+    title = exam_name
+    last = (patient.get("last_name") or "").strip()
+    first = (patient.get("first_name") or "").strip()
+    display = (patient.get("display_name") or "").strip() or f"{last}, {first}".strip(", ")
+    doi = normalize_mmddyyyy(patient.get("doi", ""))
+    dob = normalize_mmddyyyy(patient.get("dob", ""))
+    re_line = f"RE: {last}, {first}".strip()
+    if doi:
+        re_line += f" | DOI: {doi}"
+    if dob:
+        re_line += f" | DOB: {dob}"
+
+    patient_header = {
+        "display_name": display,
+        "first_name": first,
+        "last_name": last,
+        "dob": dob,
+        "doi": patient.get("doi") or "",
+        "provider": (patient.get("provider") or "").strip(),
+        "exam_date": exam_date,
+    }
+
+    try:
+        styles = getSampleStyleSheet()
+        title_style = ParagraphStyle(
+            name="ModalitiesLetterTitle",
+            parent=styles["Title"],
+            fontName="Helvetica-Bold",
+            fontSize=14,
+            leading=17,
+            spaceAfter=10,
+            alignment=1,
+        )
+        if "ModalitiesLetterTitle" not in styles.byName:
+            styles.add(title_style)
+        body_style = ParagraphStyle(
+            name="ModalitiesLetterBody",
+            parent=styles["BodyText"],
+            fontName="Helvetica",
+            fontSize=11,
+            leading=14,
+            alignment=TA_LEFT,
+            spaceAfter=0,
+        )
+        if "ModalitiesLetterBody" not in styles.byName:
+            styles.add(body_style)
+
+        letter_text = (editable_letter_text or "").strip()
+        if not letter_text:
+            letter_text = modalities_recommendation_letter_editable_text(payload)
+
+        story = []
+        story.append(ExamStart(exam_name, patient_header, exam_date))
+        story.append(Spacer(1, 0.22 * inch))
+        story.append(Paragraph(xml_escape(title.strip()), styles["ModalitiesLetterTitle"]))
+        story.append(Spacer(1, 0.12 * inch))
+        re_safe = xml_escape(re_line.strip()).replace("\n", "<br/>")
+        story.append(Paragraph(f"<b>{re_safe}</b>", styles["ModalitiesLetterBody"]))
+        story.append(Spacer(1, 0.14 * inch))
+
+        lines = letter_text.replace("\r\n", "\n").split("\n")
+        for line in lines:
+            if not line.strip():
+                story.append(Spacer(1, 0.12 * inch))
+                continue
+            story.append(Paragraph(xml_escape(line), styles["ModalitiesLetterBody"]))
+
+        doc = SimpleDocTemplate(
+            path,
+            pagesize=LETTER,
+            rightMargin=72,
+            leftMargin=72,
+            topMargin=170,
+            bottomMargin=72,
+        )
+        doc.build(story, canvasmaker=HeaderExamNumberedCanvas)
+        return True
+    except Exception:
+        return False
 
 
 def build_imaging_recommendation_letter_pdf(
@@ -2345,7 +2609,7 @@ def _diagnosis_text_from_struct(dx_struct: dict) -> str:
             continue
 
         label = (b.get("dx_label") or "").strip()
-        code = (b.get("icd10") or "").strip()
+        code = _resolve_icd_from_dx_block(b)
         edit = (b.get("edit_text") or "").strip()
 
         text = edit or label

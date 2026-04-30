@@ -34,6 +34,7 @@ DX_LIST: list[tuple[str, str]] = [
 
     # Cervical
     ("Herniated disc, Cervical Spine", "M50.20"),
+    ("Cervical disc displacement", "M50.20"),
     ("Cervical sprain/strain (whiplash)", "S13.4XXA"),  
     ("Radiculopathy, Cervical Region", "M54.12"),
     ("Cervical muscle spasm", "M62.838"),
@@ -55,6 +56,7 @@ DX_LIST: list[tuple[str, str]] = [
 
     # Lumbar / SI
     ("Herniated disc, Lumbar Spine", "M51.26"),
+    ("Lumbar disc displacement", "M51.26"),
     ("Lumbar sprain/strain", "S33.5XXA"),
     ("Lumbar radiculopathy", "M54.16"),
     ("Lumbar muscle spasm", "M62.830"),

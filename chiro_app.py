@@ -58,10 +58,14 @@ from pdf_export import (
     REPORTLAB_OK,
     build_combined_pdf,
     build_imaging_recommendation_letter_pdf,
+    build_modalities_recommendation_letter_pdf,
+    imaging_dx_all_ui_choices,
     imaging_dx_choices_by_body_part,
     imaging_recommendation_letter_editable_text,
     imaging_modalities_in_payload,
     imaging_recommendation_letter_should_generate,
+    modalities_recommendation_letter_editable_text,
+    modalities_recommendation_letter_should_generate,
 )
 from pdf_export import diagnosis_struct_to_live_preview_runs
 import copy
@@ -303,8 +307,10 @@ class App(tk.Tk):
 
         self.last_exam_pdf_paths: dict[str, str] = {}
         self.last_imaging_letter_pdf_paths: dict[str, list[str]] = {}
+        self.last_modalities_letter_pdf_paths: dict[str, str] = {}
         self.imaging_letter_dx_selections: dict[str, dict[str, dict[str, str]]] = {}
         self.imaging_letter_text_overrides: dict[str, dict[str, str]] = {}
+        self.modalities_letter_text_overrides: dict[str, str] = {}
         self.last_all_exams_pdf_path = ""
 
         self._mousewheel_target = None
@@ -1538,12 +1544,18 @@ class App(tk.Tk):
         if not hasattr(self, "last_imaging_letter_pdf_paths") or not isinstance(self.last_imaging_letter_pdf_paths, dict):
             self.last_imaging_letter_pdf_paths = {}
         self.last_imaging_letter_pdf_paths[exam_name] = []
+        if not hasattr(self, "last_modalities_letter_pdf_paths") or not isinstance(self.last_modalities_letter_pdf_paths, dict):
+            self.last_modalities_letter_pdf_paths = {}
+        self.last_modalities_letter_pdf_paths[exam_name] = ""
         if not hasattr(self, "imaging_letter_dx_selections") or not isinstance(self.imaging_letter_dx_selections, dict):
             self.imaging_letter_dx_selections = {}
         self.imaging_letter_dx_selections[exam_name] = {}
         if not hasattr(self, "imaging_letter_text_overrides") or not isinstance(self.imaging_letter_text_overrides, dict):
             self.imaging_letter_text_overrides = {}
         self.imaging_letter_text_overrides[exam_name] = {}
+        if not hasattr(self, "modalities_letter_text_overrides") or not isinstance(self.modalities_letter_text_overrides, dict):
+            self.modalities_letter_text_overrides = {}
+        self.modalities_letter_text_overrides[exam_name] = ""
 
         # Switch to it (no file exists yet -> clear exam content)
         self.current_exam.set(exam_name)
@@ -1645,6 +1657,15 @@ class App(tk.Tk):
                                 os.remove(os.path.join(vault_img, fn))
                             except Exception:
                                 pass
+                vault_mod = os.path.join(patient_root, "vault", "messages")
+                if os.path.isdir(vault_mod):
+                    for fn in os.listdir(vault_mod):
+                        low = fn.lower()
+                        if low.endswith(f"__{exam_slug}__modalities_recommendation.pdf"):
+                            try:
+                                os.remove(os.path.join(vault_mod, fn))
+                            except Exception:
+                                pass
         except Exception:
             pass
 
@@ -1668,6 +1689,11 @@ class App(tk.Tk):
         except Exception:
             pass
         try:
+            if hasattr(self, "last_modalities_letter_pdf_paths") and isinstance(self.last_modalities_letter_pdf_paths, dict):
+                self.last_modalities_letter_pdf_paths.pop(exam_name, None)
+        except Exception:
+            pass
+        try:
             if hasattr(self, "imaging_letter_dx_selections") and isinstance(self.imaging_letter_dx_selections, dict):
                 self.imaging_letter_dx_selections.pop(exam_name, None)
         except Exception:
@@ -1675,6 +1701,11 @@ class App(tk.Tk):
         try:
             if hasattr(self, "imaging_letter_text_overrides") and isinstance(self.imaging_letter_text_overrides, dict):
                 self.imaging_letter_text_overrides.pop(exam_name, None)
+        except Exception:
+            pass
+        try:
+            if hasattr(self, "modalities_letter_text_overrides") and isinstance(self.modalities_letter_text_overrides, dict):
+                self.modalities_letter_text_overrides.pop(exam_name, None)
         except Exception:
             pass
 
@@ -1884,6 +1915,46 @@ class App(tk.Tk):
         except Exception:
             return matches
 
+    def _purge_stale_modalities_letter_vault(self, patient_root: str, exam: str) -> None:
+        exam_slug = safe_slug(exam).lower()
+        vault_dir = os.path.join(patient_root, "vault", "messages")
+        if not os.path.isdir(vault_dir):
+            return
+        try:
+            for fn in os.listdir(vault_dir):
+                low = fn.lower()
+                if not low.endswith(".pdf"):
+                    continue
+                if low.endswith(f"__{exam_slug}__modalities_recommendation.pdf"):
+                    try:
+                        os.remove(os.path.join(vault_dir, fn))
+                    except Exception:
+                        pass
+        except Exception:
+            pass
+
+    def _resolve_modalities_letter_vault_path(self, patient_root: str, exam: str) -> str:
+        exam_slug = safe_slug(exam).lower()
+        vault_dir = os.path.join(patient_root, "vault", "messages")
+        if not os.path.isdir(vault_dir):
+            return ""
+        matches: list[str] = []
+        try:
+            for fn in os.listdir(vault_dir):
+                low = fn.lower()
+                if not low.endswith(".pdf"):
+                    continue
+                if low.endswith(f"__{exam_slug}__modalities_recommendation.pdf"):
+                    matches.append(os.path.join(vault_dir, fn))
+        except Exception:
+            return ""
+        if not matches:
+            return ""
+        try:
+            return sorted(matches, key=os.path.getmtime)[-1]
+        except Exception:
+            return matches[-1]
+
     def _prompt_single_imaging_dx_choice(self, modality: str, body_part: str, choices: list[dict], current_icd: str = "") -> str | None:
         """Prompt for one diagnosis choice (Label + ICD) for a single body part."""
         displays = [c.get("display", "") for c in choices if isinstance(c, dict) and c.get("display")]
@@ -1953,15 +2024,15 @@ class App(tk.Tk):
         if not exam:
             return
         payload = self.make_payload() or {}
-        body_parts, choices_map = imaging_dx_choices_by_body_part(payload, modality)
+        body_parts, _choices_map = imaging_dx_choices_by_body_part(payload, modality)
         if body_part not in body_parts:
             return
-        bp_choices = choices_map.get(body_part) or []
-        if not bp_choices:
+        all_choices = imaging_dx_all_ui_choices(payload)
+        if not all_choices:
             messagebox.showwarning(
                 "Imaging Letter Diagnosis Selection",
-                f"No eligible diagnosis choices were found for {modality} of {body_part}.\n\n"
-                "Add/adjust diagnosis entries, then click this recommendation again to pick one.",
+                "No diagnosis entries with ICD codes were found.\n\n"
+                "Add diagnosis rows to the chart, then click this recommendation again to pick one.",
                 parent=self,
             )
             return
@@ -1973,7 +2044,7 @@ class App(tk.Tk):
         if not isinstance(mod_map, dict):
             mod_map = {}
         current_icd = (mod_map.get(body_part) or "").strip()
-        picked = self._prompt_single_imaging_dx_choice(modality, body_part, bp_choices, current_icd)
+        picked = self._prompt_single_imaging_dx_choice(modality, body_part, all_choices, current_icd)
         if not picked:
             return
         mod_map[body_part] = picked
@@ -2069,14 +2140,74 @@ class App(tk.Tk):
 
         self.wait_window(dlg)
 
+    def _open_modalities_recommendation_letter_editor(self) -> None:
+        exam = (self.current_exam.get() or "").strip()
+        if not exam:
+            return
+        payload = self.make_payload() or {}
+        default_text = modalities_recommendation_letter_editable_text(payload)
+        current_text = (self.modalities_letter_text_overrides.get(exam) or "").strip()
+        # Auto-upgrade stale legacy text (missing modality bullet lines) so user
+        # doesn't need to click Reset Default to see current modalities/body parts.
+        if not current_text or ("• " not in current_text and "• " in default_text):
+            current_text = default_text
+
+        dlg = tk.Toplevel(self)
+        dlg.title("Current Physiotherapy Modalities Letter Editor")
+        dlg.transient(self)
+        dlg.grab_set()
+
+        outer = ttk.Frame(dlg, padding=10)
+        outer.grid(row=0, column=0, sticky="nsew")
+        dlg.rowconfigure(0, weight=1)
+        dlg.columnconfigure(0, weight=1)
+        outer.rowconfigure(1, weight=1)
+        outer.columnconfigure(0, weight=1)
+
+        ttk.Label(
+            outer,
+            text="Edit the letter text (from salutation through signature):",
+        ).grid(row=0, column=0, sticky="w", pady=(0, 6))
+
+        txt = tk.Text(outer, wrap="word", width=92, height=24, font=("Segoe UI", 10))
+        txt.grid(row=1, column=0, sticky="nsew")
+        txt.insert("1.0", current_text)
+
+        btns = ttk.Frame(outer)
+        btns.grid(row=2, column=0, sticky="e", pady=(8, 0))
+
+        def _reset_default():
+            fresh = modalities_recommendation_letter_editable_text(payload)
+            txt.delete("1.0", "end")
+            txt.insert("1.0", fresh)
+
+        def _save_close():
+            val = txt.get("1.0", "end").strip()
+            self.modalities_letter_text_overrides[exam] = val
+            try:
+                self.write_settings({"modalities_letter_text_overrides": self.modalities_letter_text_overrides})
+            except Exception:
+                pass
+            dlg.destroy()
+
+        ttk.Button(btns, text="Reset Default", command=_reset_default).grid(row=0, column=0, padx=(0, 6))
+        ttk.Button(btns, text="Cancel", command=dlg.destroy).grid(row=0, column=1, padx=(0, 6))
+        ttk.Button(btns, text="Save", command=_save_close).grid(row=0, column=2)
+        self.wait_window(dlg)
+
     def _stored_imaging_dx_for_modality(self, payload: dict, exam: str, modality: str) -> dict[str, str]:
         """
         Return stored ICD picks that are still valid against current diagnosis options.
         Never prompts (Add / click-to-change are the only UI entry points).
         """
-        body_parts, choices_map = imaging_dx_choices_by_body_part(payload, modality)
+        body_parts, _choices_map = imaging_dx_choices_by_body_part(payload, modality)
         if not body_parts:
             return {}
+        valid_icds = {
+            (c.get("icd") or "").strip()
+            for c in imaging_dx_all_ui_choices(payload)
+            if isinstance(c, dict) and (c.get("icd") or "").strip()
+        }
         exam_map = self.imaging_letter_dx_selections.get(exam, {})
         if not isinstance(exam_map, dict):
             exam_map = {}
@@ -2087,11 +2218,6 @@ class App(tk.Tk):
 
         resolved: dict[str, str] = {}
         for bp in body_parts:
-            valid_icds = {
-                (c.get("icd") or "").strip()
-                for c in (choices_map.get(bp) or [])
-                if isinstance(c, dict) and (c.get("icd") or "").strip()
-            }
             chosen = (mod_map.get(bp) or "").strip()
             if chosen and chosen in valid_icds:
                 resolved[bp] = chosen
@@ -2176,6 +2302,47 @@ class App(tk.Tk):
             pass
         return vault_paths
 
+    def _export_modalities_recommendation_letter_vault(self, payload: dict, patient_root: str) -> str:
+        """Build one combined modalities recommendation letter into vault/modalities."""
+        if not patient_root or not REPORTLAB_OK:
+            return ""
+        exam = (payload.get("exam") or self.current_exam.get() or "").strip()
+        if not exam:
+            return ""
+        if not modalities_recommendation_letter_should_generate(payload):
+            self.last_modalities_letter_pdf_paths[exam] = ""
+            return ""
+
+        ensure_patient_dirs(patient_root)
+        pdf_dir = os.path.join(patient_root, PATIENT_SUBDIR_PDFS)
+        os.makedirs(pdf_dir, exist_ok=True)
+        date_str = normalize_mmddyyyy(self.exam_date_var.get()) or today_mmddyyyy()
+        date_slug = safe_slug(date_str)
+        exam_slug = safe_slug(exam)
+        vault_name = f"{date_slug}__{exam_slug}__modalities_recommendation.pdf"
+        tmp_path = os.path.join(pdf_dir, f".tmp_modalities_letter__{exam_slug}.pdf")
+        self._purge_stale_modalities_letter_vault(patient_root, exam)
+
+        text_override = (self.modalities_letter_text_overrides.get(exam) or "").strip()
+        default_text = modalities_recommendation_letter_editable_text(payload)
+        if not text_override or ("• " not in text_override and "• " in default_text):
+            text_override = default_text
+        out_path = ""
+        try:
+            if build_modalities_recommendation_letter_pdf(tmp_path, payload, text_override):
+                out_path = upsert_vault_file(patient_root, "messages", tmp_path, vault_name)
+        except Exception as e:
+            print("Modalities letter vault upsert failed:", e)
+            out_path = ""
+        finally:
+            try:
+                if os.path.exists(tmp_path):
+                    os.remove(tmp_path)
+            except Exception:
+                pass
+        self.last_modalities_letter_pdf_paths[exam] = out_path
+        return out_path
+
     def export_current_exam_to_pdf_overwrite(self):
         if not self._ensure_reportlab():
             return
@@ -2241,11 +2408,15 @@ class App(tk.Tk):
             self._export_imaging_recommendation_letter_vault(payload, patient_root)
         except Exception as e:
             print("Imaging letter export failed:", e)
+        try:
+            self._export_modalities_recommendation_letter_vault(payload, patient_root)
+        except Exception as e:
+            print("Modalities letter export failed:", e)
 
         if getattr(self.current_page, "get", lambda: "")() == "Doc Vault":
             try:
                 fk = getattr(self.doc_vault_page.folder_panel, "folder_key", None)
-                if fk in ("pdfs", "imaging"):
+                if fk in ("pdfs", "imaging", "messages"):
                     self.doc_vault_page.refresh_current_folder()
             except Exception:
                 pass
@@ -2255,8 +2426,10 @@ class App(tk.Tk):
             "last_exam_pdfs": self.last_exam_pdf_paths,
             "last_all_exams_pdf": self.last_all_exams_pdf_path,
             "last_imaging_letter_pdfs": self.last_imaging_letter_pdf_paths,
+            "last_modalities_letter_pdfs": self.last_modalities_letter_pdf_paths,
             "imaging_letter_dx_selections": self.imaging_letter_dx_selections,
             "imaging_letter_text_overrides": self.imaging_letter_text_overrides,
+            "modalities_letter_text_overrides": self.modalities_letter_text_overrides,
         })
 
     # ---------- Providers for HOI ----------
@@ -2377,6 +2550,18 @@ class App(tk.Tk):
 
         for lp in valid:
             self.open_pdf_file(lp)
+
+        mod_path = self.last_modalities_letter_pdf_paths.get(exam, "")
+        mod_valid = mod_path if (isinstance(mod_path, str) and mod_path and os.path.isfile(mod_path)) else ""
+        if not mod_valid:
+            patient_root = self.get_current_patient_root()
+            if patient_root:
+                resolved_mod = self._resolve_modalities_letter_vault_path(patient_root, exam)
+                if resolved_mod:
+                    self.last_modalities_letter_pdf_paths[exam] = resolved_mod
+                    mod_valid = resolved_mod
+        if mod_valid:
+            self.open_pdf_file(mod_valid)
 
     def open_all_exams_pdf(self):
         self.open_pdf_file(self.last_all_exams_pdf_path)
@@ -2624,6 +2809,7 @@ class App(tk.Tk):
         )
 
         self.plan_page = PlanPage(self.content, on_change=self.schedule_autosave)
+        self.plan_page.set_open_modalities_letter_editor_callback(self._open_modalities_recommendation_letter_editor)
 
         # ✅ Correct place — wire callback AFTER both exist
         self.plan_page.set_subjectives_clear_regions_fn(
@@ -3211,6 +3397,12 @@ class App(tk.Tk):
                     ]
                 else:
                     self.last_imaging_letter_pdf_paths[exam] = []
+        mod_map = settings.get("last_modalities_letter_pdfs", {})
+        self.last_modalities_letter_pdf_paths = {}
+        if isinstance(mod_map, dict):
+            for exam in self.exams:
+                v = mod_map.get(exam)
+                self.last_modalities_letter_pdf_paths[exam] = v.strip() if isinstance(v, str) else ""
 
         sel_map = settings.get("imaging_letter_dx_selections", {})
         self.imaging_letter_dx_selections = {}
@@ -3257,6 +3449,15 @@ class App(tk.Tk):
                     if mk:
                         cleaned_mods[mk] = raw_text
                 self.imaging_letter_text_overrides[exam_clean] = cleaned_mods
+
+        modal_txt_map = settings.get("modalities_letter_text_overrides", {})
+        self.modalities_letter_text_overrides = {}
+        if isinstance(modal_txt_map, dict):
+            for exam, raw_text in modal_txt_map.items():
+                if isinstance(exam, str) and isinstance(raw_text, str):
+                    ek = exam.strip()
+                    if ek:
+                        self.modalities_letter_text_overrides[ek] = raw_text
 
         self.last_all_exams_pdf_path = settings.get("last_all_exams_pdf", "") or ""
         self._apply_exam_color_theme()
@@ -4078,13 +4279,14 @@ class App(tk.Tk):
             pr = self.get_current_patient_root()
             if pr:
                 self._export_imaging_recommendation_letter_vault(payload, pr)
+                self._export_modalities_recommendation_letter_vault(payload, pr)
         except Exception as e:
             print("Imaging letter export failed:", e)
 
         if getattr(self.current_page, "get", lambda: "")() == "Doc Vault":
             try:
                 fk = getattr(self.doc_vault_page.folder_panel, "folder_key", None)
-                if fk in ("pdfs", "imaging"):
+                if fk in ("pdfs", "imaging", "messages"):
                     self.doc_vault_page.refresh_current_folder()
             except Exception:
                 pass
@@ -4094,8 +4296,10 @@ class App(tk.Tk):
             "last_exam_pdfs": self.last_exam_pdf_paths,
             "last_all_exams_pdf": self.last_all_exams_pdf_path,
             "last_imaging_letter_pdfs": self.last_imaging_letter_pdf_paths,
+            "last_modalities_letter_pdfs": self.last_modalities_letter_pdf_paths,
             "imaging_letter_dx_selections": self.imaging_letter_dx_selections,
             "imaging_letter_text_overrides": self.imaging_letter_text_overrides,
+            "modalities_letter_text_overrides": self.modalities_letter_text_overrides,
         })
         messagebox.showinfo("Success", f"PDF saved:\n{path}")
 
@@ -4238,8 +4442,10 @@ class App(tk.Tk):
         self.current_case_path = None
         self.last_exam_pdf_paths = {e: "" for e in self.exams}
         self.last_imaging_letter_pdf_paths = {e: [] for e in self.exams}
+        self.last_modalities_letter_pdf_paths = {e: "" for e in self.exams}
         self.imaging_letter_dx_selections = {e: {} for e in self.exams}
         self.imaging_letter_text_overrides = {e: {} for e in self.exams}
+        self.modalities_letter_text_overrides = {e: "" for e in self.exams}
         self.last_all_exams_pdf_path = ""
         self.status_var.set("New case started. Previous cases/files are unchanged.")
         self.current_patient_id = None

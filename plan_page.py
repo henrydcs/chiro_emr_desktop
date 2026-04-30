@@ -231,6 +231,7 @@ class PlanPage(ttk.Frame):
     def __init__(self, parent, on_change=None):
         super().__init__(parent)
         self.on_change = on_change
+        self._open_modalities_letter_editor_callback = None
 
         self._loading = False
         self._section_buttons = {}
@@ -711,8 +712,9 @@ class PlanPage(ttk.Frame):
                 break
         if therapy_name:
             self.open_therapy_details_popup(root, therapy_name, list_idx)
-        else:
-            self.open_therapy_details_popup(root, therapy_name, list_idx)
+
+    def set_open_modalities_letter_editor_callback(self, fn):
+        self._open_modalities_letter_editor_callback = fn
 
     def focus_exam_popup(self) -> None:
         """Live Preview: open Services Provided Today popup (exam fields live there)."""
@@ -1268,7 +1270,14 @@ class PlanPage(ttk.Frame):
             self.update_services_summary_labels()
             popup.destroy()
 
-        ttk.Button(frame, text="Save and Exit", command=on_close).pack(side="bottom", pady=10)
+        bottom_btns = ttk.Frame(frame)
+        bottom_btns.pack(side="bottom", fill="x", pady=10)
+        ttk.Button(bottom_btns, text="Save and Exit", command=on_close).pack(side="left")
+        ttk.Button(
+            bottom_btns,
+            text="Current Physiotherapy Modalities Letter",
+            command=lambda: (self._open_modalities_letter_editor_callback() if callable(self._open_modalities_letter_editor_callback) else None),
+        ).pack(side="left", padx=(8, 0))
 
     # -------------------------
     # CMT LOGIC
