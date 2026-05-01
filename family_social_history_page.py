@@ -288,6 +288,7 @@ class FamilySocialHistoryPage(ttk.Frame):
 
         builder_outer = ttk.LabelFrame(parent, text="Sentence builder")
         builder_outer.pack(fill="both", expand=True, padx=10, pady=(0, 6))
+        self._note_builder_outer = builder_outer
 
         canvas = tk.Canvas(builder_outer, highlightthickness=0, height=220)
         sb = ttk.Scrollbar(builder_outer, orient="vertical", command=canvas.yview)
@@ -300,15 +301,6 @@ class FamilySocialHistoryPage(ttk.Frame):
         canvas.pack(side="left", fill="both", expand=True)
         sb.pack(side="right", fill="y")
 
-        def _on_enter(_e):
-            self._set_builder_mousewheel_target(canvas)
-
-        def _on_leave(_e):
-            self._set_builder_mousewheel_target(None)
-
-        canvas.bind("<Enter>", _on_enter)
-        canvas.bind("<Leave>", _on_leave)
-
         self.note_builder_canvas = canvas
 
         ttk.Label(parent, text="Note text (editable — saved to chart, Live Preview, and PDF):").pack(
@@ -318,17 +310,119 @@ class FamilySocialHistoryPage(ttk.Frame):
         self.text.pack(fill="both", expand=True, padx=10, pady=(0, 8))
         self.text.bind("<KeyRelease>", lambda e: self._on_note_text_changed())
 
-    def _set_builder_mousewheel_target(self, widget: tk.Widget | None) -> None:
-        self._builder_mw_target = widget
+    @staticmethod
+    def _widget_is_descendant_of(ancestor: tk.Widget | None, w: tk.Widget | None) -> bool:
+        if ancestor is None or w is None:
+            return False
+        cur: tk.Widget | None = w
+        while cur is not None:
+            try:
+                if cur == ancestor:
+                    return True
+                cur = cur.master  # type: ignore[assignment]
+            except Exception:
+                break
+        return False
+
+    @staticmethod
+    def _is_wheel_local_widget(w: tk.Widget) -> bool:
+        """Widgets whose mousewheel should not move the outer sentence-builder / canvas-editor canvas."""
+        if isinstance(w, (tk.Listbox, tk.Text, tk.Entry, tk.Spinbox, tk.Scrollbar)):
+            return True
+        if isinstance(w, (ttk.Combobox, ttk.Entry, ttk.Spinbox, ttk.Scrollbar)):
+            return True
+        try:
+            cls = w.winfo_class()
+        except Exception:
+            return False
+        return cls in (
+            "Listbox",
+            "Text",
+            "Entry",
+            "TEntry",
+            "TCombobox",
+            "TSpinbox",
+            "Scrollbar",
+            "TScrollbar",
+        )
+
+    def _wheel_should_stay_local(self, w: tk.Widget | None) -> bool:
+        if w is None:
+            return False
+        cur: tk.Widget | None = w
+        while cur is not None:
+            try:
+                if self._is_wheel_local_widget(cur):
+                    return True
+                cur = cur.master  # type: ignore[assignment]
+            except Exception:
+                break
+        return False
+
+    def _bind_listbox_mousewheel_local(self, lb: tk.Listbox) -> None:
+        """Keep wheel inside the listbox so the template editor canvas does not scroll."""
+
+        def _on_wheel(e: tk.Event, box: tk.Listbox = lb) -> str:
+            if getattr(e, "delta", 0):
+                box.yview_scroll(int(-1 * (e.delta / 120)), "units")
+            elif getattr(e, "num", None) == 4:
+                box.yview_scroll(-1, "units")
+            elif getattr(e, "num", None) == 5:
+                box.yview_scroll(1, "units")
+            return "break"
+
+        lb.bind("<MouseWheel>", _on_wheel)
+        lb.bind("<Button-4>", _on_wheel)
+        lb.bind("<Button-5>", _on_wheel)
+
+    def _scroll_canvas_y(self, canvas: tk.Canvas, event: tk.Event) -> bool:
+        """Return True if wheel was handled (Windows delta or Linux b4/b5)."""
+        if getattr(event, "delta", 0):
+            canvas.yview_scroll(int(-1 * (event.delta / 120)), "units")
+            return True
+        if getattr(event, "num", None) == 4:
+            canvas.yview_scroll(-1, "units")
+            return True
+        if getattr(event, "num", None) == 5:
+            canvas.yview_scroll(1, "units")
+            return True
+        return False
 
     def _on_builder_mousewheel(self, event: tk.Event) -> str | None:
-        w = getattr(self, "_builder_mw_target", None)
-        if w is None:
+        """Scroll sentence builder or template editor canvas when pointer is over that region."""
+        try:
+            top = self.winfo_toplevel()
+            w = top.winfo_containing(event.x_root, event.y_root)
+        except Exception:
             return None
-        if event.delta == 0:
-            return "break"
-        w.yview_scroll(int(-1 * (event.delta / 120)), "units")
-        return "break"
+
+        if self._wheel_should_stay_local(w):
+            return None
+
+        co = getattr(self, "_canvas_editor_outer", None)
+        ce = getattr(self, "canvas_editor_widget", None)
+        if (
+            co is not None
+            and ce is not None
+            and w is not None
+            and self._widget_is_descendant_of(co, w)
+        ):
+            if self._scroll_canvas_y(ce, event):
+                return "break"
+            return None
+
+        no = getattr(self, "_note_builder_outer", None)
+        nb = getattr(self, "note_builder_canvas", None)
+        if (
+            no is not None
+            and nb is not None
+            and w is not None
+            and self._widget_is_descendant_of(no, w)
+        ):
+            if self._scroll_canvas_y(nb, event):
+                return "break"
+            return None
+        return None
 
     def _wire_mousewheel(self) -> None:
         if self._mw_bound:
@@ -336,6 +430,8 @@ class FamilySocialHistoryPage(ttk.Frame):
         top = self.winfo_toplevel()
         try:
             top.bind("<MouseWheel>", self._on_builder_mousewheel, add="+")
+            top.bind("<Button-4>", self._on_builder_mousewheel, add="+")
+            top.bind("<Button-5>", self._on_builder_mousewheel, add="+")
             self._mw_bound = True
         except Exception:
             pass
@@ -503,6 +599,7 @@ class FamilySocialHistoryPage(ttk.Frame):
 
         outer = ttk.Frame(parent)
         outer.pack(fill="both", expand=True, padx=8, pady=(0, 8))
+        self._canvas_editor_outer = outer
 
         cv = tk.Canvas(outer, highlightthickness=0)
         sb = ttk.Scrollbar(outer, orient="vertical", command=cv.yview)
@@ -634,6 +731,7 @@ class FamilySocialHistoryPage(ttk.Frame):
                 new_var.set(items[sel[0]])
 
         lb.bind("<<ListboxSelect>>", on_sel)
+        self._bind_listbox_mousewheel_local(lb)
 
         ent_row = ttk.Frame(frame)
         ent_row.pack(fill="x", padx=6, pady=(0, 4))
