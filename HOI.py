@@ -381,17 +381,17 @@ class ImagingBlock(ttk.Frame):
 
 class HOIPage(ttk.Frame):
     """
-    HOI page with dropdowns/radio buttons that IMMEDIATELY regenerate the MOI paragraph.
+    HOI page with dropdowns/radio buttons that regenerate the MOI paragraph when
+    Auto-generate is enabled.
 
     Key behavior:
-    - Auto-generate toggle (default ON):
-        Any structured change regenerates MOI immediately.
-    - Auto-generate OFF:
-        MOI becomes manual and will not be overwritten.
+    - Auto-generate ON (default): structured dropdown changes refresh the MOI text.
+    - After you type or paste directly in the MOI textbox, refreshes stop until you click
+      "Regenerate now" or turn Auto-generate off and back on (so drafts are not erased).
+    - Auto-generate OFF: dropdown changes no longer overwrite MOI unless you click Regenerate.
 
-    MOI always displays:
-      - Patient first name from demographics if provided (else "The patient")
-      - Pronouns based on sex radio selection (Male/Female/Unknown)
+    MOI text uses patient first name from demographics when provided (else "The patient")
+    and pronouns from Sex / Type of Injury choices.
     """
 
     # -----------------------------
@@ -1117,6 +1117,7 @@ class HOIPage(ttk.Frame):
         # Guards
         self._loading = False
         self._internal_set_moi = False  # prevent MOI typing from turning off auto during programmatic writes
+        self._moi_user_customized = False  # True once user edits MOI directly; clears on Regenerate / auto re-enabled
 
         # Text widget bindings
         self._text_bindings: list[tuple[tk.Text, tk.StringVar]] = []
@@ -1181,7 +1182,8 @@ class HOIPage(ttk.Frame):
         self._build_ui()
         self._wire_traces()
         self._show_block("History of Injury")
-        self._regen_moi_now()
+        self._moi_user_customized = False
+        self._regen_moi_now(force=True)
 
     # ---------------- Public hooks ----------------
     def set_regions_provider(self, fn):
@@ -1196,6 +1198,13 @@ class HOIPage(ttk.Frame):
     def _changed(self):
         if callable(self.on_change_callback):
             self.on_change_callback()
+
+    def _on_auto_moi_toggled(self):
+        """User turned Auto-generate on — rebuild MOI from structured fields."""
+        if self._loading:
+            return
+        if self.auto_moi_var.get():
+            self._regen_moi_now(force=True)
 
     def _wire_traces(self):
         regen_drivers = [
@@ -1213,8 +1222,6 @@ class HOIPage(ttk.Frame):
             self.aa_patient_side_var, self.aa_resembles_var,
             self.sf_circumstance_var, self.sf_landing_var,
             self.db_location_var, self.db_severity_var,
-            self.auto_moi_var,           
-           
         ]
 
         # --- main MOI regen drivers ---
@@ -1256,10 +1263,6 @@ class HOIPage(ttk.Frame):
         if self._loading:
             return
 
-        # ✅ If user changes structured fields, force auto MOI ON
-        if not self.auto_moi_var.get():
-            self.auto_moi_var.set(True)
-
         self._regen_moi_now()
         self._changed()
 
@@ -1276,8 +1279,7 @@ class HOIPage(ttk.Frame):
         def flush_and_changed(_evt=None):
             flush()
             if is_moi and (not self._internal_set_moi):
-                if self.auto_moi_var.get():
-                    self.auto_moi_var.set(False)
+                self._moi_user_customized = True
             self._changed()
 
         widget.bind("<KeyRelease>", flush_and_changed)
@@ -1421,10 +1423,13 @@ class HOIPage(ttk.Frame):
         self._changed()
     
     # ---------------- MOI generation ----------------
-    def _regen_moi_now(self):
+    def _regen_moi_now(self, *, force: bool = False):
         if self._loading:
             return
-        if not self.auto_moi_var.get():
+        # User typed in the MOI box — don't overwrite until Regenerate now or Auto is re-enabled.
+        if not force and getattr(self, "_moi_user_customized", False):
+            return
+        if not self.auto_moi_var.get() and not force:
             return
 
         injury = _clean(self.injury_type_var.get())
@@ -1576,8 +1581,13 @@ class HOIPage(ttk.Frame):
         text = text or ""
         self._internal_set_moi = True
         try:
+            self._moi_user_customized = False
             self.moi_var.set(text)
             if self._moi_text is not None and self._moi_text.winfo_exists():
+                try:
+                    self._moi_text.configure(state="normal")
+                except Exception:
+                    pass
                 self._moi_text.delete("1.0", "end")
                 self._moi_text.insert("1.0", text)
         finally:
@@ -1674,14 +1684,14 @@ class HOIPage(ttk.Frame):
             toggle_row,
             text="Auto-generate MOI from dropdowns (recommended)",
             variable=self.auto_moi_var,
-            command=self._regen_moi_now,
+            command=self._on_auto_moi_toggled,
         ).pack(side="left")
 
-        ttk.Button(toggle_row, text="Regenerate now", command=self._regen_moi_now).pack(side="left", padx=(10, 0))
+        ttk.Button(toggle_row, text="Regenerate now", command=lambda: self._regen_moi_now(force=True)).pack(side="left", padx=(10, 0))
 
         ttk.Label(f, text="Mechanism of Injury (MOI):").pack(anchor="w", padx=10, pady=(6, 4))
 
-        txt = tk.Text(f, height=12, wrap="word")
+        txt = tk.Text(f, height=12, wrap="word", state="normal")
         txt.pack(fill="both", expand=True, padx=10, pady=(0, 10))
 
         self._moi_text = txt
@@ -2197,6 +2207,7 @@ class HOIPage(ttk.Frame):
     def from_dict(self, data: dict):
         data = data or {}
         self._loading = True
+        self._moi_user_customized = False
         try:
             self.active_block.set(data.get("active_block", "History of Injury"))
             # -------- ROF (new structured) --------
@@ -2526,6 +2537,5 @@ class HOIPage(ttk.Frame):
 
         self._regen_rof_now()
 
-        self._regen_moi_now()
-        self._show_block("History of Injury")
+        self._regen_moi_now(force=True)
         self._changed()

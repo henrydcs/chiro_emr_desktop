@@ -312,6 +312,8 @@ class App(tk.Tk):
         self.imaging_letter_dx_selections: dict[str, dict[str, dict[str, str]]] = {}
         self.imaging_letter_text_overrides: dict[str, dict[str, str]] = {}
         self.modalities_letter_text_overrides: dict[str, str] = {}
+        # When staff-letter region/exclude mappings change, ignore stale overrides until Save.
+        self.modalities_letter_staff_signatures: dict[str, str] = {}
         self.last_all_exams_pdf_path = ""
 
         self._mousewheel_target = None
@@ -1557,6 +1559,9 @@ class App(tk.Tk):
         if not hasattr(self, "modalities_letter_text_overrides") or not isinstance(self.modalities_letter_text_overrides, dict):
             self.modalities_letter_text_overrides = {}
         self.modalities_letter_text_overrides[exam_name] = ""
+        if not hasattr(self, "modalities_letter_staff_signatures") or not isinstance(self.modalities_letter_staff_signatures, dict):
+            self.modalities_letter_staff_signatures = {}
+        self.modalities_letter_staff_signatures[exam_name] = ""
 
         # Switch to it (no file exists yet -> clear exam content)
         self.current_exam.set(exam_name)
@@ -1707,6 +1712,11 @@ class App(tk.Tk):
         try:
             if hasattr(self, "modalities_letter_text_overrides") and isinstance(self.modalities_letter_text_overrides, dict):
                 self.modalities_letter_text_overrides.pop(exam_name, None)
+        except Exception:
+            pass
+        try:
+            if hasattr(self, "modalities_letter_staff_signatures") and isinstance(self.modalities_letter_staff_signatures, dict):
+                self.modalities_letter_staff_signatures.pop(exam_name, None)
         except Exception:
             pass
 
@@ -2312,17 +2322,42 @@ class App(tk.Tk):
 
         self.wait_window(dlg)
 
+    @staticmethod
+    def _staff_modalities_signature_from_payload(payload: dict) -> str:
+        """Stable fingerprint of staff letter mappings (regions + exclusions)."""
+        soap = (payload or {}).get("soap") or {}
+        plan = soap.get("plan") or {}
+        services = (plan.get("services") or {}) if isinstance(plan, dict) else {}
+        if not isinstance(services, dict):
+            services = {}
+        d = services.get("staff_modalities_letter_data") or {}
+        e = services.get("staff_modalities_letter_exclude") or {}
+        try:
+            return json.dumps({"d": d, "e": e}, sort_keys=True, default=str)
+        except Exception:
+            return ""
+
+    def _effective_modalities_letter_text_for_exam(self, exam: str, payload: dict | None = None) -> str:
+        """
+        Letter body for vault/editor: regenerated default whenever Care Type / region
+        mappings change; otherwise keep text last saved from the editor.
+        """
+        payload = payload if isinstance(payload, dict) else {}
+        exam = (exam or "").strip()
+        default_text = modalities_recommendation_letter_editable_text(payload)
+        sig_now = self._staff_modalities_signature_from_payload(payload).strip()
+        sig_saved = (self.modalities_letter_staff_signatures.get(exam) or "").strip()
+        stored = (self.modalities_letter_text_overrides.get(exam) or "").strip()
+        if sig_saved and sig_now == sig_saved and stored:
+            return stored
+        return default_text
+
     def _open_modalities_recommendation_letter_editor(self) -> None:
         exam = (self.current_exam.get() or "").strip()
         if not exam:
             return
         payload = self.make_payload() or {}
-        default_text = modalities_recommendation_letter_editable_text(payload)
-        current_text = (self.modalities_letter_text_overrides.get(exam) or "").strip()
-        # Auto-upgrade stale legacy text (missing modality bullet lines) so user
-        # doesn't need to click Reset Default to see current modalities/body parts.
-        if not current_text or ("• " not in current_text and "• " in default_text):
-            current_text = default_text
+        current_text = self._effective_modalities_letter_text_for_exam(exam, payload)
 
         dlg = tk.Toplevel(self)
         dlg.title("Current Physiotherapy Modalities Letter Editor")
@@ -2349,15 +2384,21 @@ class App(tk.Tk):
         btns.grid(row=2, column=0, sticky="e", pady=(8, 0))
 
         def _reset_default():
-            fresh = modalities_recommendation_letter_editable_text(payload)
+            fresh_payload = self.make_payload() or {}
+            fresh = modalities_recommendation_letter_editable_text(fresh_payload)
             txt.delete("1.0", "end")
             txt.insert("1.0", fresh)
 
         def _save_close():
             val = txt.get("1.0", "end").strip()
+            payload_now = self.make_payload() or {}
             self.modalities_letter_text_overrides[exam] = val
+            self.modalities_letter_staff_signatures[exam] = self._staff_modalities_signature_from_payload(payload_now)
             try:
-                self.write_settings({"modalities_letter_text_overrides": self.modalities_letter_text_overrides})
+                self.write_settings({
+                    "modalities_letter_text_overrides": self.modalities_letter_text_overrides,
+                    "modalities_letter_staff_signatures": self.modalities_letter_staff_signatures,
+                })
             except Exception:
                 pass
             dlg.destroy()
@@ -2522,10 +2563,7 @@ class App(tk.Tk):
         tmp_path = os.path.join(pdf_dir, f".tmp_modalities_letter__{exam_slug}.pdf")
         self._purge_stale_modalities_letter_vault(patient_root, exam)
 
-        text_override = (self.modalities_letter_text_overrides.get(exam) or "").strip()
-        default_text = modalities_recommendation_letter_editable_text(payload)
-        if not text_override or ("• " not in text_override and "• " in default_text):
-            text_override = default_text
+        text_override = self._effective_modalities_letter_text_for_exam(exam, payload)
         out_path = ""
         try:
             if build_modalities_recommendation_letter_pdf(tmp_path, payload, text_override):
@@ -2626,6 +2664,7 @@ class App(tk.Tk):
             "imaging_letter_dx_selections": self.imaging_letter_dx_selections,
             "imaging_letter_text_overrides": self.imaging_letter_text_overrides,
             "modalities_letter_text_overrides": self.modalities_letter_text_overrides,
+            "modalities_letter_staff_signatures": self.modalities_letter_staff_signatures,
         })
 
     # ---------- Providers for HOI ----------
@@ -3668,6 +3707,23 @@ class App(tk.Tk):
                     if ek:
                         self.modalities_letter_text_overrides[ek] = raw_text
 
+        sig_map = settings.get("modalities_letter_staff_signatures", {})
+        self.modalities_letter_staff_signatures = {}
+        if isinstance(sig_map, dict):
+            for exam_key, sig in sig_map.items():
+                if not isinstance(exam_key, str):
+                    continue
+                ek = exam_key.strip()
+                if not ek:
+                    continue
+                if isinstance(sig, str):
+                    self.modalities_letter_staff_signatures[ek] = sig
+                elif sig:
+                    try:
+                        self.modalities_letter_staff_signatures[ek] = str(sig).strip()
+                    except Exception:
+                        pass
+
         self.last_all_exams_pdf_path = settings.get("last_all_exams_pdf", "") or ""
         self._apply_exam_color_theme()
 
@@ -3764,7 +3820,8 @@ class App(tk.Tk):
                 # Regen MOI so regions sentence includes subjectives (HOI loads before subjectives)
         try:
             if hasattr(self, "hoi_page") and self.hoi_page is not None:
-                self.hoi_page._regen_moi_now()
+                if self.hoi_page.auto_moi_var.get():
+                    self.hoi_page._regen_moi_now()
         except Exception:
             pass
 
@@ -4506,6 +4563,7 @@ class App(tk.Tk):
             "imaging_letter_dx_selections": self.imaging_letter_dx_selections,
             "imaging_letter_text_overrides": self.imaging_letter_text_overrides,
             "modalities_letter_text_overrides": self.modalities_letter_text_overrides,
+            "modalities_letter_staff_signatures": self.modalities_letter_staff_signatures,
         })
         messagebox.showinfo("Success", f"PDF saved:\n{path}")
 
@@ -4652,6 +4710,7 @@ class App(tk.Tk):
         self.imaging_letter_dx_selections = {e: {} for e in self.exams}
         self.imaging_letter_text_overrides = {e: {} for e in self.exams}
         self.modalities_letter_text_overrides = {e: "" for e in self.exams}
+        self.modalities_letter_staff_signatures = {e: "" for e in self.exams}
         self.last_all_exams_pdf_path = ""
         self.status_var.set("New case started. Previous cases/files are unchanged.")
         self.current_patient_id = None

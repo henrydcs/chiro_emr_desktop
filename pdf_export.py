@@ -669,17 +669,10 @@ def imaging_recommendation_letter_editable_text(
     return "\n".join(lines).strip()
 
 
-def _modalities_groups_from_payload(payload: dict) -> list[tuple[str, list[str]]]:
-    """Return [(modality name, [body parts...]), ...] from plan_struct.services.therapy_data."""
-    soap = (payload or {}).get("soap") or {}
-    plan = soap.get("plan") or soap.get("plan_struct") or {}
-    services = (plan.get("services") or {}) if isinstance(plan, dict) else {}
-    therapy_data = (services.get("therapy_data") or {}) if isinstance(services, dict) else {}
-    if not isinstance(therapy_data, dict):
-        return []
+def _modalities_checked_parts_with_times(parts_map: dict) -> list[tuple[str, str]]:
+    """From a modality's region dict, return [(region_label, minutes_str), ...] for checked regions."""
 
     def _is_checked_value(v) -> bool:
-        # Handles bool, 0/1, and common string encodings from legacy saves.
         if isinstance(v, bool):
             return v
         if isinstance(v, (int, float)):
@@ -692,48 +685,89 @@ def _modalities_groups_from_payload(payload: dict) -> list[tuple[str, list[str]]
                 return False
         return bool(v)
 
-    out: list[tuple[str, list[str]]] = []
-    for therapy_key, parts_map in therapy_data.items():
-        if not isinstance(parts_map, dict):
+    out: list[tuple[str, str]] = []
+    seen: set[str] = set()
+    if not isinstance(parts_map, dict):
+        return out
+
+    for bp, pair in parts_map.items():
+        bps = (bp or "").strip()
+        if not bps or bps in seen:
             continue
-        raw_key = (therapy_key or "").strip()
-        modality = raw_key.split(": ", 1)[1].strip() if ": " in raw_key else raw_key
-        if not modality:
-            continue
-        body_parts: list[str] = []
-        seen: set[str] = set()
-        for bp, pair in parts_map.items():
-            bps = (bp or "").strip()
-            if not bps or bps in seen:
-                continue
-            checked = False
-            if isinstance(pair, (list, tuple)) and pair:
-                checked = _is_checked_value(pair[0])
-                # Legacy fallback: if checked flag missing but minutes exists, treat as selected.
-                if not checked and len(pair) > 1 and (str(pair[1]).strip() if pair[1] is not None else ""):
-                    checked = True
-            elif isinstance(pair, dict):
-                checked = _is_checked_value(pair.get("checked"))
-                if not checked:
-                    checked = bool((pair.get("minutes") or pair.get("time") or "").strip())
-            elif isinstance(pair, bool):
-                checked = pair
-            elif isinstance(pair, str):
-                checked = _is_checked_value(pair)
-            if checked:
-                seen.add(bps)
-                body_parts.append(bps)
-        if body_parts:
-            out.append((modality, body_parts))
+        checked = False
+        minutes = ""
+        if isinstance(pair, (list, tuple)) and pair:
+            checked = _is_checked_value(pair[0])
+            if len(pair) > 1 and pair[1] is not None:
+                minutes = str(pair[1]).strip()
+            if not checked and minutes:
+                checked = True
+        elif isinstance(pair, dict):
+            checked = _is_checked_value(pair.get("checked"))
+            minutes = (str(pair.get("minutes") or pair.get("time") or "")).strip()
+            if not checked and minutes:
+                checked = True
+        elif isinstance(pair, bool):
+            checked = pair
+        elif isinstance(pair, str):
+            checked = _is_checked_value(pair)
+        if checked:
+            seen.add(bps)
+            out.append((bps, minutes))
     return out
 
 
+def _staff_modalities_letter_groups_from_payload(payload: dict) -> list[tuple[str, list[tuple[str, str]]]]:
+    """
+    Staff physiotherapy modalities letter lines from Plan > Treatment (Care Types), not billing.
+    plan.services.staff_modalities_letter_data: {care_type: {region: [checked, minutes]}}
+    plan.services.staff_modalities_letter_exclude: {care_type: true} -> omit from letter
+    """
+    soap = (payload or {}).get("soap") or {}
+    plan = soap.get("plan") or soap.get("plan_struct") or {}
+    services = (plan.get("services") or {}) if isinstance(plan, dict) else {}
+    if not isinstance(services, dict):
+        return []
+
+    raw_data = services.get("staff_modalities_letter_data") or {}
+    if not isinstance(raw_data, dict):
+        raw_data = {}
+
+    exclude_map = services.get("staff_modalities_letter_exclude") or {}
+    if not isinstance(exclude_map, dict):
+        exclude_map = {}
+
+    groups: list[tuple[str, list[tuple[str, str]]]] = []
+    for modality_key, parts_map in raw_data.items():
+        label = (modality_key or "").strip()
+        if not label:
+            continue
+        ex = exclude_map.get(label)
+        if ex is True or (isinstance(ex, str) and ex.strip().lower() in ("1", "true", "yes")):
+            continue
+        checked = _modalities_checked_parts_with_times(parts_map if isinstance(parts_map, dict) else {})
+        if checked:
+            groups.append((label, checked))
+    return groups
+
+
+def _format_staff_letter_body_part(part: str, minutes: str) -> str:
+    p = (part or "").strip()
+    m = (minutes or "").strip()
+    if not m:
+        return p
+    low = m.lower()
+    if "min" in low:
+        return f"{p} ({m})"
+    return f"{p} ({m} minutes)"
+
+
 def modalities_recommendation_letter_should_generate(payload: dict) -> bool:
-    return bool(_modalities_groups_from_payload(payload))
+    return bool(_staff_modalities_letter_groups_from_payload(payload))
 
 
 def modalities_recommendation_letter_editable_text(payload: dict) -> str:
-    groups = _modalities_groups_from_payload(payload)
+    groups = _staff_modalities_letter_groups_from_payload(payload)
     patient = (payload or {}).get("patient") or {}
     if not isinstance(patient, dict):
         patient = {}
@@ -742,8 +776,9 @@ def modalities_recommendation_letter_editable_text(payload: dict) -> str:
     lines.append("")
     lines.append("The patient is prescribed the following physiotherapy regimen. Please carry out this treatment plan exactly as directed.")
     lines.append("")
-    for mod, parts in groups:
-        lines.append(f"• {mod}: {_join_with_and(parts)}")
+    for mod, part_rows in groups:
+        formatted = [_format_staff_letter_body_part(p, t) for p, t in part_rows]
+        lines.append(f"• {mod}: {_join_with_and(formatted)}")
     lines.append("")
     lines.append("Thank you,")
     lines.append("")

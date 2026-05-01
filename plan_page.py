@@ -2,7 +2,7 @@
 from __future__ import annotations
 
 import tkinter as tk
-from tkinter import ttk
+from tkinter import ttk, messagebox
 from scrollframe import ScrollFrame
 
 AUTO_PLAN_TAG = "[AUTO:PLAN]"
@@ -28,7 +28,13 @@ class CollapsibleSection(ttk.Frame):
     Simple collapsible section: a header row with a toggle button,
     and a content frame that can be shown/hidden.
     """
-    def __init__(self, parent, title: str, start_open: bool = True):
+    def __init__(
+        self,
+        parent,
+        title: str,
+        start_open: bool = True,
+        header_right_builder=None,
+    ):
         super().__init__(parent)
 
         self._open = tk.BooleanVar(value=start_open)
@@ -41,6 +47,14 @@ class CollapsibleSection(ttk.Frame):
         self._btn.grid(row=0, column=0, sticky="w")
 
         ttk.Label(header, text=title, font=("Segoe UI", 10, "bold")).grid(row=0, column=1, sticky="w", padx=(6, 0))
+
+        if callable(header_right_builder):
+            try:
+                w = header_right_builder(header)
+                if w is not None:
+                    w.grid(row=0, column=2, sticky="e", padx=(8, 0))
+            except Exception:
+                pass
 
         self.content = ttk.Frame(self)
         self.content.grid(row=1, column=0, sticky="nsew")
@@ -77,11 +91,16 @@ class PlanPage(ttk.Frame):
         "Manual therapy (MRT)",
         "Vibratory Massage",
         "Therapeutic exercise",
-        "Neuromuscular re-education",
-        "Modalities (e-stim / heat and/or ice, spinal traction therapy)",
+        "Neuromuscular re-education",        
+        "Electrical stimulation",
+        "Mechanical traction",
+        "Heat Therapy",
+        "Ice/Cold Therapy",
+        "Hot/Cold Packs",
+        "Infrared Therapy",
+        "Ultrasound",
         "Home exercise program (HEP)",
-        "Referral / co-management",
-        "Final Evaluation - Released from Active Chiropractic Care. The patient will continue treatment with his pain management doctor."
+        "Referral / co-management",        
     ]
 
     REGIONS = [
@@ -91,21 +110,62 @@ class PlanPage(ttk.Frame):
         "Thoracic / Lumbar",
         "Lumbar",
         "Pelvis / SI",
+        "Sacroiliac joint",
+        "Bilateral SI joint",
+        "Right SI joint",
+        "Left SI joint",
+        "Bilateral Upper Trapezius",
+        "Left Upper Trapezius",
+        "Right Upper Trapezius",
+        "Bilateral Lower Trapezius",
+        "Left Lower Trapezius",
+        "Right Lower Trapezius",
+        "Bilateral Levator Scapulae",
+        "Left Levator Scapulae",
+        "Right Levator Scapulae",
+        "Bilateral Rhomboids",
+        "Left Rhomboids",
+        "Right Rhomboids",
+        "Bilateral Latissimus Dorsi",
+        "Left Latissimus Dorsi",
+        "Right Latissimus Dorsi",        
+        "Bilateral Intercostals",
+        "Left Intercostals",
+        "Right Intercostals",
+        "Bilateral Quadratus Lumborum",
+        "Left Quadratus Lumborum",
+        "Right Quadratus Lumborum",
+        "Bilateral Gluteus Medius",
+        "Left Gluteus Medius",
+        "Right Gluteus Medius",
+        "Bilateral Gluteus Maximus",
         "Bilateral shoulders",
         "Right shoulder",
         "Left shoulder",
+        "Bilateral Arms",
+        "Left Arm",
+        "Right Arm",
         "Bilateral elbows",
         "Right elbow",
         "Left elbow",
+        "Bilateral Forearms",
+        "Left Forearm",
+        "Right Forearm",
         "Bilateral wrists/hands",
         "Right wrist/hand",
         "Left wrist/hand",
         "Bilateral hips",
         "Right hip",
         "Left hip",
+        "Bilateral Thighs",
+        "Left Thigh",
+        "Right Thigh",
         "Bilateral knees",
         "Right knee",
         "Left knee",
+        "Bilateral Legs",
+        "Left Leg",
+        "Right Leg",
         "Bilateral ankles/feet",
         "Right ankle/foot",
         "Left ankle/foot",
@@ -163,6 +223,9 @@ class PlanPage(ttk.Frame):
             # --- Uncheck all multi-selects ---
             for v in self._care_vars.values():
                 v.set(False)
+            for v in self._staff_letter_exclude_vars.values():
+                v.set(False)
+            self.staff_modalities_letter_data.clear()
             for v in self._region_vars.values():
                 v.set(False)
             for v in self._goal_vars.values():
@@ -262,6 +325,14 @@ class PlanPage(ttk.Frame):
         self._care_vars = {label: tk.BooleanVar(value=False) for label in self.CARE_TYPES}
         self._region_vars = {label: tk.BooleanVar(value=False) for label in self.REGIONS}
         self._goal_vars = {label: tk.BooleanVar(value=False) for label in self.GOALS}
+        self._staff_letter_exclude_vars = {
+            label: tk.BooleanVar(value=False) for label in self.CARE_TYPES
+        }
+
+                # -----------------------------
+        # Staff physiotherapy letter (Care Types + REGIONS); not billing
+                # -----------------------------
+        self.staff_modalities_letter_data = {}  # dict[str, dict[str, tuple[bool, str]]]
 
                 # -----------------------------
         # Services Provided Today (CMT + Therapy)
@@ -485,7 +556,16 @@ class PlanPage(ttk.Frame):
         f = ttk.Frame(parent)
         f.columnconfigure(0, weight=1)
 
-        treat_section = CollapsibleSection(f, "Treatment", start_open=True)
+        treat_section = CollapsibleSection(
+            f,
+            "Treatment",
+            start_open=True,
+            header_right_builder=lambda hdr: ttk.Button(
+                hdr,
+                text="Current Physiotherapy Modalities Letter",
+                command=self._invoke_modalities_letter_editor,
+            ),
+        )
         treat_section.grid(row=0, column=0, sticky="ew", padx=0, pady=(0, 8))
         treat_section.columnconfigure(0, weight=1)
 
@@ -496,9 +576,35 @@ class PlanPage(ttk.Frame):
         care_box.grid(row=0, column=0, sticky="ew", padx=8, pady=8)
         care_box.columnconfigure(0, weight=1)
 
+        hint = ttk.Label(
+            care_box,
+            text="Use \u25A1 beside a selected care type to map body regions and times for the staff letter.",
+            font=("Segoe UI", 8),
+            foreground="#555",
+        )
+        hint.grid(row=0, column=0, sticky="w", padx=8, pady=(6, 2))
+
         for i, label in enumerate(self.CARE_TYPES):
-            cb = ttk.Checkbutton(care_box, text=label, variable=self._care_vars[label])
-            cb.grid(row=i, column=0, sticky="w", padx=8, pady=2)
+            row_f = ttk.Frame(care_box)
+            row_f.grid(row=i + 1, column=0, sticky="ew", padx=(4, 8), pady=2)
+            row_f.columnconfigure(1, weight=1)
+
+            ttk.Button(
+                row_f,
+                text="\u25A1",
+                width=3,
+                command=lambda la=label: self._open_staff_modalities_setup_dialog(la),
+            ).grid(row=0, column=0, sticky="w")
+
+            ttk.Checkbutton(row_f, text=label, variable=self._care_vars[label]).grid(
+                row=0, column=1, sticky="w", padx=(4, 8)
+            )
+
+            ttk.Checkbutton(
+                row_f,
+                text="Exclude from staff letter",
+                variable=self._staff_letter_exclude_vars[label],
+            ).grid(row=0, column=2, sticky="e")
 
         return f
 
@@ -716,6 +822,14 @@ class PlanPage(ttk.Frame):
     def set_open_modalities_letter_editor_callback(self, fn):
         self._open_modalities_letter_editor_callback = fn
 
+    def _invoke_modalities_letter_editor(self) -> None:
+        cb = getattr(self, "_open_modalities_letter_editor_callback", None)
+        if callable(cb):
+            try:
+                cb()
+            except Exception:
+                pass
+
     def focus_exam_popup(self) -> None:
         """Live Preview: open Services Provided Today popup (exam fields live there)."""
         self._show_plan_block("Services Provided Today")
@@ -726,6 +840,11 @@ class PlanPage(ttk.Frame):
         def _general_changed(*_):
             if self._loading:
                 return
+
+            # Unchecked care types are removed from staff letter region map
+            for lbl in self.CARE_TYPES:
+                if not self._care_vars[lbl].get():
+                    self.staff_modalities_letter_data.pop(lbl, None)
 
             self._sync_other_entries()
 
@@ -773,6 +892,14 @@ class PlanPage(ttk.Frame):
         # checkbox changes
         for v in list(self._care_vars.values()) + list(self._region_vars.values()) + list(self._goal_vars.values()):
             v.trace_add("write", _general_changed)
+
+        def _staff_exclude_changed(*_):
+            if self._loading:
+                return
+            self._notify_change()
+
+        for v in self._staff_letter_exclude_vars.values():
+            v.trace_add("write", _staff_exclude_changed)
 
         # text widgets
         self.custom_notes.bind("<<Modified>>", self._on_custom_notes_modified)
@@ -1273,11 +1400,6 @@ class PlanPage(ttk.Frame):
         bottom_btns = ttk.Frame(frame)
         bottom_btns.pack(side="bottom", fill="x", pady=10)
         ttk.Button(bottom_btns, text="Save and Exit", command=on_close).pack(side="left")
-        ttk.Button(
-            bottom_btns,
-            text="Current Physiotherapy Modalities Letter",
-            command=lambda: (self._open_modalities_letter_editor_callback() if callable(self._open_modalities_letter_editor_callback) else None),
-        ).pack(side="left", padx=(8, 0))
 
     # -------------------------
     # CMT LOGIC
@@ -1436,6 +1558,142 @@ class PlanPage(ttk.Frame):
         ttk.Button(btn_frame, text="Save This Therapy", command=save_therapy).pack(side="left", padx=5)
         ttk.Button(btn_frame, text="Delete Sections", command=delete_therapy).pack(side="left", padx=5)
 
+    # -------------------------
+    # Staff modalities letter — Care Types + Regions (plan REGIONS list)
+    # -------------------------
+    def _open_staff_modalities_setup_dialog(self, care_label: str) -> None:
+        if not self._care_vars.get(care_label) or not self._care_vars[care_label].get():
+            messagebox.showinfo(
+                "Care type",
+                "Turn on this care type in the checklist first,\n"
+                "then use \u25A1 to map regions for the staff letter.",
+                parent=self.winfo_toplevel(),
+            )
+            return
+
+        root = self.winfo_toplevel()
+        d_win = tk.Toplevel(root)
+        d_win.title(care_label)
+        d_win.geometry("520x620")
+        d_win.minsize(480, 400)
+        d_win.grab_set()
+
+        outer = ttk.Frame(d_win, padding=12)
+        outer.pack(fill="both", expand=True)
+        outer.rowconfigure(0, weight=1)
+        outer.columnconfigure(0, weight=1)
+
+        container = ttk.Frame(outer)
+        container.grid(row=0, column=0, sticky="nsew")
+        container.rowconfigure(0, weight=1)
+        container.columnconfigure(0, weight=1)
+
+        canvas = tk.Canvas(container, highlightthickness=0)
+        sb = ttk.Scrollbar(container, orient="vertical", command=canvas.yview)
+        canvas.configure(yscrollcommand=sb.set)
+
+        canvas.grid(row=0, column=0, sticky="nsew")
+        sb.grid(row=0, column=1, sticky="ns")
+
+        scroll_frame = ttk.Frame(canvas)
+        win_id = canvas.create_window((0, 0), window=scroll_frame, anchor="nw")
+
+        def _on_sf_configure(_e=None):
+            canvas.configure(scrollregion=canvas.bbox("all"))
+
+        def _on_canvas_configure(e):
+            canvas.itemconfigure(win_id, width=e.width)
+
+        scroll_frame.bind("<Configure>", _on_sf_configure)
+        canvas.bind("<Configure>", _on_canvas_configure)
+
+        def close_dlg():
+            d_win.destroy()
+
+        d_win.protocol("WM_DELETE_WINDOW", close_dlg)
+
+        ttk.Label(
+            scroll_frame,
+            text="Select regions and minutes (applied time) for this modality in the letter.",
+            font=("Segoe UI", 9),
+        ).pack(anchor="w", pady=(0, 10))
+
+        active_vars: dict[str, tuple[tk.BooleanVar, tk.StringVar]] = {}
+
+        saved_map = (self.staff_modalities_letter_data or {}).get(care_label) or {}
+
+        for part in self.REGIONS:
+            saved_checked, saved_time = (False, "")
+            got = saved_map.get(part)
+            if isinstance(got, (list, tuple)) and got:
+                try:
+                    saved_checked = bool(got[0])
+                except Exception:
+                    saved_checked = False
+                if len(got) > 1 and got[1] is not None:
+                    saved_time = str(got[1]).strip()
+            elif isinstance(got, dict):
+                saved_checked = bool(got.get("checked"))
+                saved_time = str(got.get("minutes") or got.get("time") or "").strip()
+
+            b_var = tk.BooleanVar(value=bool(saved_checked))
+            s_var = tk.StringVar(value=saved_time if saved_time else "")
+
+            def on_toggle(bv=b_var, sv=s_var):
+                if not bv.get():
+                    sv.set("")
+                    return
+                if not (sv.get() or "").strip():
+                    sv.set("15")
+
+            row = ttk.Frame(scroll_frame, padding=2)
+            row.pack(fill="x", padx=4)
+
+            ttk.Entry(row, textvariable=s_var, width=5).pack(side="right")
+            ttk.Checkbutton(row, text=part, variable=b_var, command=on_toggle).pack(side="left", fill="x", expand=True)
+
+            active_vars[part] = (b_var, s_var)
+
+        def save_map():
+            self.staff_modalities_letter_data[care_label] = {
+                p: (v[0].get(), v[1].get()) for p, v in active_vars.items()
+            }
+            self._cleanup_staff_modalities_letter_noise(care_label)
+            close_dlg()
+            self._notify_change()
+
+        def clear_map():
+            self.staff_modalities_letter_data.pop(care_label, None)
+            close_dlg()
+            self._notify_change()
+
+        btn_frame = ttk.Frame(outer)
+        btn_frame.grid(row=1, column=0, sticky="ew", pady=(14, 0))
+        ttk.Button(btn_frame, text="Save", command=save_map).pack(side="left", padx=(0, 8))
+        ttk.Button(btn_frame, text="Clear regions for this modality", command=clear_map).pack(side="left")
+
+    def _cleanup_staff_modalities_letter_noise(self, care_label: str) -> None:
+        """Drop unchecked rows from persisted map."""
+        m = (self.staff_modalities_letter_data or {}).get(care_label) or {}
+        if not isinstance(m, dict):
+            return
+        keep: dict[str, tuple[bool, str]] = {}
+        for reg, pair in m.items():
+            if not isinstance(pair, (list, tuple)) or not pair:
+                continue
+            checked = bool(pair[0])
+            if not checked:
+                continue
+            minutes = (
+                str(pair[1]).strip()
+                if len(pair) > 1 and pair[1] is not None
+                else ""
+            )
+            keep[str(reg)] = (True, minutes)
+        if keep:
+            self.staff_modalities_letter_data[care_label] = keep
+        else:
+            self.staff_modalities_letter_data.pop(care_label, None)
 
     # ---------------- Public struct API (save/load) ----------------
     def get_struct(self) -> dict:
@@ -1477,6 +1735,10 @@ class PlanPage(ttk.Frame):
                 "em_code": (self.current_em_code.get() or ""),
                 "exam_notes": (self.exam_notes_var.get() or ""),
                 "therapy_data": self.therapy_data or {},
+                "staff_modalities_letter_data": dict(self.staff_modalities_letter_data or {}),
+                "staff_modalities_letter_exclude": {
+                    k: bool(v.get()) for k, v in (self._staff_letter_exclude_vars or {}).items()
+                },
             },
         }
 
@@ -1548,7 +1810,12 @@ class PlanPage(ttk.Frame):
             self.current_cmt_notes.set(services.get("cmt_notes", "") or "") 
             self.current_em_code.set(services.get("em_code", "") or "")
             self.exam_notes_var.set(services.get("exam_notes", "") or "")
-            self.therapy_data = services.get("therapy_data", {}) or {}            
+            self.therapy_data = services.get("therapy_data", {}) or {}
+            self.staff_modalities_letter_data = services.get("staff_modalities_letter_data", {}) or {}
+            exc = services.get("staff_modalities_letter_exclude") or {}
+            if isinstance(exc, dict):
+                for k, v in self._staff_letter_exclude_vars.items():
+                    v.set(bool(exc.get(k)))
 
             self._sync_other_entries()
         finally:
