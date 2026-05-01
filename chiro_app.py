@@ -94,7 +94,7 @@ from utils import (
 # Pages
 from subjectives import SubjectivesPage
 from objectives import ObjectivesPage
-from ui_pages import TextPage
+from family_social_history_page import FamilySocialHistoryPage
 
 # ----------- OPTIONAL: Pillow (Tkinter logo) -----------
 PIL_OK = False
@@ -3043,7 +3043,9 @@ class App(tk.Tk):
             except Exception:
                 pass
         self.subjectives_page = SubjectivesPage(self.content, _subjectives_on_change, app=self)
-        self.family_social_page = TextPage(self.content, "Family/Social History", self.schedule_autosave)
+        self.family_social_page = FamilySocialHistoryPage(
+            self.content, "Family/Social History", self.schedule_autosave, app=self
+        )
         self.objectives_page = ObjectivesPage(self.content, self.schedule_autosave)
         self.diagnosis_page = DiagnosisPage(
             self.content,
