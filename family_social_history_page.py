@@ -262,7 +262,30 @@ class FamilySocialHistoryPage(ttk.Frame):
 
     # --- note tab ---
     def _build_note_tab(self, parent: ttk.Frame) -> None:
-        demo_row = ttk.Frame(parent)
+        # Outer note-tab scroller (for smaller laptop heights). Existing inner builder
+        # and canvas-editor wheel behavior remains independent.
+        note_canvas = tk.Canvas(parent, highlightthickness=0)
+        note_sb = ttk.Scrollbar(parent, orient="vertical", command=note_canvas.yview)
+        note_canvas.configure(yscrollcommand=note_sb.set)
+        note_canvas.pack(side="left", fill="both", expand=True)
+        note_sb.pack(side="right", fill="y")
+
+        note_inner = ttk.Frame(note_canvas)
+        note_window = note_canvas.create_window((0, 0), window=note_inner, anchor="nw")
+
+        def _sync_note_scrollregion(_e=None) -> None:
+            note_canvas.configure(scrollregion=note_canvas.bbox("all"))
+
+        def _sync_note_inner_width(event: tk.Event) -> None:
+            note_canvas.itemconfigure(note_window, width=event.width)
+
+        note_inner.bind("<Configure>", _sync_note_scrollregion)
+        note_canvas.bind("<Configure>", _sync_note_inner_width)
+
+        self.note_tab_canvas = note_canvas
+        self._note_tab_outer = parent
+
+        demo_row = ttk.Frame(note_inner)
         demo_row.pack(fill="x", padx=10, pady=(4, 2))
         ttk.Label(
             demo_row,
@@ -273,7 +296,7 @@ class FamilySocialHistoryPage(ttk.Frame):
         self.age_hint_var = tk.StringVar(value="")
         ttk.Label(demo_row, textvariable=self.age_hint_var, foreground="gray").pack(side="left", padx=(12, 0))
 
-        ctl = ttk.Frame(parent)
+        ctl = ttk.Frame(note_inner)
         ctl.pack(fill="x", padx=10, pady=(0, 4))
         self.auto_apply_builder = tk.BooleanVar(value=False)
         ttk.Checkbutton(
@@ -286,8 +309,8 @@ class FamilySocialHistoryPage(ttk.Frame):
             side="left", padx=(12, 0)
         )
 
-        builder_outer = ttk.LabelFrame(parent, text="Sentence builder")
-        builder_outer.pack(fill="both", expand=True, padx=10, pady=(0, 6))
+        builder_outer = ttk.LabelFrame(note_inner, text="Sentence builder")
+        builder_outer.pack(fill="x", expand=False, padx=10, pady=(0, 6))
         self._note_builder_outer = builder_outer
 
         canvas = tk.Canvas(builder_outer, highlightthickness=0, height=220)
@@ -303,11 +326,11 @@ class FamilySocialHistoryPage(ttk.Frame):
 
         self.note_builder_canvas = canvas
 
-        ttk.Label(parent, text="Note text (editable — saved to chart, Live Preview, and PDF):").pack(
+        ttk.Label(note_inner, text="Note text (editable — saved to chart, Live Preview, and PDF):").pack(
             anchor="w", padx=10, pady=(4, 2)
         )
-        self.text = tk.Text(parent, width=110, height=12, wrap="word")
-        self.text.pack(fill="both", expand=True, padx=10, pady=(0, 8))
+        self.text = tk.Text(note_inner, width=110, height=12, wrap="word")
+        self.text.pack(fill="x", expand=False, padx=10, pady=(0, 8))
         self.text.bind("<KeyRelease>", lambda e: self._on_note_text_changed())
 
     @staticmethod
@@ -420,6 +443,13 @@ class FamilySocialHistoryPage(ttk.Frame):
             and self._widget_is_descendant_of(no, w)
         ):
             if self._scroll_canvas_y(nb, event):
+                return "break"
+            return None
+
+        nt = getattr(self, "_note_tab_outer", None)
+        nc = getattr(self, "note_tab_canvas", None)
+        if nt is not None and nc is not None and w is not None and self._widget_is_descendant_of(nt, w):
+            if self._scroll_canvas_y(nc, event):
                 return "break"
             return None
         return None
