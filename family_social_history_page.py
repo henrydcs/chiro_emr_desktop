@@ -16,6 +16,7 @@ TEMPLATES_FILENAME = "family_social_doc_templates.json"
 
 # Prepended to each builder dropdown (not stored in JSON). Selecting it drops that clause from output.
 OPTION_OMIT = "(Omit — exclude from sentence)"
+TEMPLATE_BAND_COLORS = ("#9D9D9D", "#C5C5C5")
 
 
 def _is_omit_phrase(text: str) -> bool:
@@ -569,9 +570,12 @@ class FamilySocialHistoryPage(ttk.Frame):
 
         self._prefix_resolved_labels: list[ttk.Label] = []
 
-        for tmpl in self.templates:
-            card = ttk.LabelFrame(self.note_scroll_frame, text=f"Template {tmpl['id']}")
-            card.pack(fill="x", padx=6, pady=6)
+        for idx, tmpl in enumerate(self.templates):
+            band = tk.Frame(self.note_scroll_frame, bg=self._template_band_bg(idx))
+            band.pack(fill="x", padx=4, pady=4)
+
+            card = ttk.LabelFrame(band, text=f"Template {tmpl['id']}")
+            card.pack(fill="x", padx=5, pady=5)
 
             tid = int(tmpl["id"])
             skip_v = tk.BooleanVar(value=self._visit_skip_by_tid.get(tid, False))
@@ -616,6 +620,10 @@ class FamilySocialHistoryPage(ttk.Frame):
         self._update_age_hint()
         self._refresh_ghost_labels_only()
 
+    @staticmethod
+    def _template_band_bg(idx: int) -> str:
+        return TEMPLATE_BAND_COLORS[idx % len(TEMPLATE_BAND_COLORS)]
+
     # --- canvas tab ---
     def _build_canvas_tab(self, parent: ttk.Frame) -> None:
         hdr = ttk.Frame(parent)
@@ -652,8 +660,11 @@ class FamilySocialHistoryPage(ttk.Frame):
         self.canvas_editor_widget.configure(scrollregion=self.canvas_editor_widget.bbox("all"))
 
     def _build_template_editor_card(self, parent: ttk.Frame, tmpl: dict, idx: int) -> None:
-        outer = ttk.LabelFrame(parent, text=f"Template {tmpl['id']}")
-        outer.pack(fill="x", padx=4, pady=6)
+        band = tk.Frame(parent, bg=self._template_band_bg(idx))
+        band.pack(fill="x", padx=2, pady=5)
+
+        outer = ttk.LabelFrame(band, text=f"Template {tmpl['id']}")
+        outer.pack(fill="x", padx=5, pady=5)
 
         bar = ttk.Frame(outer)
         bar.pack(fill="x", padx=6, pady=4)
