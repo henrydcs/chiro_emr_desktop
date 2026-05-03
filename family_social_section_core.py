@@ -453,7 +453,7 @@ class FamilySocialSectionCore(ttk.Frame):
         builder_outer.pack(fill="x", expand=False, padx=10, pady=(0, 6))
         self._note_builder_outer = builder_outer
 
-        canvas = tk.Canvas(builder_outer, highlightthickness=0, height=220)
+        canvas = tk.Canvas(builder_outer, highlightthickness=0, height=440)
         sb = ttk.Scrollbar(builder_outer, orient="vertical", command=canvas.yview)
         self.note_scroll_frame = ttk.Frame(canvas)
         self.note_scroll_frame.bind(
