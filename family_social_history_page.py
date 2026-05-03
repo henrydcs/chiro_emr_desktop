@@ -13,10 +13,27 @@ from paths import get_data_dir
 from utils import today_mmddyyyy
 
 TEMPLATES_FILENAME = "family_social_doc_templates.json"
+# Stored in exam JSON under soap["family_social_builder"]; restores multi-select after reload.
+BUILDER_STATE_VERSION = 1
+_BUILDER_SLOT_DEFAULT = object()
 
 # Prepended to each builder dropdown (not stored in JSON). Selecting it drops that clause from output.
 OPTION_OMIT = "(Omit — exclude from sentence)"
 TEMPLATE_BAND_COLORS = ("#9D9D9D", "#C5C5C5")
+
+# Template editor: button bank order — keep aligned with keys returned by `_format_context`.
+PREFIX_PLACEHOLDER_TOKEN_KEYS: tuple[str, ...] = (
+    "age",
+    "sex",
+    "he_she",
+    "he_her",
+    "him_her",
+    "his_hers",
+    "firstName",
+    "lastName",
+    "dob",
+    "doi",
+)
 
 
 def _is_omit_phrase(text: str) -> bool:
@@ -53,6 +70,18 @@ def _finalize_sentence(parts: list[str]) -> str:
     if out and out[-1] not in ".!?":
         out += "."
     return out
+
+
+def _join_with_oxford_and(items: list[str]) -> str:
+    """Join phrases like “A, B, and C” (Oxford comma before “and”)."""
+    parts = [str(x).strip() for x in items if str(x).strip()]
+    if not parts:
+        return ""
+    if len(parts) == 1:
+        return parts[0]
+    if len(parts) == 2:
+        return f"{parts[0]} and {parts[1]}"
+    return ", ".join(parts[:-1]) + ", and " + parts[-1]
 
 
 DEFAULT_TEMPLATES: list[dict] = [
@@ -121,8 +150,12 @@ class FamilySocialHistoryPage(ttk.Frame):
         self._app = app
         self.templates = self._load_templates()
         self.note_combo_vars: list[list[tk.StringVar]] = []
+        # Parallel to note_combo_vars / templates: multi listbox refs + item lists for save/restore.
+        self._note_builder_meta: list[list[dict]] = []
         # Per-template "skip for this visit" (by template id); survives Canvas re-save re-renders.
         self._visit_skip_by_tid: dict[int, bool] = {}
+        self._token_copy_feedback_var = tk.StringVar(value="")
+        self._clear_token_copy_msg_after_id = None
 
         outer = ttk.Frame(self)
         outer.pack(fill="both", expand=True)
@@ -144,6 +177,10 @@ class FamilySocialHistoryPage(ttk.Frame):
             try:
                 self._app.dob_var.trace_add("write", lambda *_: self._on_demographics_changed())
                 self._app.exam_date_var.trace_add("write", lambda *_: self._on_demographics_changed())
+                for attr in ("first_name_var", "last_name_var", "doi_var"):
+                    v = getattr(self._app, attr, None)
+                    if v is not None and hasattr(v, "trace_add"):
+                        v.trace_add("write", lambda *_: self._on_demographics_changed())
                 hp = getattr(self._app, "hoi_page", None)
                 if hp is not None and hasattr(hp, "sex_var"):
                     hp.sex_var.trace_add("write", lambda *_: self._on_demographics_changed())
@@ -165,10 +202,52 @@ class FamilySocialHistoryPage(ttk.Frame):
                 with open(path, encoding="utf-8") as f:
                     data = json.load(f)
                 if isinstance(data, list) and data:
+                    for t in data:
+                        if not isinstance(t, dict):
+                            continue
+                        for dd in t.get("dropdowns") or []:
+                            if isinstance(dd, dict):
+                                dd.setdefault("multi", False)
                     return data
             except Exception:
                 pass
         return copy.deepcopy(DEFAULT_TEMPLATES)
+
+    def _ask_dropdown_mode(self, *, title: str, prompt: str) -> bool | None:
+        """
+        Ask whether a new dropdown is single- or multi-select.
+        Returns True for multiple, False for single, None if cancelled.
+        """
+        result: list[bool | None] = [None]
+        dlg = tk.Toplevel(self.winfo_toplevel())
+        dlg.title(title)
+        try:
+            dlg.transient(self.winfo_toplevel())
+        except Exception:
+            pass
+        dlg.grab_set()
+        ttk.Label(dlg, text=prompt, wraplength=460).pack(padx=18, pady=(14, 10))
+
+        def _single() -> None:
+            result[0] = False
+            dlg.destroy()
+
+        def _multi() -> None:
+            result[0] = True
+            dlg.destroy()
+
+        def _cancel() -> None:
+            result[0] = None
+            dlg.destroy()
+
+        bf = ttk.Frame(dlg)
+        bf.pack(pady=(0, 14))
+        ttk.Button(bf, text="Single choice", width=16, command=_single).pack(side="left", padx=4)
+        ttk.Button(bf, text="Multiple choice", width=16, command=_multi).pack(side="left", padx=4)
+        ttk.Button(bf, text="Cancel", width=10, command=_cancel).pack(side="left", padx=4)
+        dlg.protocol("WM_DELETE_WINDOW", _cancel)
+        dlg.wait_window(dlg)
+        return result[0]
 
     def _sanitize_templates_for_save(self) -> list[dict]:
         out: list[dict] = []
@@ -193,41 +272,81 @@ class FamilySocialHistoryPage(ttk.Frame):
         self._save_templates_file()
 
     # --- demographics & HOI sex (Type of Injury / MOI) ---
+    def _hoi_sex_raw(self) -> str:
+        if self._app is None:
+            return ""
+        try:
+            hp = getattr(self._app, "hoi_page", None)
+            if hp is not None and hasattr(hp, "sex_var"):
+                return (hp.sex_var.get() or "").strip()
+        except Exception:
+            pass
+        return ""
+
     def _sex_token_for_sentence(self) -> str:
         """
         Word inserted for {sex} in prefix templates.
-        Uses HOI → Type of Injury (or MOI block) sex/pronouns: Male / Female / Unknown.
+        Uses HOI Sex: male / female; unknown → patient.
         """
-        raw = ""
-        if self._app is not None:
-            try:
-                hp = getattr(self._app, "hoi_page", None)
-                if hp is not None and hasattr(hp, "sex_var"):
-                    raw = (hp.sex_var.get() or "").strip()
-            except Exception:
-                pass
+        raw = self._hoi_sex_raw()
         if raw in ("", "(unknown)"):
             return "patient"
         return raw.lower()
 
+    @staticmethod
+    def _pronoun_placeholders(raw_sex: str) -> dict[str, str]:
+        """Match HOI `_pronouns` semantics; keys are template token names."""
+        s = (raw_sex or "").strip().lower()
+        if s.startswith("m"):
+            return {"he_she": "he", "him_her": "him", "his_hers": "his"}
+        if s.startswith("f"):
+            return {"he_she": "she", "him_her": "her", "his_hers": "her"}
+        return {"he_she": "they", "him_her": "them", "his_hers": "their"}
+
     def _format_context(self) -> dict[str, str]:
         age = ""
         ref = today_mmddyyyy()
+        firstName = ""
+        lastName = ""
+        dob = ""
+        doi = ""
         if self._app is not None:
             try:
                 ref = (self._app.exam_date_var.get() or "").strip() or ref
                 age = _age_from_dob(self._app.dob_var.get(), ref)
             except Exception:
                 age = ""
+            try:
+                fnv = getattr(self._app, "first_name_var", None)
+                lnv = getattr(self._app, "last_name_var", None)
+                dbv = getattr(self._app, "dob_var", None)
+                doiv = getattr(self._app, "doi_var", None)
+                if fnv is not None:
+                    firstName = (fnv.get() or "").strip()
+                if lnv is not None:
+                    lastName = (lnv.get() or "").strip()
+                if dbv is not None:
+                    dob = (dbv.get() or "").strip()
+                if doiv is not None:
+                    doi = (doiv.get() or "").strip()
+            except Exception:
+                pass
         if not age:
             age = "____"
         sex = self._sex_token_for_sentence()
+        pro = self._pronoun_placeholders(self._hoi_sex_raw())
+        subj = pro["he_she"]
         return {
             "age": age,
             "sex": sex,
-            "pod": "0",
-            "stage": "___",
-            "comorbidities": "multiple conditions",
+            "he_she": subj,
+            "he_her": subj,
+            "him_her": pro["him_her"],
+            "his_hers": pro["his_hers"],
+            "firstName": firstName,
+            "lastName": lastName,
+            "dob": dob,
+            "doi": doi,
         }
 
     def _resolve_vars(self, text: str) -> str:
@@ -251,7 +370,6 @@ class FamilySocialHistoryPage(ttk.Frame):
     def _on_demographics_changed(self) -> None:
         self._update_age_hint()
         self._refresh_resolved_prefix_labels()
-        self._refresh_ghost_labels_only()
         if self.auto_apply_builder.get():
             self._apply_builder_to_note()
 
@@ -259,7 +377,12 @@ class FamilySocialHistoryPage(ttk.Frame):
         if not hasattr(self, "age_hint_var"):
             return
         ctx = self._format_context()
-        self.age_hint_var.set(f"Tokens: age={ctx['age']}, sex token={ctx['sex']}")
+        self.age_hint_var.set(
+            "Live sample: "
+            f"age={ctx['age']}, sex={ctx['sex']}, "
+            f"{ctx['he_she']}/{ctx['him_her']}/{ctx['his_hers']}, "
+            f"name={ctx['firstName'] or '—'} {ctx['lastName'] or '—'}"
+        )
 
     # --- note tab ---
     def _build_note_tab(self, parent: ttk.Frame) -> None:
@@ -290,7 +413,7 @@ class FamilySocialHistoryPage(ttk.Frame):
         demo_row.pack(fill="x", padx=10, pady=(4, 2))
         ttk.Label(
             demo_row,
-            text='{sex} from HOI Type of Injury. Dropdown/Omit/Skip always refresh the note below. "(Omit...)" removes that clause.',
+            text='{sex} and pronoun tokens follow HOI Sex. Dropdown/Omit/Skip refresh the note. "(Omit...)" removes that clause.',
             foreground="gray",
         ).pack(side="left")
 
@@ -475,7 +598,6 @@ class FamilySocialHistoryPage(ttk.Frame):
         self.on_change_callback()
 
     def _on_builder_selection_changed(self) -> None:
-        self._refresh_ghost_labels_only()
         # Always push builder output to the note so Omit / dropdown changes reach Live Preview & PDF.
         self._apply_builder_to_note()
 
@@ -484,7 +606,6 @@ class FamilySocialHistoryPage(ttk.Frame):
 
         def _sync() -> None:
             self._visit_skip_by_tid[tid] = var.get()
-            self._refresh_ghost_labels_only()
             self._apply_builder_to_note()
             self.on_change_callback()
 
@@ -531,6 +652,107 @@ class FamilySocialHistoryPage(ttk.Frame):
                 blocks.append(sent)
         return "\n\n".join(blocks).strip()
 
+    def get_builder_state(self) -> dict:
+        """Serializable dropdown selections (indices) for exam JSON. Required to restore multi-select after reload."""
+        out: dict = {"v": BUILDER_STATE_VERSION, "templates": {}}
+        for i, tmpl in enumerate(self.templates):
+            if i >= len(self.note_combo_vars) or i >= len(self._note_builder_meta):
+                break
+            tid = str(int(tmpl["id"]))
+            dds = tmpl.get("dropdowns") or []
+            row = self.note_combo_vars[i]
+            meta_row = self._note_builder_meta[i]
+            dd_states: list = []
+            for j, dd in enumerate(dds):
+                if j >= len(row) or j >= len(meta_row):
+                    break
+                meta = meta_row[j]
+                var = row[j]
+                items = list(meta.get("items") or [])
+                if meta.get("multi"):
+                    lb = meta.get("lb")
+                    if isinstance(lb, tk.Listbox):
+                        try:
+                            if lb.winfo_exists():
+                                dd_states.append([int(x) for x in lb.curselection()])
+                                continue
+                        except Exception:
+                            pass
+                    dd_states.append([])
+                else:
+                    val = (var.get() or "").strip()
+                    if _is_omit_phrase(val):
+                        dd_states.append(None)
+                    else:
+                        try:
+                            dd_states.append(items.index(val))
+                        except ValueError:
+                            dd_states.append(None)
+            out["templates"][tid] = {"dropdowns": dd_states}
+        return out
+
+    def _apply_builder_state(self, state: dict | None) -> None:
+        """Rebuild StringVars + listbox highlights from saved indices (or defaults if state missing / invalid)."""
+        if not self.note_combo_vars or not self._note_builder_meta:
+            return
+        raw = state if isinstance(state, dict) else None
+        tmap: dict = {}
+        if raw and raw.get("v") == BUILDER_STATE_VERSION:
+            tm = raw.get("templates")
+            if isinstance(tm, dict):
+                tmap = tm
+
+        for i, tmpl in enumerate(self.templates):
+            if i >= len(self.note_combo_vars) or i >= len(self._note_builder_meta):
+                break
+            tid = str(int(tmpl["id"]))
+            tdat = tmap.get(tid)
+            sels = tdat.get("dropdowns") if isinstance(tdat, dict) else None
+            if not isinstance(sels, list):
+                sels = []
+            dds = tmpl.get("dropdowns") or []
+            row = self.note_combo_vars[i]
+            meta_row = self._note_builder_meta[i]
+            for j, dd in enumerate(dds):
+                if j >= len(row) or j >= len(meta_row):
+                    break
+                meta = meta_row[j]
+                var = row[j]
+                items = list(meta.get("items") or [])
+                raw_slot = sels[j] if j < len(sels) else _BUILDER_SLOT_DEFAULT
+
+                if meta.get("multi"):
+                    lb = meta.get("lb")
+                    idxs: list[int] = []
+                    if raw_slot is not _BUILDER_SLOT_DEFAULT and isinstance(raw_slot, list):
+                        for x in raw_slot:
+                            try:
+                                idxs.append(int(x))
+                            except (TypeError, ValueError):
+                                pass
+                    if isinstance(lb, tk.Listbox):
+                        try:
+                            lb.selection_clear(0, tk.END)
+                            for ix in idxs:
+                                if 0 <= ix < lb.size():
+                                    lb.selection_set(ix)
+                            sel_idx = lb.curselection()
+                            chosen = [items[k] for k in sel_idx if 0 <= k < len(items)]
+                            var.set(_join_with_oxford_and(chosen))
+                        except Exception:
+                            var.set("")
+                    else:
+                        var.set("")
+                else:
+                    if raw_slot is _BUILDER_SLOT_DEFAULT:
+                        var.set(items[0] if items else OPTION_OMIT)
+                    elif raw_slot is None:
+                        var.set(OPTION_OMIT)
+                    elif isinstance(raw_slot, int) and 0 <= raw_slot < len(items):
+                        var.set(items[raw_slot])
+                    else:
+                        var.set(items[0] if items else OPTION_OMIT)
+
     def _apply_builder_to_note(self) -> None:
         body = self._compose_builder_text()
         self.text.delete("1.0", tk.END)
@@ -538,35 +760,19 @@ class FamilySocialHistoryPage(ttk.Frame):
         self._update_age_hint()
         self.on_change_callback()
 
-    def _refresh_ghost_labels_only(self) -> None:
-        for i, tmpl in enumerate(self.templates):
-            if i >= len(self.note_combo_vars):
-                continue
-            ghost = getattr(tmpl, "_ghost_lbl", None)
-            if ghost is None or not isinstance(ghost, tk.Widget):
-                continue
-            try:
-                if not ghost.winfo_exists():
-                    continue
-            except Exception:
-                continue
-            tid = int(tmpl["id"])
-            if self._visit_skip_by_tid.get(tid, False):
-                ghost.configure(text="▸ (Skipped for this visit — not included in note text from builder)")
-                continue
-            parts = self._compose_parts_for_template(i, tmpl)
-            if not parts:
-                ghost.configure(
-                    text="▸ (Omit on all options — prefix and options excluded from note)"
-                )
-                continue
-            ghost.configure(text="▸ " + _finalize_sentence(parts))
-
     # --- builder render ---
     def _render_note_builder(self) -> None:
+        snapshot: dict | None = None
+        try:
+            if self.note_combo_vars and self._note_builder_meta:
+                snapshot = self.get_builder_state()
+        except Exception:
+            snapshot = None
+
         for w in self.note_scroll_frame.winfo_children():
             w.destroy()
         self.note_combo_vars = []
+        self._note_builder_meta = []
 
         self._prefix_resolved_labels: list[ttk.Label] = []
 
@@ -596,33 +802,174 @@ class FamilySocialHistoryPage(ttk.Frame):
             self._prefix_resolved_labels.append(pl)
 
             row_vars: list[tk.StringVar] = []
+            meta_row: list[dict] = []
             for dd in tmpl.get("dropdowns") or []:
                 items = list(dd.get("items") or [])
-                display_items = [OPTION_OMIT] + items
+                is_multi = bool(dd.get("multi"))
                 fr = ttk.Frame(card)
                 fr.pack(fill="x", padx=8, pady=3)
-                ttk.Label(fr, text=(dd.get("label") or "Option") + ":").pack(anchor="w")
-                initial = items[0] if items else OPTION_OMIT
-                var = tk.StringVar(value=initial)
-                cb = ttk.Combobox(fr, textvariable=var, values=display_items, state="readonly", width=80)
-                cb.pack(fill="x")
-                cb.bind("<<ComboboxSelected>>", lambda e: self._on_builder_selection_changed())
-                row_vars.append(var)
+                title = dd.get("label") or "Option"
+                ttk.Label(
+                    fr,
+                    text=(title + ("" if not is_multi else " — select one or more; joined with commas and “and”")) + ":",
+                ).pack(anchor="w")
+                if is_multi:
+                    var = tk.StringVar(value="")
+                    lb_wrap = ttk.Frame(fr)
+                    lb_wrap.pack(fill="x")
+                    lb_h = min(max(len(items), 3), 10)
+                    lb = tk.Listbox(
+                        lb_wrap,
+                        selectmode=tk.EXTENDED,
+                        height=lb_h,
+                        activestyle="dotbox",
+                        exportselection=False,
+                    )
+                    for it in items:
+                        lb.insert(tk.END, it)
+                    lb.pack(side="left", fill="x", expand=True)
+                    lsb = ttk.Scrollbar(lb_wrap, orient="vertical", command=lb.yview)
+                    lb.configure(yscrollcommand=lsb.set)
+                    lsb.pack(side="right", fill="y")
+
+                    def _sync_multi(
+                        _lb: tk.Listbox = lb,
+                        _opts: list[str] = items,
+                        _v: tk.StringVar = var,
+                    ) -> None:
+                        sel_idx = _lb.curselection()
+                        chosen = [_opts[i] for i in sel_idx if 0 <= i < len(_opts)]
+                        _v.set(_join_with_oxford_and(chosen))
+
+                    # Bind sync via default args: `_sync_multi` is reassigned each loop iteration;
+                    # bare name lookup in a nested def would call the *last* dropdown's sync only.
+                    def _multi_changed(_e=None, _s=_sync_multi) -> None:
+                        _s()
+                        self._on_builder_selection_changed()
+
+                    def _clear_multi(_lb=lb, _s=_sync_multi) -> None:
+                        _lb.selection_clear(0, tk.END)
+                        _s()
+                        self._on_builder_selection_changed()
+
+                    lb.bind("<<ListboxSelect>>", _multi_changed)
+                    self._bind_listbox_mousewheel_local(lb)
+
+                    ttk.Button(fr, text="Clear selection", command=_clear_multi).pack(anchor="w", pady=(2, 0))
+                    ttk.Label(
+                        fr,
+                        text="Tip: Ctrl- or Shift-click to select multiple rows.",
+                        font=("Segoe UI", 8),
+                        foreground="gray",
+                    ).pack(anchor="w", pady=(0, 0))
+                    row_vars.append(var)
+                    meta_row.append({"multi": True, "lb": lb, "items": items})
+                else:
+                    display_items = [OPTION_OMIT] + items
+                    initial = items[0] if items else OPTION_OMIT
+                    var = tk.StringVar(value=initial)
+                    cb = ttk.Combobox(fr, textvariable=var, values=display_items, state="readonly", width=80)
+                    cb.pack(fill="x")
+                    cb.bind("<<ComboboxSelected>>", lambda e: self._on_builder_selection_changed())
+                    row_vars.append(var)
+                    meta_row.append({"multi": False, "lb": None, "items": items})
 
             self.note_combo_vars.append(row_vars)
-
-            ghost = ttk.Label(card, text="", wraplength=560, foreground="#0B6E4F")
-            ghost.pack(anchor="w", padx=8, pady=(2, 8))
-            tmpl["_ghost_lbl"] = ghost  # not serialized
+            self._note_builder_meta.append(meta_row)
 
         self.note_scroll_frame.update_idletasks()
         self.note_builder_canvas.configure(scrollregion=self.note_builder_canvas.bbox("all"))
         self._update_age_hint()
-        self._refresh_ghost_labels_only()
+        if snapshot is not None:
+            try:
+                self._apply_builder_state(snapshot)
+            except Exception:
+                pass
 
     @staticmethod
     def _template_band_bg(idx: int) -> str:
         return TEMPLATE_BAND_COLORS[idx % len(TEMPLATE_BAND_COLORS)]
+
+    def _copy_prefix_token_to_clipboard(self, token_key: str) -> None:
+        token = (token_key or "").strip()
+        if not token:
+            return
+        snippet = "{" + token + "}"
+        top = self.winfo_toplevel()
+        try:
+            top.clipboard_clear()
+            top.clipboard_append(snippet)
+            top.update_idletasks()
+        except Exception:
+            self._token_copy_feedback_var.set("Could not copy to the clipboard. Type the token manually.")
+            return
+
+        aid = self._clear_token_copy_msg_after_id
+        if aid is not None:
+            try:
+                self.after_cancel(aid)
+            except Exception:
+                pass
+
+        self._token_copy_feedback_var.set(f"Copied “{snippet}” — click the prefix field, then Ctrl+V or right‑click → Paste.")
+
+        def _clear_msg() -> None:
+            self._token_copy_feedback_var.set("")
+            self._clear_token_copy_msg_after_id = None
+
+        self._clear_token_copy_msg_after_id = self.after(6000, _clear_msg)
+
+    def _build_prefix_token_bank(self, parent: ttk.Widget) -> None:
+        """
+        Single-row token strip for the Template editor: each click copies `{token}` to the clipboard.
+        """
+        shell = ttk.LabelFrame(
+            parent,
+            text="Placeholder picker (Template editor)",
+        )
+        shell.pack(fill="x", padx=8, pady=(0, 4))
+
+        panel = tk.Frame(shell, highlightthickness=1, highlightbackground="#c8c8c8", bg="#f4f4f5")
+        panel.pack(fill="x", padx=4, pady=(2, 3))
+
+        row = tk.Frame(panel, bg="#f4f4f5")
+        row.pack(fill="x", padx=6, pady=3)
+
+        tk.Label(
+            row,
+            text="Click to copy; paste in prefix (Ctrl+V or right‑click → Paste).",
+            font=("Segoe UI", 8),
+            bg="#f4f4f5",
+            fg="#333333",
+        ).pack(side="left", padx=(0, 6))
+
+        _btn_padx = 4
+        _btn_pady = 2
+        for key in PREFIX_PLACEHOLDER_TOKEN_KEYS:
+            label = "{" + key + "}"
+            tk.Button(
+                row,
+                text=label,
+                font=("Segoe UI", 7),
+                cursor="hand2",
+                relief=tk.FLAT,
+                bg="#ffffff",
+                activebackground="#e8eef7",
+                bd=0,
+                padx=_btn_padx,
+                pady=_btn_pady,
+                command=lambda k=key: self._copy_prefix_token_to_clipboard(k),
+            ).pack(side="left", padx=(0, 2))
+
+        tk.Label(
+            row,
+            textvariable=self._token_copy_feedback_var,
+            font=("Segoe UI", 7),
+            fg="#1b5e3b",
+            bg="#f4f4f5",
+            anchor="w",
+            wraplength=340,
+        ).pack(side="left", padx=(10, 0))
 
     # --- canvas tab ---
     def _build_canvas_tab(self, parent: ttk.Frame) -> None:
@@ -630,10 +977,9 @@ class FamilySocialHistoryPage(ttk.Frame):
         hdr.pack(fill="x", padx=8, pady=6)
         ttk.Button(hdr, text="Save templates", command=self._save_and_reload).pack(side="right")
         ttk.Button(hdr, text="＋ Add template", command=self._add_template).pack(side="right", padx=(0, 8))
-        ttk.Label(
-            hdr,
-            text="Edit prefixes and dropdown items. Prefix placeholders: {age} (DOB vs visit date), {sex} (HOI Type of Injury pronouns), {pod}, {stage}, {comorbidities}.",
-        ).pack(side="left")
+        ttk.Label(hdr, text="Edit template prefixes and dropdown items.").pack(side="left")
+
+        self._build_prefix_token_bank(parent)
 
         outer = ttk.Frame(parent)
         outer.pack(fill="both", expand=True, padx=8, pady=(0, 8))
@@ -716,6 +1062,27 @@ class FamilySocialHistoryPage(ttk.Frame):
         le.bind("<FocusOut>", _save_lbl)
         le.bind("<Return>", _save_lbl)
 
+        is_multi = bool(dd.get("multi"))
+        mode_row = ttk.Frame(frame)
+        mode_row.pack(fill="x", padx=6, pady=(0, 2))
+        mtxt = (
+            "Selection: multiple (joined with commas and “and”)"
+            if is_multi
+            else "Selection: single (one choice)"
+        )
+        ttk.Label(mode_row, text=mtxt).pack(side="left")
+
+        def _flip_mode(d=dd) -> None:
+            d["multi"] = not bool(d.get("multi"))
+            self._persist_templates()
+            self._render_note_builder()
+            self._render_canvas_editor()
+            if self.auto_apply_builder.get():
+                self._apply_builder_to_note()
+            self.on_change_callback()
+
+        ttk.Button(mode_row, text="Switch single / multiple", command=_flip_mode).pack(side="right")
+
         ttk.Button(
             frame, text="Remove dropdown", command=lambda t=tmpl, d=di: self._remove_dropdown(t, d)
         ).pack(anchor="e", padx=6)
@@ -784,12 +1151,29 @@ class FamilySocialHistoryPage(ttk.Frame):
         ttk.Button(btn_row, text="Delete item", command=delete_item).pack(side="left", padx=2)
 
     def _add_template(self) -> None:
+        mode = self._ask_dropdown_mode(
+            title="New template — dropdown type",
+            prompt=(
+                "Should the first dropdown for this template allow only one choice (single), "
+                "or several at once (multiple)?\n\n"
+                "Multiple selections are combined with commas and “and” before the last item "
+                "(for example: Ibuprofen, Tylenol, and Aspirin)."
+            ),
+        )
+        if mode is None:
+            return
         new_id = max((t["id"] for t in self.templates), default=0) + 1
         self.templates.append(
             {
                 "id": new_id,
                 "prefix": f"Template {new_id} prefix ",
-                "dropdowns": [{"label": "Option", "items": ["First phrase", "Second phrase"]}],
+                "dropdowns": [
+                    {
+                        "label": "Option",
+                        "items": ["First phrase", "Second phrase"],
+                        "multi": bool(mode),
+                    }
+                ],
             }
         )
         self._save_and_reload()
@@ -822,7 +1206,19 @@ class FamilySocialHistoryPage(ttk.Frame):
             self._save_and_reload()
 
     def _add_dropdown(self, tmpl: dict) -> None:
-        tmpl.setdefault("dropdowns", []).append({"label": "New dropdown", "items": ["A", "B"]})
+        mode = self._ask_dropdown_mode(
+            title="New dropdown — selection type",
+            prompt=(
+                "Should this new dropdown allow only one choice (single), "
+                "or several at once (multiple)?\n\n"
+                "Multiple selections are combined with commas and “and” before the last item."
+            ),
+        )
+        if mode is None:
+            return
+        tmpl.setdefault("dropdowns", []).append(
+            {"label": "New dropdown", "items": ["A", "B"], "multi": bool(mode)}
+        )
         self._save_and_reload()
 
     def _remove_dropdown(self, tmpl: dict, di: int) -> None:
@@ -845,16 +1241,20 @@ class FamilySocialHistoryPage(ttk.Frame):
     def get_value(self) -> str:
         return self.text.get("1.0", tk.END).strip()
 
-    def set_value(self, value: str) -> None:
+    def set_value(self, value: str, *, builder_state: dict | None = None) -> None:
         self.text.delete("1.0", tk.END)
         self.text.insert("1.0", value or "")
+        if self.note_combo_vars and self._note_builder_meta:
+            self._apply_builder_state(builder_state if isinstance(builder_state, dict) else None)
 
     def has_content(self) -> bool:
         return bool(self.get_value().strip())
 
     def reset(self) -> None:
         self._visit_skip_by_tid.clear()
-        self.set_value("")
+        self.note_combo_vars = []
+        self._note_builder_meta = []
+        self.text.delete("1.0", tk.END)
         self._render_note_builder()
 
     def tkraise(self, *args, **kwargs):

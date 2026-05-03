@@ -94,7 +94,7 @@ from utils import (
 # Pages
 from subjectives import SubjectivesPage
 from objectives import ObjectivesPage
-from family_social_history_page import FamilySocialHistoryPage
+from family_social_history_page import BUILDER_STATE_VERSION, FamilySocialHistoryPage
 
 # ----------- OPTIONAL: Pillow (Tkinter logo) -----------
 PIL_OK = False
@@ -3798,7 +3798,9 @@ class App(tk.Tk):
         self.hoi_page.from_dict(soap.get("hoi_struct") or {})
         self.subjectives_page.from_dict(soap.get("subjectives") or {})
         try:
-            self.family_social_page.set_value(soap.get("family_social") or "")
+            fs_raw = soap.get("family_social_builder")
+            fs_builder = fs_raw if isinstance(fs_raw, dict) else None
+            self.family_social_page.set_value(soap.get("family_social") or "", builder_state=fs_builder)
         except Exception:
             pass
         obj_struct = soap.get("objectives_struct")
@@ -4192,6 +4194,13 @@ class App(tk.Tk):
         else:
             obj_struct = {"global": {}, "blocks": []}
 
+        fs_builder: dict = {"v": BUILDER_STATE_VERSION, "templates": {}}
+        try:
+            if hasattr(self, "family_social_page") and self.family_social_page is not None:
+                fs_builder = self.family_social_page.get_builder_state()
+        except Exception:
+            pass
+
         payload =  {
             "schema_version": 1,
             "saved_at": datetime.now().isoformat(timespec="seconds"),
@@ -4210,6 +4219,7 @@ class App(tk.Tk):
                 "hoi_struct": hoi_struct,
                 "subjectives": subj_struct,
                 "family_social": self.family_social_page.get_value() if hasattr(self, "family_social_page") else "",
+                "family_social_builder": fs_builder,
                 "objectives": obj_text,
                 "objectives_struct": obj_struct,
                 "diagnosis_struct": self.diagnosis_page.to_dict(),
