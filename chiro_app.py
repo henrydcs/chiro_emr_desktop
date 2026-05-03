@@ -605,15 +605,23 @@ class App(tk.Tk):
                 # 3b. Family / Social History (mirrors PDF: after Functional Status, before Objectives)
                 if hasattr(self, "family_social_page") and self.family_social_page is not None:
                     try:
-                        fs_text = (self.family_social_page.get_value() or "").strip()
-                        if fs_text:
+                        if hasattr(self.family_social_page, "get_live_preview_runs"):
+                            fs_runs = self.family_social_page.get_live_preview_runs()
+                        else:
+                            fs_runs = []
+                            fs_text = (self.family_social_page.get_value() or "").strip()
+                            if fs_text:
+                                fs_runs = [
+                                    ("FAMILY / SOCIAL HISTORY\n", "H_BOLD"),
+                                    ("\n", None),
+                                    (fs_text + "\n\n", None),
+                                ]
+                        if fs_runs:
                             if runs:
                                 runs.append(("\n\n", None))
-                            runs.append(("FAMILY / SOCIAL HISTORY\n", "H_BOLD"))
-                            runs.append(("\n", None))
-                            runs.append((fs_text + "\n\n", None))
+                            runs.extend(fs_runs)
                     except Exception:
-                        pass                              
+                        pass
 
                 # 4. Objectives (mirrors PDF: OBJECTIVES section — between Subjectives and ROF)
                 if hasattr(self, "objectives_page") and self.objectives_page is not None:
@@ -4194,7 +4202,7 @@ class App(tk.Tk):
         else:
             obj_struct = {"global": {}, "blocks": []}
 
-        fs_builder: dict = {"v": BUILDER_STATE_VERSION, "templates": {}}
+        fs_builder: dict = {"v": BUILDER_STATE_VERSION, "blocks": []}
         try:
             if hasattr(self, "family_social_page") and self.family_social_page is not None:
                 fs_builder = self.family_social_page.get_builder_state()

@@ -2710,6 +2710,47 @@ def therapy_paragraph_from_subjectives(subj: dict, first_name: str = "") -> tupl
     return (s1 + " " + s2), selected
 
 # =======================================================
+# Family / Social History (PDF)
+# =======================================================
+def build_family_social_flowables(soap: dict, styles) -> list:
+    """Heading2 main title; v2 builder uses Heading3 per block. Legacy: single body."""
+    soap = soap or {}
+    out: list = []
+    b = soap.get("family_social_builder")
+    if isinstance(b, dict) and int(b.get("v") or 0) == 2:
+        nonempty: list[tuple[str, str]] = []
+        for bl in b.get("blocks") or []:
+            if not isinstance(bl, dict):
+                continue
+            text = (bl.get("text") or "").strip()
+            if not text:
+                continue
+            nonempty.append(((bl.get("heading") or "").strip(), text))
+        if not nonempty:
+            return []
+        out.append(Paragraph("<b>FAMILY / SOCIAL HISTORY</b>", styles["Heading2"]))
+        out.append(Spacer(1, 0.08 * inch))
+        for heading, text in nonempty:
+            if heading:
+                out.append(Paragraph(f"<b>{xml_escape(heading)}</b>", styles["Heading3"]))
+                out.append(Spacer(1, 0.04 * inch))
+            safe_fs = xml_escape(text).replace("\n\n", "<br/><br/>").replace("\n", "<br/>")
+            out.append(Paragraph(safe_fs, styles["BodyText"]))
+            out.append(Spacer(1, 0.10 * inch))
+        return out
+
+    family_social = (soap.get("family_social") or "").strip()
+    if not family_social:
+        return []
+    out.append(Paragraph("<b>FAMILY / SOCIAL HISTORY</b>", styles["Heading2"]))
+    out.append(Spacer(1, 0.08 * inch))
+    safe_fs = xml_escape(family_social).replace("\n\n", "<br/><br/>").replace("\n", "<br/>")
+    out.append(Paragraph(safe_fs, styles["BodyText"]))
+    out.append(Spacer(1, 0.12 * inch))
+    return out
+
+
+# =======================================================
 # Payload parsing
 # =======================================================
 def payload_to_exam_sections(payload: dict):
@@ -3228,15 +3269,9 @@ def build_combined_pdf(path: str, payloads: list):
             story.append(adl_para)
             story.append(Spacer(1, 0.12 * inch))
 
-        # ✅ Family / Social History (print ONLY if not empty)
-        if family_social:
-            story.append(Paragraph("<b>FAMILY / SOCIAL HISTORY</b>", styles["Heading2"]))
-            story.append(Spacer(1, 0.08 * inch))
-
-            safe_fs = xml_escape(family_social).replace("\n\n", "<br/><br/>").replace("\n", "<br/>")
-            story.append(Paragraph(safe_fs, styles["BodyText"]))
-
-            story.append(Spacer(1, 0.12 * inch))
+        fs_flow = build_family_social_flowables(soap, styles)
+        if fs_flow:
+            story.extend(fs_flow)
         
         # Objectives
         obj_flow = build_objectives_flowables(objectives_struct, styles, doc_width)
