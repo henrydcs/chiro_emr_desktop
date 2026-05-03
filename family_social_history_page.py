@@ -4,7 +4,8 @@ from __future__ import annotations
 import copy
 import json
 import os
-from tkinter import ttk
+import uuid
+from tkinter import messagebox, simpledialog, ttk
 
 import tkinter as tk
 
@@ -135,8 +136,10 @@ class FamilySocialHistoryPage(ttk.Frame):
 
         self.tab_note = ttk.Frame(self.nb)
         self.tab_canvas = ttk.Frame(self.nb)
+        self.tab_manage = ttk.Frame(self.nb)
         self.nb.add(self.tab_note, text="Note & builder")
         self.nb.add(self.tab_canvas, text="Template editor (Canvas)")
+        self.nb.add(self.tab_manage, text="Sub-sections")
 
         self.container = ttk.Frame(self.tab_note)
         self.container.pack(fill="both", expand=True)
@@ -145,12 +148,51 @@ class FamilySocialHistoryPage(ttk.Frame):
 
         self._section_buttons: dict[str, tk.Button] = {}
         self._cores_by_id: dict[str, FamilySocialSectionCore] = {}
-        self._id_order: list[str] = []
         self.frames: dict[str, ttk.Frame] = {}
+        self._subsection_listbox: tk.Listbox | None = None
 
         for sec in self.sections:
+            self._mount_section_core(sec)
+
+        self._rebuild_block_buttons()
+        first_sid = self.sections[0]["id"] if self.sections else ""
+        self.active_block_id = tk.StringVar(value=first_sid)
+        if self.sections:
+            self.after_idle(lambda: self._show_block(self.sections[0]["id"]))
+
+        self._build_subsection_manager_tab()
+        self.nb.bind("<<NotebookTabChanged>>", self._on_nb_tab_changed)
+
+    @staticmethod
+    def _alloc_section_id() -> str:
+        return f"s_{uuid.uuid4().hex[:12]}"
+
+    def _mount_section_core(self, sec: dict) -> str:
+        sid = sec["id"]
+        if sid in self.frames:
+            return sid
+        shell = ttk.Frame(self.container)
+        shell.grid(row=0, column=0, sticky="nsew")
+        self.frames[sid] = shell
+        core = FamilySocialSectionCore(
+            shell,
+            on_change_callback=self.on_change_callback,
+            app=self._app,
+            section=sec,
+            persist_all_callback=self._persist_templates_to_disk,
+            token_feedback_var=self._token_copy_feedback_var,
+        )
+        core.pack(fill="both", expand=True)
+        self._cores_by_id[sid] = core
+        return sid
+
+    def _rebuild_block_buttons(self) -> None:
+        for w in self.block_buttons.winfo_children():
+            w.destroy()
+        self._section_buttons.clear()
+        active = self.active_block_id.get() if hasattr(self, "active_block_id") else ""
+        for sec in self.sections:
             sid = sec["id"]
-            self._id_order.append(sid)
             btn = tk.Button(
                 self.block_buttons,
                 text=sec["heading"],
@@ -161,27 +203,198 @@ class FamilySocialHistoryPage(ttk.Frame):
             )
             btn.pack(side="left", padx=4)
             self._section_buttons[sid] = btn
+        if active and active in self._section_buttons:
+            self._section_buttons[active].configure(font=("Segoe UI", 10, "bold"))
+        elif self.sections:
+            self._section_buttons[self.sections[0]["id"]].configure(font=("Segoe UI", 10, "bold"))
 
-            shell = ttk.Frame(self.container)
-            shell.grid(row=0, column=0, sticky="nsew")
-            self.frames[sid] = shell
+    def _build_subsection_manager_tab(self) -> None:
+        intro = ttk.Frame(self.tab_manage)
+        intro.pack(fill="x", padx=10, pady=(10, 4))
+        ttk.Label(
+            intro,
+            text=(
+                "Sub-sections appear as block buttons above (left → right = print order in Live Preview / PDF). "
+                "Add, rename, reorder, or delete here — changes are saved for this workstation."
+            ),
+            wraplength=720,
+        ).pack(anchor="w")
 
-            core = FamilySocialSectionCore(
-                shell,
-                on_change_callback=self.on_change_callback,
-                app=self._app,
-                section=sec,
-                persist_all_callback=self._persist_templates_to_disk,
-                token_feedback_var=self._token_copy_feedback_var,
+        mid = ttk.Frame(self.tab_manage)
+        mid.pack(fill="both", expand=True, padx=10, pady=8)
+
+        lb_frame = ttk.Frame(mid)
+        lb_frame.pack(side="left", fill="both", expand=True)
+        sb = ttk.Scrollbar(lb_frame, orient="vertical")
+        self._subsection_listbox = tk.Listbox(lb_frame, height=14, activestyle="dotbox", exportselection=False)
+        self._subsection_listbox.pack(side="left", fill="both", expand=True)
+        sb.pack(side="right", fill="y")
+        self._subsection_listbox.configure(yscrollcommand=sb.set)
+        sb.configure(command=self._subsection_listbox.yview)
+
+        self._subsection_listbox.bind("<Double-Button-1>", self._on_subsection_listbox_double)
+
+        side = ttk.Frame(mid)
+        side.pack(side="left", fill="y", padx=(14, 6))
+
+        ttk.Label(side, text="New sub-heading").pack(anchor="w")
+        self._new_subheading_var = tk.StringVar(value="")
+        ttk.Entry(side, textvariable=self._new_subheading_var, width=34).pack(fill="x", pady=(0, 8))
+
+        ttk.Button(side, text="Add sub-section", command=self._subsection_add).pack(fill="x", pady=2)
+        ttk.Button(side, text="Rename selected…", command=self._subsection_rename).pack(fill="x", pady=2)
+        ttk.Button(side, text="Move up", command=lambda: self._subsection_move(-1)).pack(fill="x", pady=2)
+        ttk.Button(side, text="Move down", command=lambda: self._subsection_move(1)).pack(fill="x", pady=2)
+        ttk.Button(side, text="Delete selected…", command=self._subsection_delete).pack(fill="x", pady=2)
+
+        self._refresh_subsection_listbox()
+
+    def _refresh_subsection_listbox(self) -> None:
+        lb = self._subsection_listbox
+        if lb is None:
+            return
+        lb.delete(0, tk.END)
+        for sec in self.sections:
+            lb.insert(tk.END, sec.get("heading") or sec.get("id") or "")
+
+    def _on_subsection_listbox_double(self, _e=None) -> None:
+        lb = self._subsection_listbox
+        if lb is None:
+            return
+        sel = lb.curselection()
+        if not sel:
+            return
+        sid = self.sections[int(sel[0])]["id"]
+        try:
+            self.nb.select(self.tab_note)
+        except Exception:
+            pass
+        self._show_block(sid)
+
+    def _subsection_add(self) -> None:
+        heading = (self._new_subheading_var.get() or "").strip()
+        if not heading:
+            messagebox.showwarning(
+                "Sub-heading required",
+                "Enter a sub-heading label (e.g. “Occupational history”), then click Add sub-section.",
             )
-            core.pack(fill="both", expand=True)
-            self._cores_by_id[sid] = core
+            return
+        sid = self._alloc_section_id()
+        self.sections.append(
+            {"id": sid, "heading": heading, "templates": _deepcopy_templates()}
+        )
+        self._mount_section_core(self.sections[-1])
+        self._rebuild_block_buttons()
+        self._show_block(sid)
+        self._new_subheading_var.set("")
+        self._refresh_subsection_listbox()
+        try:
+            if self._subsection_listbox is not None:
+                self._subsection_listbox.selection_clear(0, tk.END)
+                self._subsection_listbox.selection_set(len(self.sections) - 1)
+        except Exception:
+            pass
+        self._persist_templates_to_disk()
+        self.on_change_callback()
 
-        self.active_block_id = tk.StringVar(value=self._id_order[0] if self._id_order else "")
-        if self._id_order:
-            self.after_idle(lambda: self._show_block(self._id_order[0]))
+    def _subsection_rename(self) -> None:
+        lb = self._subsection_listbox
+        if lb is None:
+            return
+        sel = lb.curselection()
+        if not sel:
+            messagebox.showinfo("Select a row", "Select a sub-section in the list first.")
+            return
+        i = int(sel[0])
+        sec = self.sections[i]
+        sid = sec["id"]
+        new_h = simpledialog.askstring(
+            "Rename sub-section",
+            "Sub-heading (sentence case recommended):",
+            initialvalue=sec.get("heading") or "",
+            parent=self.winfo_toplevel(),
+        )
+        if new_h is None:
+            return
+        new_h = new_h.strip()
+        if not new_h:
+            messagebox.showwarning("Invalid name", "Sub-heading cannot be empty.")
+            return
+        sec["heading"] = new_h
+        btn = self._section_buttons.get(sid)
+        if btn is not None:
+            btn.configure(text=new_h)
+        self._refresh_subsection_listbox()
+        lb.selection_set(i)
+        self._persist_templates_to_disk()
+        self.on_change_callback()
 
-        self.nb.bind("<<NotebookTabChanged>>", self._on_nb_tab_changed)
+    def _subsection_move(self, delta: int) -> None:
+        lb = self._subsection_listbox
+        if lb is None:
+            return
+        sel = lb.curselection()
+        if not sel:
+            messagebox.showinfo("Select a row", "Select a sub-section in the list first.")
+            return
+        i = int(sel[0])
+        j = i + delta
+        if j < 0 or j >= len(self.sections):
+            return
+        self.sections[i], self.sections[j] = self.sections[j], self.sections[i]
+        self._rebuild_block_buttons()
+        self._refresh_subsection_listbox()
+        lb.selection_set(j)
+        self._persist_templates_to_disk()
+        self.on_change_callback()
+
+    def _subsection_delete(self) -> None:
+        lb = self._subsection_listbox
+        if lb is None:
+            return
+        if len(self.sections) <= 1:
+            messagebox.showinfo(
+                "Cannot delete",
+                "At least one sub-section must remain.",
+            )
+            return
+        sel = lb.curselection()
+        if not sel:
+            messagebox.showinfo("Select a row", "Select a sub-section in the list first.")
+            return
+        i = int(sel[0])
+        sec = self.sections[i]
+        sid = sec["id"]
+        heading = sec.get("heading") or sid
+        if not messagebox.askyesno(
+            "Delete sub-section",
+            f"Delete “{heading}” and its sentence-builder templates on this machine?\n\n"
+            "Text already saved inside past exam files is not removed from those files.",
+        ):
+            return
+        self.sections.pop(i)
+        self._destroy_block_ui(sid)
+        self._rebuild_block_buttons()
+        next_sid = self.sections[min(i, len(self.sections) - 1)]["id"]
+        self._show_block(next_sid)
+        self._refresh_subsection_listbox()
+        try:
+            lb.selection_set(min(i, len(self.sections) - 1))
+        except Exception:
+            pass
+        if self.nb.index(self.nb.select()) == 1:
+            self._mount_canvas_for_active()
+        self._persist_templates_to_disk()
+        self.on_change_callback()
+
+    def _destroy_block_ui(self, sid: str) -> None:
+        self._cores_by_id.pop(sid, None)
+        fr = self.frames.pop(sid, None)
+        if fr is not None:
+            try:
+                fr.destroy()
+            except Exception:
+                pass
 
     def _on_nb_tab_changed(self, _e=None) -> None:
         try:
@@ -240,8 +453,8 @@ class FamilySocialHistoryPage(ttk.Frame):
 
     def get_value(self) -> str:
         parts: list[str] = []
-        for sid in self._id_order:
-            c = self._cores_by_id.get(sid)
+        for sec in self.sections:
+            c = self._cores_by_id.get(sec["id"])
             if c is None:
                 continue
             t = c.get_value().strip()
@@ -312,13 +525,13 @@ class FamilySocialHistoryPage(ttk.Frame):
             return
 
         # Legacy v1: one shared builder blob + combined note text
-        if self._id_order:
-            first_id = self._id_order[0]
+        if self.sections:
+            first_id = self.sections[0]["id"]
             first = self._cores_by_id.get(first_id)
             if first is not None:
                 first.set_value(value or "", builder_state=raw)
-            for sid in self._id_order[1:]:
-                c = self._cores_by_id.get(sid)
+            for sec in self.sections[1:]:
+                c = self._cores_by_id.get(sec["id"])
                 if c is not None:
                     c.set_value("", builder_state=None)
 
