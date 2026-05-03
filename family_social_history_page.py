@@ -107,6 +107,24 @@ def _load_sections_from_disk() -> list[dict]:
     return _default_sections()
 
 
+# Notebook-only style: theme-default tab colors; bold only on the selected tab.
+_FAMILY_SOCIAL_NB_STYLE = "FamilySocial.TNotebook"
+_FAMILY_SOCIAL_TAB_STYLE = f"{_FAMILY_SOCIAL_NB_STYLE}.Tab"
+
+
+def _setup_family_social_notebook_style(master: tk.Misc) -> None:
+    style = ttk.Style(master)
+    style.configure(_FAMILY_SOCIAL_NB_STYLE, borderwidth=0, padding=0)
+    style.configure(_FAMILY_SOCIAL_TAB_STYLE, font=("Segoe UI", 10))
+    style.map(
+        _FAMILY_SOCIAL_TAB_STYLE,
+        font=[
+            ("selected", ("Segoe UI", 10, "bold")),
+            ("!selected", ("Segoe UI", 10, "normal")),
+        ],
+    )
+
+
 class FamilySocialHistoryPage(ttk.Frame):
     """
     HOI-style block row + one FamilySocialSectionCore per block (own textbox & builder).
@@ -131,7 +149,8 @@ class FamilySocialHistoryPage(ttk.Frame):
         self.block_buttons = ttk.Frame(top)
         self.block_buttons.pack(side="left", fill="x", expand=True)
 
-        self.nb = ttk.Notebook(outer)
+        _setup_family_social_notebook_style(self)
+        self.nb = ttk.Notebook(outer, style=_FAMILY_SOCIAL_NB_STYLE)
         self.nb.pack(fill="both", expand=True, padx=6, pady=(0, 8))
 
         self.tab_note = ttk.Frame(self.nb)
