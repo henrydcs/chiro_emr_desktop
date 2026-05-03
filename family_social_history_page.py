@@ -13,7 +13,8 @@ from paths import get_data_dir
 from utils import today_mmddyyyy
 
 TEMPLATES_FILENAME = "family_social_doc_templates.json"
-# Stored in exam JSON under soap["family_social_builder"]; restores multi-select after reload.
+# Stored in exam JSON under soap["family_social_builder"]; restores multi-select and
+# per-exam Narrative vs Bullet lines (multi_bullets) after reload.
 BUILDER_STATE_VERSION = 1
 _BUILDER_SLOT_DEFAULT = object()
 
@@ -70,6 +71,43 @@ def _finalize_sentence(parts: list[str]) -> str:
     if out and out[-1] not in ".!?":
         out += "."
     return out
+
+
+def _finalize_family_social_block(parts: list[str]) -> str:
+    """Join prefix + dropdown fragments; fragments starting with newline (bullet blocks) attach without a leading space."""
+    chunks: list[str] = []
+    for p in parts:
+        if p is None:
+            continue
+        s = str(p)
+        if not s.strip():
+            continue
+        if s.startswith("\n"):
+            chunks.append(s.rstrip())
+        else:
+            chunks.append(s.strip())
+    if not chunks:
+        return ""
+    out = chunks[0]
+    for c in chunks[1:]:
+        if c.startswith("\n"):
+            out += c
+        else:
+            out += " " + c
+    out = out.strip()
+    if out and out[-1] not in ".!?":
+        out += "."
+    return out
+
+
+def _prefix_before_bullet_list(rp: str) -> str:
+    """Suffix ':' on the prefix when a tabbed bullet list follows; skip if ':' already present."""
+    s = (rp or "").rstrip()
+    if not s:
+        return s
+    if s.endswith(":"):
+        return s
+    return s + ":"
 
 
 def _join_with_oxford_and(items: list[str]) -> str:
@@ -208,6 +246,7 @@ class FamilySocialHistoryPage(ttk.Frame):
                         for dd in t.get("dropdowns") or []:
                             if isinstance(dd, dict):
                                 dd.setdefault("multi", False)
+                                dd.setdefault("multi_bullets", False)
                     return data
             except Exception:
                 pass
@@ -370,8 +409,7 @@ class FamilySocialHistoryPage(ttk.Frame):
     def _on_demographics_changed(self) -> None:
         self._update_age_hint()
         self._refresh_resolved_prefix_labels()
-        if self.auto_apply_builder.get():
-            self._apply_builder_to_note()
+        self._apply_builder_to_note()
 
     def _update_age_hint(self) -> None:
         if not hasattr(self, "age_hint_var"):
@@ -413,7 +451,7 @@ class FamilySocialHistoryPage(ttk.Frame):
         demo_row.pack(fill="x", padx=10, pady=(4, 2))
         ttk.Label(
             demo_row,
-            text='{sex} and pronoun tokens follow HOI Sex. Dropdown/Omit/Skip refresh the note. "(Omit...)" removes that clause.',
+            text="Dropdown selections update the note, Live Preview, and PDF automatically. Edit the textbox for one-off wording.",
             foreground="gray",
         ).pack(side="left")
 
@@ -422,16 +460,11 @@ class FamilySocialHistoryPage(ttk.Frame):
 
         ctl = ttk.Frame(note_inner)
         ctl.pack(fill="x", padx=10, pady=(0, 4))
-        self.auto_apply_builder = tk.BooleanVar(value=False)
-        ttk.Checkbutton(
+        ttk.Button(
             ctl,
-            text="Also refresh note when DOB or visit date changes (token {age})",
-            variable=self.auto_apply_builder,
-            command=lambda: self._on_auto_toggle(),
+            text="Revert note to builder (discard manual edits in textbox)",
+            command=self._apply_builder_to_note,
         ).pack(side="left")
-        ttk.Button(ctl, text="Apply builder → note now", command=self._apply_builder_to_note).pack(
-            side="left", padx=(12, 0)
-        )
 
         builder_outer = ttk.LabelFrame(note_inner, text="Sentence builder")
         builder_outer.pack(fill="x", expand=False, padx=10, pady=(0, 6))
@@ -590,10 +623,6 @@ class FamilySocialHistoryPage(ttk.Frame):
         except Exception:
             pass
 
-    def _on_auto_toggle(self) -> None:
-        if self.auto_apply_builder.get():
-            self._apply_builder_to_note()
-
     def _on_note_text_changed(self) -> None:
         self.on_change_callback()
 
@@ -620,8 +649,37 @@ class FamilySocialHistoryPage(ttk.Frame):
         """
         rp = (self._resolve_vars(tmpl.get("prefix") or "") or "").strip()
         dropdown_parts: list[str] = []
+        dds = tmpl.get("dropdowns") or []
+        meta_row = self._note_builder_meta[i] if i < len(self._note_builder_meta) else []
         if i < len(self.note_combo_vars):
-            for var in self.note_combo_vars[i]:
+            for j, var in enumerate(self.note_combo_vars[i]):
+                dd = dds[j] if j < len(dds) else {}
+                is_multi = bool(dd.get("multi"))
+                if is_multi and bool(dd.get("multi_bullets")) and j < len(meta_row):
+                    meta = meta_row[j]
+                    lb = meta.get("lb")
+                    its = list(meta.get("items") or [])
+                    appended = False
+                    if isinstance(lb, tk.Listbox):
+                        try:
+                            if lb.winfo_exists():
+                                sel = lb.curselection()
+                                chosen = [str(its[k]).strip() for k in sel if 0 <= k < len(its)]
+                                chosen = [x for x in chosen if x]
+                                if chosen:
+                                    block = "\n\n\t• " + "\n\t• ".join(chosen)
+                                    dropdown_parts.append(block)
+                                    appended = True
+                        except Exception:
+                            pass
+                    if appended:
+                        continue
+                    val_fb = (var.get() or "").strip()
+                    if not val_fb or _is_omit_phrase(val_fb):
+                        continue
+                    dropdown_parts.append(val_fb)
+                    continue
+
                 val = (var.get() or "").strip()
                 if not val or _is_omit_phrase(val):
                     continue
@@ -630,9 +688,12 @@ class FamilySocialHistoryPage(ttk.Frame):
         if i < len(self.note_combo_vars) and len(self.note_combo_vars[i]) > 0 and not dropdown_parts:
             return []
 
+        has_bullet_fragment = any(str(p).startswith("\n") for p in dropdown_parts if p)
+        rp_for_parts = _prefix_before_bullet_list(rp) if (rp and has_bullet_fragment) else rp
+
         parts: list[str] = []
-        if rp:
-            parts.append(rp)
+        if rp_for_parts:
+            parts.append(rp_for_parts)
         parts.extend(dropdown_parts)
         return parts
 
@@ -647,13 +708,13 @@ class FamilySocialHistoryPage(ttk.Frame):
             parts = self._compose_parts_for_template(i, tmpl)
             if not parts:
                 continue
-            sent = _finalize_sentence(parts)
+            sent = _finalize_family_social_block(parts)
             if sent:
                 blocks.append(sent)
         return "\n\n".join(blocks).strip()
 
     def get_builder_state(self) -> dict:
-        """Serializable dropdown selections (indices) for exam JSON. Required to restore multi-select after reload."""
+        """Serializable dropdown selections for exam JSON. Multi slots use {"i": indices, "b": multi_bullets}."""
         out: dict = {"v": BUILDER_STATE_VERSION, "templates": {}}
         for i, tmpl in enumerate(self.templates):
             if i >= len(self.note_combo_vars) or i >= len(self._note_builder_meta):
@@ -671,14 +732,14 @@ class FamilySocialHistoryPage(ttk.Frame):
                 items = list(meta.get("items") or [])
                 if meta.get("multi"):
                     lb = meta.get("lb")
+                    idxs: list[int] = []
                     if isinstance(lb, tk.Listbox):
                         try:
                             if lb.winfo_exists():
-                                dd_states.append([int(x) for x in lb.curselection()])
-                                continue
+                                idxs = [int(x) for x in lb.curselection()]
                         except Exception:
                             pass
-                    dd_states.append([])
+                    dd_states.append({"i": idxs, "b": bool(dd.get("multi_bullets"))})
                 else:
                     val = (var.get() or "").strip()
                     if _is_omit_phrase(val):
@@ -724,11 +785,30 @@ class FamilySocialHistoryPage(ttk.Frame):
                 if meta.get("multi"):
                     lb = meta.get("lb")
                     idxs: list[int] = []
-                    if raw_slot is not _BUILDER_SLOT_DEFAULT and isinstance(raw_slot, list):
+                    bullets_override: bool | None = None
+                    if raw_slot is not _BUILDER_SLOT_DEFAULT and isinstance(raw_slot, dict):
+                        raw_i = raw_slot.get("i")
+                        if isinstance(raw_i, list):
+                            for x in raw_i:
+                                try:
+                                    idxs.append(int(x))
+                                except (TypeError, ValueError):
+                                    pass
+                        if "b" in raw_slot:
+                            bullets_override = bool(raw_slot["b"])
+                    elif raw_slot is not _BUILDER_SLOT_DEFAULT and isinstance(raw_slot, list):
                         for x in raw_slot:
                             try:
                                 idxs.append(int(x))
                             except (TypeError, ValueError):
+                                pass
+                    if bullets_override is not None:
+                        dd["multi_bullets"] = bullets_override
+                        fv = meta.get("fmt_var")
+                        if isinstance(fv, tk.StringVar):
+                            try:
+                                fv.set("bullets" if bullets_override else "narrative")
+                            except Exception:
                                 pass
                     if isinstance(lb, tk.Listbox):
                         try:
@@ -808,10 +888,38 @@ class FamilySocialHistoryPage(ttk.Frame):
                 is_multi = bool(dd.get("multi"))
                 fr = ttk.Frame(card)
                 fr.pack(fill="x", padx=8, pady=3)
+                if is_multi:
+                    dd.setdefault("multi_bullets", False)
+                    fmt_row = ttk.Frame(fr)
+                    fmt_row.pack(anchor="w", fill="x", pady=(0, 4))
+                    ttk.Label(fmt_row, text="Output format:").pack(side="left", padx=(0, 8))
+                    _fmt_var = tk.StringVar(value="bullets" if dd.get("multi_bullets") else "narrative")
+
+                    def _on_multi_format(_d=dd, _fv=_fmt_var) -> None:
+                        _d["multi_bullets"] = _fv.get() == "bullets"
+                        self._persist_templates()
+                        self._apply_builder_to_note()
+                        self.on_change_callback()
+
+                    ttk.Radiobutton(
+                        fmt_row,
+                        text="Narrative",
+                        variable=_fmt_var,
+                        value="narrative",
+                        command=_on_multi_format,
+                    ).pack(side="left", padx=(0, 8))
+                    ttk.Radiobutton(
+                        fmt_row,
+                        text="Bullet lines",
+                        variable=_fmt_var,
+                        value="bullets",
+                        command=_on_multi_format,
+                    ).pack(side="left")
+
                 title = dd.get("label") or "Option"
                 ttk.Label(
                     fr,
-                    text=(title + ("" if not is_multi else " — select one or more; joined with commas and “and”")) + ":",
+                    text=(title + ("" if not is_multi else " — select one or more")) + ":",
                 ).pack(anchor="w")
                 if is_multi:
                     var = tk.StringVar(value="")
@@ -863,7 +971,7 @@ class FamilySocialHistoryPage(ttk.Frame):
                         foreground="gray",
                     ).pack(anchor="w", pady=(0, 0))
                     row_vars.append(var)
-                    meta_row.append({"multi": True, "lb": lb, "items": items})
+                    meta_row.append({"multi": True, "lb": lb, "items": items, "fmt_var": _fmt_var})
                 else:
                     display_items = [OPTION_OMIT] + items
                     initial = items[0] if items else OPTION_OMIT
@@ -1028,8 +1136,7 @@ class FamilySocialHistoryPage(ttk.Frame):
             t["prefix"] = v.get()
             self._persist_templates()
             self._render_note_builder()
-            if self.auto_apply_builder.get():
-                self._apply_builder_to_note()
+            self._apply_builder_to_note()
             self.on_change_callback()
 
         pe.bind("<FocusOut>", _save_prefix)
@@ -1057,6 +1164,7 @@ class FamilySocialHistoryPage(ttk.Frame):
             d["label"] = v.get()
             self._persist_templates()
             self._render_note_builder()
+            self._apply_builder_to_note()
             self.on_change_callback()
 
         le.bind("<FocusOut>", _save_lbl)
@@ -1077,8 +1185,7 @@ class FamilySocialHistoryPage(ttk.Frame):
             self._persist_templates()
             self._render_note_builder()
             self._render_canvas_editor()
-            if self.auto_apply_builder.get():
-                self._apply_builder_to_note()
+            self._apply_builder_to_note()
             self.on_change_callback()
 
         ttk.Button(mode_row, text="Switch single / multiple", command=_flip_mode).pack(side="right")
