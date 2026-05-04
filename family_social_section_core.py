@@ -1276,7 +1276,6 @@ class FamilySocialSectionCore(ttk.Frame):
         }
         cloned = copy.deepcopy(base)
         cloned["id"] = max((t["id"] for t in self.templates), default=0) + 1
-        cloned["prefix"] = "(Copy) " + str(cloned.get("prefix") or "")
         self.templates.append(cloned)
         self._save_and_reload()
 
@@ -1286,7 +1285,9 @@ class FamilySocialSectionCore(ttk.Frame):
             return
         if messagebox.askyesno("Delete template", f"Delete template {tmpl['id']}?"):
             self._visit_skip_by_tid.pop(int(tmpl["id"]), None)
-            self.templates = [t for t in self.templates if t["id"] != tmpl["id"]]
+            # Mutate list in place — self.templates aliases section["templates"]; assigning
+            # a new list would break persistence (orchestrator saves section dicts).
+            self.templates[:] = [t for t in self.templates if t["id"] != tmpl["id"]]
             self._save_and_reload()
 
     def _move_template(self, idx: int, direction: int) -> None:

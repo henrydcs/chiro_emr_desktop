@@ -468,6 +468,28 @@ class FamilySocialHistoryPage(ttk.Frame):
         except Exception:
             pass
 
+    def focus_subsection_for_preview_line(self, line: str) -> bool:
+        """
+        Live Preview click on a subsection heading: open Family/Social, Note & builder tab,
+        and select the block whose heading matches `line` (exact, trimmed).
+        """
+        line = (line or "").strip()
+        if not line:
+            return False
+        for sec in self.sections:
+            h = (sec.get("heading") or "").strip()
+            if h == line:
+                app = self._app
+                if app is not None and hasattr(app, "show_page"):
+                    app.show_page("Family/Social History", scroll_live_preview=False)
+                try:
+                    self.nb.select(self.tab_note)
+                except Exception:
+                    pass
+                self._show_block(sec["id"])
+                return True
+        return False
+
     # --- TextPage-style API ---
 
     def get_value(self) -> str:
@@ -500,7 +522,7 @@ class FamilySocialHistoryPage(ttk.Frame):
                 runs.append(("\n\n", None))
             h = (sec.get("heading") or "").strip()
             if h:
-                runs.append((h + "\n", "LP_LABEL_BOLD"))
+                runs.append((h + "\n", "LP_FS_SUBHEAD"))
                 runs.append(("\n", None))
             runs.append((t + "\n", None))
         return runs

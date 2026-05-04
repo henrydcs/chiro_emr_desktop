@@ -918,6 +918,22 @@ class App(tk.Tk):
             self._handle_preview_subheading_click(section_name, line_content)
             return
 
+        # Family/Social: provider-defined sub-headings (unique tag — before Assessment/Plan matchers)
+        try:
+            sub_tags = txt.tag_names(line_start)
+        except Exception:
+            sub_tags = ()
+        if (
+            "LP_FS_SUBHEAD" in sub_tags
+            and (line_content or "").strip()
+            and hasattr(self, "family_social_page")
+            and self.family_social_page is not None
+        ):
+            fs_page = self.family_social_page
+            if hasattr(fs_page, "focus_subsection_for_preview_line"):
+                if fs_page.focus_subsection_for_preview_line((line_content or "").strip()):
+                    return
+
         
         # 3) If not a main heading, still see if this line is an important sub-heading
         #    ...
@@ -1234,6 +1250,22 @@ class App(tk.Tk):
         """
         line = (line or "").strip()
         if not line:
+            return
+
+        # ------------- Family / Social History (main H_BOLD line or subsection title) -------------
+        if section_name == "Family/Social History":
+            fs = getattr(self, "family_social_page", None)
+            if fs is not None:
+                if line.upper() == "FAMILY / SOCIAL HISTORY":
+                    try:
+                        fs.nb.select(fs.tab_note)
+                    except Exception:
+                        pass
+                    if fs.sections:
+                        fs._show_block(fs.sections[0]["id"])
+                    return
+                if fs.focus_subsection_for_preview_line(line):
+                    return
             return
 
         # ------------- HOI: Mechanism of Injury / Prior Care / Meds / Diagnostics -------------
@@ -3036,6 +3068,8 @@ class App(tk.Tk):
 
             # NEW: bold labels in normal plan summary lines
             txt.tag_configure("LP_LABEL_BOLD", font=bold)
+            # Family/Social provider-defined sub-headings (click → block); same weight as LP_LABEL_BOLD
+            txt.tag_configure("LP_FS_SUBHEAD", font=bold)
 
         # call once after widget is created:
         apply_preview_styles(self.hoi_preview_text)        
