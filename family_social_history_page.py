@@ -140,7 +140,16 @@ class FamilySocialHistoryPage(ttk.Frame):
 
         outer = ttk.Frame(self)
         outer.pack(fill="both", expand=True)
-        ttk.Label(outer, text=title).pack(anchor="w", padx=10, pady=(8, 4))
+        header = ttk.Frame(outer)
+        header.pack(fill="x", padx=10, pady=(8, 4))
+        ttk.Label(header, text=title).pack(side="left", anchor="w")
+        self._skip_section_var = tk.BooleanVar(value=False)
+        ttk.Checkbutton(
+            header,
+            text="Skip entire section for this visit (omit from Live Preview & PDF)",
+            variable=self._skip_section_var,
+            command=self._on_skip_section_toggled,
+        ).pack(side="left", padx=(16, 0))
 
         top = ttk.Frame(outer)
         top.pack(fill="x", padx=10, pady=(0, 6))
@@ -181,6 +190,21 @@ class FamilySocialHistoryPage(ttk.Frame):
 
         self._build_subsection_manager_tab()
         self.nb.bind("<<NotebookTabChanged>>", self._on_nb_tab_changed)
+
+    def _on_skip_section_toggled(self) -> None:
+        app = self._app
+        if app is not None and hasattr(app, "request_live_preview_refresh"):
+            try:
+                app.request_live_preview_refresh()
+            except Exception:
+                pass
+        self.on_change_callback()
+
+    def get_section_skipped(self) -> bool:
+        return bool(self._skip_section_var.get())
+
+    def set_section_skipped(self, skipped: bool) -> None:
+        self._skip_section_var.set(bool(skipped))
 
     @staticmethod
     def _alloc_section_id() -> str:
@@ -504,6 +528,8 @@ class FamilySocialHistoryPage(ttk.Frame):
         return "\n\n".join(parts).strip()
 
     def get_live_preview_runs(self) -> list[tuple[str, str | None]]:
+        if self._skip_section_var.get():
+            return []
         runs: list[tuple[str, str | None]] = []
         wrote_header = False
         for sec in self.sections:
@@ -580,6 +606,7 @@ class FamilySocialHistoryPage(ttk.Frame):
         return any(c.has_content() for c in self._cores_by_id.values())
 
     def reset(self) -> None:
+        self._skip_section_var.set(False)
         for c in self._cores_by_id.values():
             c.reset()
 

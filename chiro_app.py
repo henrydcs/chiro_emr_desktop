@@ -610,7 +610,11 @@ class App(tk.Tk):
                         else:
                             fs_runs = []
                             fs_text = (self.family_social_page.get_value() or "").strip()
-                            if fs_text:
+                            fs_skip = (
+                                hasattr(self.family_social_page, "get_section_skipped")
+                                and self.family_social_page.get_section_skipped()
+                            )
+                            if fs_text and not fs_skip:
                                 fs_runs = [
                                     ("FAMILY / SOCIAL HISTORY\n", "H_BOLD"),
                                     ("\n", None),
@@ -3843,6 +3847,10 @@ class App(tk.Tk):
             fs_raw = soap.get("family_social_builder")
             fs_builder = fs_raw if isinstance(fs_raw, dict) else None
             self.family_social_page.set_value(soap.get("family_social") or "", builder_state=fs_builder)
+            if hasattr(self.family_social_page, "set_section_skipped"):
+                self.family_social_page.set_section_skipped(
+                    bool(soap.get("family_social_section_skipped"))
+                )
         except Exception:
             pass
         obj_struct = soap.get("objectives_struct")
@@ -4261,6 +4269,13 @@ class App(tk.Tk):
                 "hoi_struct": hoi_struct,
                 "subjectives": subj_struct,
                 "family_social": self.family_social_page.get_value() if hasattr(self, "family_social_page") else "",
+                "family_social_section_skipped": (
+                    self.family_social_page.get_section_skipped()
+                    if hasattr(self, "family_social_page")
+                    and self.family_social_page is not None
+                    and hasattr(self.family_social_page, "get_section_skipped")
+                    else False
+                ),
                 "family_social_builder": fs_builder,
                 "objectives": obj_text,
                 "objectives_struct": obj_struct,

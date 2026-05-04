@@ -2715,6 +2715,8 @@ def therapy_paragraph_from_subjectives(subj: dict, first_name: str = "") -> tupl
 def build_family_social_flowables(soap: dict, styles) -> list:
     """Heading2 main title; v2 builder uses Heading3 per block. Legacy: single body."""
     soap = soap or {}
+    if soap.get("family_social_section_skipped"):
+        return []
     out: list = []
     b = soap.get("family_social_builder")
     if isinstance(b, dict) and int(b.get("v") or 0) == 2:
