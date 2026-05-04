@@ -153,10 +153,34 @@ class FamilySocialHistoryPage(ttk.Frame):
 
         top = ttk.Frame(outer)
         top.pack(fill="x", padx=10, pady=(0, 6))
-        ttk.Label(top, text="Family/Social Blocks:").pack(side="left", padx=(0, 8))
+        ttk.Label(top, text="Family/Social Blocks:").pack(anchor="w")
 
-        self.block_buttons = ttk.Frame(top)
-        self.block_buttons.pack(side="left", fill="x", expand=True)
+        scroll_wrap = ttk.Frame(top)
+        scroll_wrap.pack(fill="x", expand=True)
+
+        self._blocks_hsb = ttk.Scrollbar(scroll_wrap, orient="horizontal")
+        self._blocks_canvas = tk.Canvas(
+            scroll_wrap,
+            height=44,
+            highlightthickness=0,
+            borderwidth=0,
+        )
+        self._blocks_canvas.configure(xscrollcommand=self._blocks_hsb.set)
+        self._blocks_hsb.configure(command=self._blocks_canvas.xview)
+
+        self._blocks_canvas.grid(row=0, column=0, sticky="ew")
+        self._blocks_hsb.grid(row=1, column=0, sticky="ew")
+        scroll_wrap.columnconfigure(0, weight=1)
+
+        self.block_buttons = ttk.Frame(self._blocks_canvas)
+        self._blocks_canvas_win = self._blocks_canvas.create_window(
+            (0, 0),
+            window=self.block_buttons,
+            anchor="nw",
+        )
+
+        self.block_buttons.bind("<Configure>", self._on_family_social_blocks_inner_configure)
+        self._blocks_canvas.bind("<Configure>", self._on_family_social_blocks_canvas_configure)
 
         _setup_family_social_notebook_style(self)
         self.nb = ttk.Notebook(outer, style=_FAMILY_SOCIAL_NB_STYLE)
@@ -206,6 +230,30 @@ class FamilySocialHistoryPage(ttk.Frame):
     def set_section_skipped(self, skipped: bool) -> None:
         self._skip_section_var.set(bool(skipped))
 
+    def _on_family_social_blocks_inner_configure(self, _event=None) -> None:
+        self._sync_family_social_blocks_scroll()
+
+    def _on_family_social_blocks_canvas_configure(self, event: tk.Event) -> None:
+        try:
+            h = int(event.height)
+            if h > 1:
+                self._blocks_canvas.itemconfigure(self._blocks_canvas_win, height=h)
+        except (tk.TclError, ValueError, TypeError):
+            pass
+        self._sync_family_social_blocks_scroll()
+
+    def _sync_family_social_blocks_scroll(self) -> None:
+        cv = getattr(self, "_blocks_canvas", None)
+        if cv is None:
+            return
+        try:
+            cv.update_idletasks()
+            bbox = cv.bbox("all")
+            if bbox:
+                cv.configure(scrollregion=bbox)
+        except tk.TclError:
+            pass
+
     @staticmethod
     def _alloc_section_id() -> str:
         return f"s_{uuid.uuid4().hex[:12]}"
@@ -250,6 +298,7 @@ class FamilySocialHistoryPage(ttk.Frame):
             self._section_buttons[active].configure(font=("Segoe UI", 10, "bold"))
         elif self.sections:
             self._section_buttons[self.sections[0]["id"]].configure(font=("Segoe UI", 10, "bold"))
+        self.after_idle(self._sync_family_social_blocks_scroll)
 
     def _build_subsection_manager_tab(self) -> None:
         intro = ttk.Frame(self.tab_manage)
