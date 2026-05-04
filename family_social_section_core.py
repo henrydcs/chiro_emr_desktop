@@ -15,6 +15,7 @@ from utils import today_mmddyyyy
 TEMPLATES_FILENAME = "family_social_doc_templates.json"
 # Stored in exam JSON under soap["family_social_builder"]; restores multi-select and
 # per-exam Narrative vs Bullet lines (multi_bullets) after reload.
+# Optional key "visit_skip": { "template_id": bool, ... } for per-template skip checkboxes.
 SECTION_BUILDER_VERSION = 1
 _BUILDER_SLOT_DEFAULT = object()
 
@@ -200,6 +201,7 @@ class FamilySocialSectionCore(ttk.Frame):
         self.note_combo_vars: list[list[tk.StringVar]] = []
         self._note_builder_meta: list[list[dict]] = []
         self._visit_skip_by_tid: dict[int, bool] = {}
+        self._skip_checkbox_vars: dict[int, tk.BooleanVar] = {}
         if token_feedback_var is not None:
             self._token_copy_feedback_var = token_feedback_var
         else:
@@ -624,6 +626,31 @@ class FamilySocialSectionCore(ttk.Frame):
         # after_idle: on some platforms the bound BooleanVar is not updated before command runs.
         self.after_idle(_sync)
 
+    def _restore_visit_skip_from_state(self, raw: dict | None) -> None:
+        """Rebuild _visit_skip_by_tid from saved exam JSON; clear when state missing / legacy."""
+        self._visit_skip_by_tid.clear()
+        if raw is None:
+            self._sync_skip_checkbuttons()
+            return
+        if raw.get("v") != SECTION_BUILDER_VERSION:
+            self._sync_skip_checkbuttons()
+            return
+        vs_raw = raw.get("visit_skip")
+        if isinstance(vs_raw, dict):
+            for k, v in vs_raw.items():
+                try:
+                    self._visit_skip_by_tid[int(k)] = bool(v)
+                except (TypeError, ValueError):
+                    pass
+        self._sync_skip_checkbuttons()
+
+    def _sync_skip_checkbuttons(self) -> None:
+        for tid, var in (getattr(self, "_skip_checkbox_vars", None) or {}).items():
+            try:
+                var.set(bool(self._visit_skip_by_tid.get(tid, False)))
+            except tk.TclError:
+                pass
+
     def _compose_parts_for_template(self, i: int, tmpl: dict) -> list[str]:
         """
         Build prefix + non-Omit dropdown fragments. If this template has at least one
@@ -733,6 +760,11 @@ class FamilySocialSectionCore(ttk.Frame):
                         except ValueError:
                             dd_states.append(None)
             out["templates"][tid] = {"dropdowns": dd_states}
+        visit_skip_out: dict[str, bool] = {}
+        for tmpl in self.templates:
+            ti = int(tmpl["id"])
+            visit_skip_out[str(ti)] = bool(self._visit_skip_by_tid.get(ti, False))
+        out["visit_skip"] = visit_skip_out
         return out
 
     def _apply_builder_state(self, state: dict | None) -> None:
@@ -745,6 +777,8 @@ class FamilySocialSectionCore(ttk.Frame):
             tm = raw.get("templates")
             if isinstance(tm, dict):
                 tmap = tm
+
+        self._restore_visit_skip_from_state(raw)
 
         for i, tmpl in enumerate(self.templates):
             if i >= len(self.note_combo_vars) or i >= len(self._note_builder_meta):
@@ -836,6 +870,7 @@ class FamilySocialSectionCore(ttk.Frame):
             w.destroy()
         self.note_combo_vars = []
         self._note_builder_meta = []
+        self._skip_checkbox_vars = {}
 
         self._prefix_resolved_labels: list[ttk.Label] = []
 
@@ -848,6 +883,7 @@ class FamilySocialSectionCore(ttk.Frame):
 
             tid = int(tmpl["id"])
             skip_v = tk.BooleanVar(value=self._visit_skip_by_tid.get(tid, False))
+            self._skip_checkbox_vars[tid] = skip_v
 
             def _skip_cmd(t: int = tid, v: tk.BooleanVar = skip_v) -> None:
                 self._visit_skip_toggled(t, v)
