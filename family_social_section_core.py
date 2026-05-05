@@ -540,6 +540,29 @@ class FamilySocialSectionCore(ttk.Frame):
         lb.bind("<Button-4>", _on_wheel)
         lb.bind("<Button-5>", _on_wheel)
 
+    @staticmethod
+    def _filter_items_by_prefix(items: list[str], query: str) -> list[int]:
+        """Return source indexes of `items` whose text starts with `query` (case-insensitive).
+
+        Empty / whitespace-only query returns every index (no filtering).
+        """
+        q = (query or "").lower().lstrip()
+        if not q:
+            return list(range(len(items)))
+        return [i for i, it in enumerate(items) if str(it).lower().startswith(q)]
+
+    @staticmethod
+    def _multi_selected_source_indexes(meta: dict) -> list[int] | None:
+        """Sorted source indexes selected for a multi-select dropdown, derived from meta['selected_set'].
+
+        Returns None when the meta predates the search/filter refactor (no `selected_set`),
+        signalling callers to fall back to `lb.curselection()`.
+        """
+        sel = meta.get("selected_set")
+        if not isinstance(sel, set):
+            return None
+        return sorted(int(x) for x in sel)
+
     def _scroll_canvas_y(self, canvas: tk.Canvas, event: tk.Event) -> bool:
         """Return True if wheel was handled (Windows delta or Linux b4/b5)."""
         if getattr(event, "delta", 0):
@@ -670,18 +693,20 @@ class FamilySocialSectionCore(ttk.Frame):
                     lb = meta.get("lb")
                     its = list(meta.get("items") or [])
                     appended = False
-                    if isinstance(lb, tk.Listbox):
+                    chosen_idxs = self._multi_selected_source_indexes(meta)
+                    if chosen_idxs is None and isinstance(lb, tk.Listbox):
                         try:
                             if lb.winfo_exists():
-                                sel = lb.curselection()
-                                chosen = [str(its[k]).strip() for k in sel if 0 <= k < len(its)]
-                                chosen = [x for x in chosen if x]
-                                if chosen:
-                                    block = "\n\n\t• " + "\n\t• ".join(chosen)
-                                    dropdown_parts.append(block)
-                                    appended = True
+                                chosen_idxs = [int(x) for x in lb.curselection()]
                         except Exception:
-                            pass
+                            chosen_idxs = None
+                    if chosen_idxs:
+                        chosen = [str(its[k]).strip() for k in chosen_idxs if 0 <= k < len(its)]
+                        chosen = [x for x in chosen if x]
+                        if chosen:
+                            block = "\n\n\t• " + "\n\t• ".join(chosen)
+                            dropdown_parts.append(block)
+                            appended = True
                     if appended:
                         continue
                     val_fb = (var.get() or "").strip()
@@ -741,14 +766,15 @@ class FamilySocialSectionCore(ttk.Frame):
                 var = row[j]
                 items = list(meta.get("items") or [])
                 if meta.get("multi"):
-                    lb = meta.get("lb")
-                    idxs: list[int] = []
-                    if isinstance(lb, tk.Listbox):
-                        try:
-                            if lb.winfo_exists():
-                                idxs = [int(x) for x in lb.curselection()]
-                        except Exception:
-                            pass
+                    idxs: list[int] = self._multi_selected_source_indexes(meta) or []
+                    if not idxs:
+                        lb = meta.get("lb")
+                        if isinstance(lb, tk.Listbox):
+                            try:
+                                if lb.winfo_exists():
+                                    idxs = [int(x) for x in lb.curselection()]
+                            except Exception:
+                                pass
                     dd_states.append({"i": idxs, "b": bool(dd.get("multi_bullets"))})
                 else:
                     val = (var.get() or "").strip()
@@ -827,14 +853,26 @@ class FamilySocialSectionCore(ttk.Frame):
                                 fv.set("bullets" if bullets_override else "narrative")
                             except Exception:
                                 pass
+                    sel_set = meta.get("selected_set")
+                    if isinstance(sel_set, set):
+                        sel_set.clear()
+                        for ix in idxs:
+                            if 0 <= ix < len(items):
+                                sel_set.add(int(ix))
                     if isinstance(lb, tk.Listbox):
                         try:
                             lb.selection_clear(0, tk.END)
-                            for ix in idxs:
-                                if 0 <= ix < lb.size():
-                                    lb.selection_set(ix)
-                            sel_idx = lb.curselection()
-                            chosen = [items[k] for k in sel_idx if 0 <= k < len(items)]
+                            visible = meta.get("visible_to_source")
+                            if isinstance(visible, list):
+                                for vis_i, src_idx in enumerate(visible):
+                                    if src_idx in (sel_set if isinstance(sel_set, set) else set(idxs)):
+                                        lb.selection_set(vis_i)
+                            else:
+                                for ix in idxs:
+                                    if 0 <= ix < lb.size():
+                                        lb.selection_set(ix)
+                            ordered = sorted(sel_set) if isinstance(sel_set, set) else idxs
+                            chosen = [items[k] for k in ordered if 0 <= k < len(items)]
                             var.set(_join_with_oxford_and(chosen))
                         except Exception:
                             var.set("")
@@ -942,6 +980,20 @@ class FamilySocialSectionCore(ttk.Frame):
                 ).pack(anchor="w")
                 if is_multi:
                     var = tk.StringVar(value="")
+
+                    # Search row — type to filter visible items by case-insensitive starts-with.
+                    # Hidden selections are preserved via `selected_set` (source-item indexes), so
+                    # the filter only changes what's *shown*, never what's selected.
+                    search_var = tk.StringVar(value="")
+                    selected_set: set[int] = set()
+                    visible_to_source: list[int] = list(range(len(items)))
+
+                    sf = ttk.Frame(fr)
+                    sf.pack(fill="x", pady=(0, 2))
+                    ttk.Label(sf, text="Search:").pack(side="left")
+                    search_entry = ttk.Entry(sf, textvariable=search_var)
+                    search_entry.pack(side="left", fill="x", expand=True, padx=(4, 4))
+
                     lb_wrap = ttk.Frame(fr)
                     lb_wrap.pack(fill="x")
                     lb_h = min(max(len(items), 3), 10)
@@ -959,14 +1011,45 @@ class FamilySocialSectionCore(ttk.Frame):
                     lb.configure(yscrollcommand=lsb.set)
                     lsb.pack(side="right", fill="y")
 
+                    def _refresh_filter(
+                        _lb: tk.Listbox = lb,
+                        _opts: list[str] = items,
+                        _vts: list[int] = visible_to_source,
+                        _ss: set[int] = selected_set,
+                        _sv: tk.StringVar = search_var,
+                    ) -> None:
+                        new_idxs = self._filter_items_by_prefix(_opts, _sv.get())
+                        _vts[:] = new_idxs
+                        _lb.delete(0, tk.END)
+                        for src_idx in new_idxs:
+                            _lb.insert(tk.END, _opts[src_idx])
+                        for vis_i, src_idx in enumerate(new_idxs):
+                            if src_idx in _ss:
+                                _lb.selection_set(vis_i)
+
                     def _sync_multi(
                         _lb: tk.Listbox = lb,
                         _opts: list[str] = items,
                         _v: tk.StringVar = var,
+                        _vts: list[int] = visible_to_source,
+                        _ss: set[int] = selected_set,
                     ) -> None:
-                        sel_idx = _lb.curselection()
-                        chosen = [_opts[i] for i in sel_idx if 0 <= i < len(_opts)]
+                        # Update `selected_set` only for currently-visible rows, then derive the
+                        # composed text from the full set (so hidden selections still appear).
+                        visible_sel = set(_lb.curselection())
+                        for vis_i, src_idx in enumerate(_vts):
+                            if vis_i in visible_sel:
+                                _ss.add(src_idx)
+                            else:
+                                _ss.discard(src_idx)
+                        chosen_idxs = sorted(_ss)
+                        chosen = [_opts[i] for i in chosen_idxs if 0 <= i < len(_opts)]
                         _v.set(_join_with_oxford_and(chosen))
+
+                    def _on_search_var_changed(*_a, _r=_refresh_filter) -> None:
+                        _r()
+
+                    search_var.trace_add("write", _on_search_var_changed)
 
                     # Bind sync via default args: `_sync_multi` is reassigned each loop iteration;
                     # bare name lookup in a nested def would call the *last* dropdown's sync only.
@@ -974,13 +1057,48 @@ class FamilySocialSectionCore(ttk.Frame):
                         _s()
                         self._on_builder_selection_changed()
 
-                    def _clear_multi(_lb=lb, _s=_sync_multi) -> None:
+                    def _clear_multi(_lb=lb, _s=_sync_multi, _ss=selected_set) -> None:
+                        _ss.clear()
                         _lb.selection_clear(0, tk.END)
+                        _s()
+                        self._on_builder_selection_changed()
+
+                    def _add_to_list_multi(
+                        _opts: list[str] = items,
+                        _ss: set[int] = selected_set,
+                        _sv: tk.StringVar = search_var,
+                        _r=_refresh_filter,
+                        _s=_sync_multi,
+                        _dd: dict = dd,
+                    ) -> None:
+                        txt = (_sv.get() or "").strip()
+                        if not txt:
+                            return
+                        existing_lower = {str(x).strip().lower() for x in _opts}
+                        if txt.lower() in existing_lower:
+                            # Already present — clear the search so the existing item is visible.
+                            _sv.set("")
+                            return
+                        _opts.append(txt)
+                        # Keep the underlying template dict in sync (the items list is a copy).
+                        _dd.setdefault("items", []).append(txt)
+                        _ss.add(len(_opts) - 1)
+                        self._persist_templates()
+                        # Sync the canvas editor (if mounted) so its listbox shows the new item.
+                        try:
+                            if hasattr(self, "canvas_scroll_frame") and self.canvas_scroll_frame.winfo_exists():
+                                self._render_canvas_editor()
+                        except Exception:
+                            pass
+                        _sv.set("")  # Clear search so the new item shows in the full list.
+                        _r()  # Defensive — trace fires on set, but call explicitly for clarity.
                         _s()
                         self._on_builder_selection_changed()
 
                     lb.bind("<<ListboxSelect>>", _multi_changed)
                     self._bind_listbox_mousewheel_local(lb)
+
+                    ttk.Button(sf, text="+ Add to List", command=_add_to_list_multi).pack(side="left")
 
                     ttk.Button(fr, text="Clear selection", command=_clear_multi).pack(anchor="w", pady=(2, 0))
                     ttk.Label(
@@ -990,7 +1108,17 @@ class FamilySocialSectionCore(ttk.Frame):
                         foreground="gray",
                     ).pack(anchor="w", pady=(0, 0))
                     row_vars.append(var)
-                    meta_row.append({"multi": True, "lb": lb, "items": items, "fmt_var": _fmt_var})
+                    meta_row.append(
+                        {
+                            "multi": True,
+                            "lb": lb,
+                            "items": items,
+                            "fmt_var": _fmt_var,
+                            "selected_set": selected_set,
+                            "visible_to_source": visible_to_source,
+                            "search_var": search_var,
+                        }
+                    )
                 else:
                     display_items = [OPTION_OMIT] + items
                     initial = items[0] if items else OPTION_OMIT
@@ -1216,6 +1344,19 @@ class FamilySocialSectionCore(ttk.Frame):
         dd.setdefault("items", [])
         items = dd["items"]
 
+        # Search row — type to filter the items listbox by case-insensitive starts-with;
+        # `+ Add to List` is a quick-add convenience (mirrors the existing `Add item` button).
+        search_var = tk.StringVar(value="")
+        # Listbox row index -> index into source `items`. Refreshed whenever the filter changes
+        # so update_item / delete_item / on_sel always operate on the correct source row.
+        visible_to_source: list[int] = list(range(len(items)))
+
+        sf = ttk.Frame(frame)
+        sf.pack(fill="x", padx=6, pady=(0, 2))
+        ttk.Label(sf, text="Search:").pack(side="left")
+        search_entry = ttk.Entry(sf, textvariable=search_var)
+        search_entry.pack(side="left", fill="x", expand=True, padx=(4, 4))
+
         lf = ttk.Frame(frame)
         lf.pack(fill="x", padx=6, pady=4)
         lb = tk.Listbox(lf, height=min(max(len(items), 3), 10), activestyle="dotbox")
@@ -1228,44 +1369,97 @@ class FamilySocialSectionCore(ttk.Frame):
 
         new_var = tk.StringVar()
 
+        def _refresh_filter() -> None:
+            q = search_var.get()
+            new_idxs = self._filter_items_by_prefix(items, q)
+            visible_to_source[:] = new_idxs
+            lb.delete(0, tk.END)
+            for src_idx in new_idxs:
+                lb.insert(tk.END, items[src_idx])
+
+        def _on_search_var_changed(*_a) -> None:
+            _refresh_filter()
+
+        search_var.trace_add("write", _on_search_var_changed)
+
+        def _src_idx_for_listbox_row(row: int) -> int | None:
+            if 0 <= row < len(visible_to_source):
+                return visible_to_source[row]
+            return None
+
         def add_item():
             txt = (new_var.get() or "").strip()
             if not txt:
                 return
             items.append(txt)
-            lb.insert(tk.END, txt)
             new_var.set("")
-            self._save_and_reload()
+            self._persist_templates()
+            self._render_note_builder()
+            self._apply_builder_to_note()
+            self.on_change_callback()
+            _refresh_filter()
 
         def update_item():
             sel = lb.curselection()
             if not sel:
                 return
-            idx = sel[0]
+            src_idx = _src_idx_for_listbox_row(sel[0])
+            if src_idx is None:
+                return
             txt = (new_var.get() or "").strip()
             if not txt:
                 return
-            items[idx] = txt
-            lb.delete(idx)
-            lb.insert(idx, txt)
-            self._save_and_reload()
+            items[src_idx] = txt
+            # Refresh the visible row in place so the user sees the edit without losing the filter.
+            lb.delete(sel[0])
+            lb.insert(sel[0], txt)
+            self._persist_templates()
+            self._render_note_builder()
+            self._apply_builder_to_note()
+            self.on_change_callback()
 
         def delete_item():
             sel = lb.curselection()
             if not sel:
                 return
-            idx = sel[0]
-            items.pop(idx)
-            lb.delete(idx)
-            self._save_and_reload()
+            src_idx = _src_idx_for_listbox_row(sel[0])
+            if src_idx is None:
+                return
+            items.pop(src_idx)
+            self._persist_templates()
+            self._render_note_builder()
+            self._apply_builder_to_note()
+            self.on_change_callback()
+            _refresh_filter()
+
+        def add_to_list_from_search():
+            txt = (search_var.get() or "").strip()
+            if not txt:
+                return
+            existing_lower = {str(x).strip().lower() for x in items}
+            if txt.lower() in existing_lower:
+                # Already in the list — clear filter so the user can see it instead of silently no-oping.
+                search_var.set("")
+                return
+            items.append(txt)
+            self._persist_templates()
+            self._render_note_builder()
+            self._apply_builder_to_note()
+            self.on_change_callback()
+            # Clear the search to reveal the full list (including the just-added item).
+            search_var.set("")
 
         def on_sel(_e=None):
             sel = lb.curselection()
             if sel:
-                new_var.set(items[sel[0]])
+                src_idx = _src_idx_for_listbox_row(sel[0])
+                if src_idx is not None:
+                    new_var.set(items[src_idx])
 
         lb.bind("<<ListboxSelect>>", on_sel)
         self._bind_listbox_mousewheel_local(lb)
+
+        ttk.Button(sf, text="+ Add to List", command=add_to_list_from_search).pack(side="left")
 
         ent_row = ttk.Frame(frame)
         ent_row.pack(fill="x", padx=6, pady=(0, 4))
