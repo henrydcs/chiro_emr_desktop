@@ -76,6 +76,18 @@ def _finalize_sentence(parts: list[str]) -> str:
 
 def _finalize_family_social_block(parts: list[str]) -> str:
     """Join prefix + dropdown fragments; fragments starting with newline (bullet blocks) attach without a leading space."""
+    last_substantial: str | None = None
+    for p in reversed(parts or []):
+        if p is None:
+            continue
+        raw = str(p)
+        if raw.strip():
+            last_substantial = raw
+            break
+    # Bullet-lines dropdown fragments begin with "\\n"; narrative fragments do not. Do not append
+    # a sentence-final period after a trailing bullet list — bullets should not end with "." here.
+    ends_with_bullet_fragment = bool(last_substantial and last_substantial.startswith("\n"))
+
     chunks: list[str] = []
     for p in parts:
         if p is None:
@@ -96,7 +108,11 @@ def _finalize_family_social_block(parts: list[str]) -> str:
         else:
             out += " " + c
     out = out.strip()
-    if out and out[-1] not in ".!?":
+    if not out:
+        return ""
+    if ends_with_bullet_fragment:
+        return out
+    if out[-1] not in ".!?":
         out += "."
     return out
 
