@@ -51,6 +51,8 @@ from plan_page import PlanPage
 from pathlib import Path
 import tkinter.font as tkfont
 from alerts_popup import AlertsPopup
+import attorney_data as adata
+from attorney_demographics import AttorneyDemographicsWindow, AttorneyPickerDialog
 from config import PATIENTS_ID_ROOT
 from doc_vault_page import upsert_vault_file
 from patient_storage import new_patient_id, get_patient_root, find_patient_root
@@ -1559,6 +1561,41 @@ class App(tk.Tk):
         self._add_dynamic_exam(name, copy_current=True)
         self.after(0, lambda: self.switch_exam(name, force=True))
 
+        if n == 1:
+            self.after(150, self._prompt_referral_source_after_initial1)
+
+
+    def _prompt_referral_source_after_initial1(self):
+        """When Initial 1 is created and no referral toggle is set, prompt
+        the user to record how this patient came to the clinic."""
+        try:
+            patient_root = self.get_current_patient_root()
+            if not patient_root:
+                return
+            state = adata.load_patient_referral_state(patient_root)
+            already_set = any(
+                (state.get(d, {}) or {}).get("attorney_id") for d in adata.REFERRAL_DIRECTIONS
+            )
+            if already_set:
+                self._refresh_referral_toggle_buttons()
+                return
+
+            choice = messagebox.askyesnocancel(
+                "Initial 1 — Referral source",
+                (
+                    "Record how this new patient came to the clinic?\n\n"
+                    "Yes  =  Doctors on Liens\n"
+                    "No   =  Attorney referred (NOT through DoL)\n"
+                    "Cancel = Skip for now (you can set it later from the demographics row)"
+                ),
+                parent=self,
+            )
+            if choice is None:
+                return
+            self._on_referral_toggle("from_dol" if choice else "from_attorney")
+        except Exception:
+            pass
+
 
 
     def _add_dynamic_exam(self, exam_name: str, copy_current: bool = False):
@@ -2901,7 +2938,14 @@ class App(tk.Tk):
         self.master_save_btn.pack(side="left", padx=5)
 
         self.templates_btn = ttk.Button(toggle_row, text="Templates", command=self._open_templates_popup)
-        self.templates_btn.pack(side="left", padx=5)        
+        self.templates_btn.pack(side="left", padx=5)
+
+        self.attorney_btn = ttk.Button(
+            toggle_row,
+            text="Attorney Demographics",
+            command=self._open_attorney_demographics_popup,
+        )
+        self.attorney_btn.pack(side="left", padx=5)        
 
         # The actual clinic header frame (this will be hidden/shown)
         self.clinic_frame = ttk.Frame(self.header_container)
@@ -3006,6 +3050,9 @@ class App(tk.Tk):
 
         ttk.Label(info, text="Provider (DC):").grid(row=3, column=0, sticky="w", padx=padx, pady=6)
         ttk.Entry(info, textvariable=self.provider_var, width=32).grid(row=3, column=1, sticky="w", padx=padx, pady=6)
+
+        # --- Referral toggles (Doctors on Liens / Attorney referred / We referred to attorney) ---
+        self._build_referral_toggle_row(info, row=4, padx=padx)
 
         # --- Section nav (now inside left pane) ---
         soap_nav = ttk.Frame(left_root)
@@ -3222,6 +3269,11 @@ class App(tk.Tk):
             self.exam_date_var, self.claim_var, self.provider_var
         ):
             v.trace_add("write", self._refresh_demo_summary)        
+
+        try:
+            self._refresh_referral_toggle_buttons()
+        except Exception:
+            pass
 
     # ---------- Page switching ----------
 
@@ -4098,6 +4150,264 @@ class App(tk.Tk):
 
         ttk.Button(frame, text="Close", command=popup.destroy).pack(pady=(12, 0))
 
+    # ============================================================
+    # Attorney Demographics + Referral Tracking
+    # ============================================================
+    def _open_attorney_demographics_popup(self):
+        """Open the Attorney Demographics + Referrals window.
+
+        If a patient is currently loaded, lands on the 'This Patient' tab so the
+        user can immediately see who that patient's attorney is.
+        """
+        start = "patient" if self.get_current_patient_root() else "directory"
+        AttorneyDemographicsWindow(
+            self,
+            start_tab=start,
+            get_current_patient_fn=self._attorney_window_patient_info,
+            on_change_callback=self._refresh_referral_toggle_buttons,
+        )
+
+    def _attorney_window_patient_info(self) -> dict | None:
+        """Snapshot of the current patient for the Attorney window."""
+        patient_root = self.get_current_patient_root()
+        if not patient_root:
+            return None
+        return {
+            "patient_id": (self.current_patient_id or "").strip(),
+            "patient_name": to_last_first(self.last_name_var.get(), self.first_name_var.get()),
+            "patient_root": patient_root,
+            "current_exam": (self.current_exam.get() or "").strip(),
+        }
+
+    def _build_referral_toggle_row(self, parent, *, row: int, padx: int):
+        """Referral toggle buttons + at-a-glance patient attorney panel.
+
+        - Doctors on Liens: patient referred to clinic via DoL marketing firm.
+        - Attorney Referred Patient: attorney referred patient directly (not via DoL).
+        - We Referred to Attorney: clinic-out referral.
+        """
+        ttk.Label(parent, text="Referral:").grid(
+            row=row, column=0, sticky="w", padx=padx, pady=(8, 4)
+        )
+
+        wrap = ttk.Frame(parent)
+        wrap.grid(row=row, column=1, columnspan=3, sticky="w", padx=padx, pady=(8, 4))
+
+        self._ref_btn_text: dict[str, tk.StringVar] = {}
+        self._ref_buttons: dict[str, ttk.Button] = {}
+
+        style = ttk.Style(self)
+        style.configure(
+            "Ref.Inactive.TButton",
+            font=("Segoe UI", 9),
+            padding=(6, 3),
+        )
+        style.configure(
+            "Ref.Active.TButton",
+            font=("Segoe UI", 9, "bold"),
+            padding=(6, 3),
+        )
+        style.map(
+            "Ref.Active.TButton",
+            foreground=[("!disabled", "#0a4d0a")],
+            background=[("active", "#cfe9cf")],
+        )
+
+        for direction, label in (
+            ("from_dol", "Doctors on Liens"),
+            ("from_attorney", "Attorney Referred Patient"),
+            ("to_attorney", "We Referred to Attorney"),
+        ):
+            v = tk.StringVar(value=label)
+            self._ref_btn_text[direction] = v
+            btn = ttk.Button(
+                wrap,
+                textvariable=v,
+                style="Ref.Inactive.TButton",
+                command=lambda d=direction: self._on_referral_toggle(d),
+            )
+            btn.pack(side="left", padx=(0, 6))
+            self._ref_buttons[direction] = btn
+
+        ttk.Button(
+            wrap,
+            text="View / Edit…",
+            command=self._open_attorney_demographics_popup,
+        ).pack(side="left", padx=(12, 0))
+
+        # ---- At-a-glance patient attorney panel ----
+        self._patient_attorney_panel = ttk.LabelFrame(
+            parent, text="This Patient's Attorney(s)"
+        )
+        self._patient_attorney_panel.grid(
+            row=row + 1, column=0, columnspan=4,
+            sticky="we", padx=padx, pady=(2, 6),
+        )
+        parent.columnconfigure(3, weight=1)
+
+        self._patient_attorney_vars: dict[str, tk.StringVar] = {}
+        for i, (direction, label) in enumerate((
+            ("from_dol", "Doctors on Liens:"),
+            ("from_attorney", "Attorney Referred:"),
+            ("to_attorney", "We Referred To:"),
+        )):
+            ttk.Label(
+                self._patient_attorney_panel, text=label,
+                font=("Segoe UI", 9, "bold"),
+            ).grid(row=i, column=0, sticky="nw", padx=(8, 6), pady=2)
+
+            v = tk.StringVar(value="(not set)")
+            self._patient_attorney_vars[direction] = v
+            ttk.Label(
+                self._patient_attorney_panel,
+                textvariable=v, justify="left", anchor="w",
+            ).grid(row=i, column=1, sticky="we", padx=(0, 8), pady=2)
+
+        self._patient_attorney_panel.columnconfigure(1, weight=1)
+
+        self._refresh_referral_toggle_buttons()
+
+    def _refresh_referral_toggle_buttons(self):
+        """Re-read this patient's referral state and update the toggle buttons
+        AND the inline 'This Patient's Attorney(s)' summary panel."""
+        if not hasattr(self, "_ref_buttons"):
+            return
+
+        patient_root = self.get_current_patient_root()
+        state = adata.load_patient_referral_state(patient_root) if patient_root else {
+            d: {"attorney_id": "", "set_at": ""} for d in adata.REFERRAL_DIRECTIONS
+        }
+
+        labels = {
+            "from_dol": "Doctors on Liens",
+            "from_attorney": "Attorney Referred Patient",
+            "to_attorney": "We Referred to Attorney",
+        }
+
+        for direction, btn in self._ref_buttons.items():
+            entry = state.get(direction) or {}
+            aid = (entry.get("attorney_id") or "").strip()
+            base = labels[direction]
+            if aid:
+                rec = adata.find_attorney(aid)
+                tag = adata.attorney_display_label(rec) if rec else "(deleted attorney)"
+                self._ref_btn_text[direction].set(f"{base} ✓  {tag}")
+                btn.configure(style="Ref.Active.TButton")
+            else:
+                self._ref_btn_text[direction].set(base)
+                btn.configure(style="Ref.Inactive.TButton")
+
+        if hasattr(self, "_patient_attorney_vars"):
+            for direction, var in self._patient_attorney_vars.items():
+                entry = state.get(direction) or {}
+                aid = (entry.get("attorney_id") or "").strip()
+                if not aid:
+                    var.set("(not set)")
+                    continue
+                rec = adata.find_attorney(aid)
+                if not rec:
+                    var.set("(linked attorney was deleted)")
+                    continue
+                line1 = adata.attorney_display_label(rec)
+                bits = []
+                if rec.get("phone"):
+                    bits.append(f"☎ {rec['phone']}")
+                if rec.get("fax"):
+                    bits.append(f"Fax {rec['fax']}")
+                if rec.get("email"):
+                    bits.append(f"✉ {rec['email']}")
+                cs = ", ".join(filter(None, [rec.get("city", ""), rec.get("state", "")]))
+                if cs:
+                    bits.append(cs)
+                line2 = "    ".join(bits)
+                var.set(line1 + ("\n" + line2 if line2 else ""))
+
+    def _on_referral_toggle(self, direction: str):
+        """Handle a click on one of the 3 referral toggle buttons."""
+        if not (self.last_name_var.get() or "").strip() and not (self.first_name_var.get() or "").strip():
+            messagebox.showinfo(
+                "Patient required",
+                "Enter the patient's name first, then set the referral.",
+                parent=self,
+            )
+            return
+
+        pid = self._ensure_current_patient_id()
+        patient_root = self.get_current_patient_root()
+        if not patient_root:
+            return
+
+        from utils import ensure_patient_dirs
+        ensure_patient_dirs(patient_root)
+
+        state = adata.load_patient_referral_state(patient_root)
+        current_aid = (state.get(direction, {}) or {}).get("attorney_id") or ""
+
+        labels = {
+            "from_dol": "Doctors on Liens",
+            "from_attorney": "Attorney Referred Patient",
+            "to_attorney": "We Referred to Attorney",
+        }
+        label = labels.get(direction, direction)
+
+        if current_aid:
+            current_rec = adata.find_attorney(current_aid)
+            current_tag = adata.attorney_display_label(current_rec) if current_rec else "(deleted)"
+            choice = messagebox.askyesnocancel(
+                f"{label}",
+                (
+                    f"This patient is currently flagged for:\n\n"
+                    f"{label} → {current_tag}\n\n"
+                    f"Yes  =  Change attorney\n"
+                    f"No   =  Remove this referral flag\n"
+                    f"Cancel = Do nothing"
+                ),
+                parent=self,
+            )
+            if choice is None:
+                return
+            if choice is False:
+                adata.clear_patient_referral(
+                    patient_root=patient_root,
+                    patient_id=pid,
+                    direction=direction,
+                )
+                self._refresh_referral_toggle_buttons()
+                self.status_var.set(f"{label}: cleared.")
+                return
+            preselect = current_aid
+        else:
+            preselect = ""
+
+        title = (
+            "Select the Doctors on Liens attorney"
+            if direction == "from_dol"
+            else ("Select the referring attorney"
+                  if direction == "from_attorney"
+                  else "Select the attorney we referred this patient to")
+        )
+
+        dlg = AttorneyPickerDialog(self, title=title, preselect_id=preselect)
+        self.wait_window(dlg)
+        if not dlg.result:
+            return
+
+        attorney = dlg.result
+        patient_name = to_last_first(self.last_name_var.get(), self.first_name_var.get())
+
+        adata.set_patient_referral(
+            patient_root=patient_root,
+            patient_id=pid,
+            patient_name=patient_name,
+            direction=direction,
+            attorney_id=attorney.get("id") or "",
+            exam_label=(self.current_exam.get() or "").strip(),
+        )
+        self._refresh_referral_toggle_buttons()
+        self.status_var.set(
+            f"{label}: linked to {adata.attorney_display_label(attorney)}."
+        )
+
     def _ask_template_category(self, parent) -> str | None:
         """
         Show a small dialog with a Combobox to select one of the six template categories.
@@ -4419,6 +4729,11 @@ class App(tk.Tk):
 
             # After loading patient_id + names, show that patient's alerts file
             self.after_idle(self.show_current_patient_alerts_popup)
+
+            try:
+                self._refresh_referral_toggle_buttons()
+            except Exception:
+                pass
 
         finally:
             self._loading = False
@@ -4785,6 +5100,10 @@ class App(tk.Tk):
         self.current_patient_id = None
         self._ensure_current_patient_id()
         self.after_idle(self.show_current_patient_alerts_popup)
+        try:
+            self._refresh_referral_toggle_buttons()
+        except Exception:
+            pass
 
 
 if __name__ == "__main__":

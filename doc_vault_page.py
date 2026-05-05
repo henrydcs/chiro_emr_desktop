@@ -12,6 +12,7 @@ from send2trash import send2trash
 # Vault folder names (inside patient root)
 VAULT_FOLDERS = [
     "attorney",
+    "doctors_on_liens",
     "billing",
     "imaging",
     "messages",
@@ -358,8 +359,22 @@ class DocVaultPage(ttk.Frame):
 
         ttk.Label(left, text="Folders", font=("Segoe UI", 11, "bold")).pack(anchor="nw", pady=(0, 8))
 
+        FOLDER_LABELS = {
+            "attorney": "attorney",
+            "doctors_on_liens": "doctors on liens",
+            "billing": "billing",
+            "imaging": "imaging",
+            "messages": "messages",
+            "patient_info": "patient info",
+            "pdfs": "pdfs",
+        }
         for k in VAULT_FOLDERS:
-            ttk.Button(left, text=k, width=18, command=lambda kk=k: self.select_folder(kk)).pack(anchor="nw", pady=3)
+            ttk.Button(
+                left,
+                text=FOLDER_LABELS.get(k, k),
+                width=18,
+                command=lambda kk=k: self.select_folder(kk),
+            ).pack(anchor="nw", pady=3)
 
         right = ttk.Frame(body)
         right.pack(side="left", fill="both", expand=True, padx=(15, 0))
