@@ -996,28 +996,21 @@ def _referral_letter_body(payload: dict, provider_type: str) -> str:
 # A leading TAB in the editor text marks an indented bullet line; the PDF
 # builder strips the TAB and renders that line with leftIndent.
 _REFERRAL_BULLET_PREFIX = "\t\u2022 "  # tab + • + space
-_REFERRAL_HEADER_LABEL = "Specialist Referrals:"
-
-
-def _provider_bullet_lines(payload: dict) -> list[str]:
-    """One bullet line per distinct referral provider type (chart UI order).
-    Each line starts with TAB + bullet + space so the editor renders it
-    indented and the PDF builder can detect & indent it."""
-    return [
-        f"{_REFERRAL_BULLET_PREFIX}{p}"
-        for p in referral_provider_types_in_payload(payload or {})
-    ]
+_REFERRAL_HEADER_LABEL = "Specialist Referral:"
 
 
 def referral_letter_editable_text(payload: dict, provider_type: str) -> str:
     """Editable letter body for a single referral provider type, salutation
-    through signature. The 'Specialist Referrals:' block lists every provider
-    type the patient is being referred to as indented bullet points."""
+    through signature. The 'Specialist Referral:' block lists ONLY the
+    provider this letter is addressed to (one bullet per letter)."""
     if not referral_letter_should_generate(payload):
         return ""
     body = _referral_letter_body(payload, provider_type)
 
-    bullets = _provider_bullet_lines(payload)
+    prov_label = (provider_type or "").strip()
+    bullet_line = (
+        f"{_REFERRAL_BULLET_PREFIX}{prov_label}" if prov_label else ""
+    )
 
     patient = (payload or {}).get("patient") or {}
     if not isinstance(patient, dict):
@@ -1028,11 +1021,11 @@ def referral_letter_editable_text(payload: dict, provider_type: str) -> str:
     lines.append("To Whom It May Concern,")
     lines.append("")
     lines.append(body.strip())
-    if bullets:
+    if bullet_line:
         lines.append("")
         lines.append(_REFERRAL_HEADER_LABEL)
-        lines.append("")  # extra space between header and first bullet
-        lines.extend(bullets)
+        lines.append("")  # extra space between header and the bullet
+        lines.append(bullet_line)
     lines.append("")
     lines.append("Sincerely,")
     lines.append("")
@@ -1142,8 +1135,13 @@ def build_referral_letter_pdf(
                     continue
                 stripped = line.strip()
                 low = stripped.lower()
-                # Bold section headers (current + legacy "Diagnostic Codes:" overrides).
-                if low in (_REFERRAL_HEADER_LABEL.lower(), "diagnostic codes:"):
+                # Bold section headers (current + legacy "Diagnostic Codes:"
+                # / plural "Specialist Referrals:" from prior saved overrides).
+                if low in (
+                    _REFERRAL_HEADER_LABEL.lower(),
+                    "specialist referrals:",
+                    "diagnostic codes:",
+                ):
                     story.append(Paragraph(
                         f"<b>{xml_escape(stripped)}</b>",
                         styles["ReferralLetterBody"],
