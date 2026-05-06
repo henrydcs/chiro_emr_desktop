@@ -223,6 +223,20 @@ def launch_new_form():
     subprocess.Popen([sys.executable, os.path.abspath(__file__), "--new"])
 
 
+def _argv_value(flag: str) -> str | None:
+    """Return the value following ``flag`` in sys.argv, or None if absent.
+
+    Supports both ``--flag value`` and ``--flag=value`` forms.
+    """
+    args = sys.argv
+    for i, a in enumerate(args):
+        if a == flag and i + 1 < len(args):
+            return args[i + 1]
+        if a.startswith(flag + "="):
+            return a.split("=", 1)[1]
+    return None
+
+
 def _next_number(existing: list[str], prefix: str) -> int:
     """
     Return the smallest positive integer N such that
@@ -272,6 +286,17 @@ class App(tk.Tk):
 
 
         self._start_blank = "--new" in sys.argv
+
+        # ---- Shell integration (optional CLI flags from shell_app.py) ----
+        # --from-shell                : show the "Exit to Documents" button
+        # --shell-state-file <path>   : where to mirror the active patient
+        # --open-exam <path>          : auto-load this exam JSON on startup
+        self._from_shell = "--from-shell" in sys.argv
+        self._shell_state_file: str | None = _argv_value("--shell-state-file")
+        self._startup_open_exam: str | None = _argv_value("--open-exam")
+        # When launched from the shell, do NOT autoload last case unless --open-exam was given
+        if self._from_shell and not self._startup_open_exam:
+            self._start_blank = True
 
         self.title("PI Exams – SOAP Builder")
 
@@ -357,6 +382,14 @@ class App(tk.Tk):
         self._wire_autosave_triggers()
 
         self._apply_demographics_visibility()
+
+        # When launched from the shell, intercept the close button so we can
+        # mirror the active patient back to the shell state file before exit.
+        if getattr(self, "_from_shell", False):
+            try:
+                self.protocol("WM_DELETE_WINDOW", self._exit_to_documents)
+            except Exception:
+                pass
 
         
         
@@ -3391,6 +3424,21 @@ class App(tk.Tk):
         )
         self.demo_toggle_btn.pack(side="left")
 
+        # When launched from the EMR shell, pin an "Exit to Documents" button
+        # at the top-right so the user always has a one-click return path.
+        if getattr(self, "_from_shell", False):
+            self.exit_to_docs_btn = tk.Button(
+                demo_top,
+                text="✕  Exit to Documents",
+                command=self._exit_to_documents,
+                bg="#DC2626", fg="white",
+                activebackground="#B91C1C", activeforeground="white",
+                relief="flat", bd=0, padx=12, pady=4,
+                font=("Segoe UI", 10, "bold"),
+                cursor="hand2",
+            )
+            self.exit_to_docs_btn.pack(side="right", padx=(6, 0))
+
         self._patient_search_last_var = tk.StringVar(value="")
         self._patient_search_first_var = tk.StringVar(value="")
         self._patient_search_dob_var = tk.StringVar(value="")
@@ -4454,6 +4502,50 @@ class App(tk.Tk):
         prov = (patient.get("provider") or "").strip()
         self.provider_var.set(prov if prov else PROVIDER_NAME)
 
+        # Mirror the new active patient back to the shell so when SOAP exits,
+        # the Documents page reflects the latest selection.
+        self._mirror_active_patient_to_shell_state()
+
+    # ---------- Shell integration helpers ----------
+    def _mirror_active_patient_to_shell_state(self) -> None:
+        """If launched with --shell-state-file, write the current patient there."""
+        path = getattr(self, "_shell_state_file", None)
+        if not path:
+            return
+        try:
+            pid = getattr(self, "current_patient_id", None) or ""
+            last = (self.last_name_var.get() or "").strip()
+            first = (self.first_name_var.get() or "").strip()
+            label = to_last_first(last, first) or pid
+            folder = self.get_current_patient_root() or ""
+            payload = {
+                "active_patient_id": pid,
+                "active_patient_folder": folder,
+                "active_patient_label": label,
+            }
+            os.makedirs(os.path.dirname(path), exist_ok=True)
+            tmp = path + ".tmp"
+            with open(tmp, "w", encoding="utf-8") as f:
+                json.dump(payload, f, indent=2)
+            os.replace(tmp, path)
+        except Exception:
+            pass
+
+    def _exit_to_documents(self) -> None:
+        """Save current state then close, returning control to the EMR shell."""
+        try:
+            self._autosave(force=True)
+        except Exception:
+            pass
+        try:
+            self._mirror_active_patient_to_shell_state()
+        except Exception:
+            pass
+        try:
+            self.destroy()
+        except Exception:
+            os._exit(0)
+
     def _finish_patient_switch_no_saved_visits(self):
         self._loading = True
         try:
@@ -4644,6 +4736,23 @@ class App(tk.Tk):
         return os.path.join(patient_root, PATIENT_SUBDIR_EXAMS, filename)
 
     def autoload_last_case_on_startup(self):
+        # If launched by the shell with a specific exam, prefer that.
+        startup_exam = getattr(self, "_startup_open_exam", None)
+        if startup_exam and os.path.exists(startup_exam):
+            try:
+                self.load_case_from_path(startup_exam)
+                self.status_var.set(f"Opened from Documents: {os.path.basename(startup_exam)}")
+                self._rebuild_exam_nav_buttons()
+                try:
+                    self.tk_docs_page.refresh()
+                except Exception:
+                    pass
+                self._mirror_active_patient_to_shell_state()
+                return
+            except Exception as e:
+                self.status_var.set(f"Could not open requested exam: {e}")
+                # fall through to default behavior
+
         if getattr(self, "_start_blank", False):
             self.status_var.set("Ready. (New blank form)")
             self._apply_exam_color_theme()
