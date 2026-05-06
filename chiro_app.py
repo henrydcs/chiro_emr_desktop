@@ -186,6 +186,14 @@ def load_patient(patient_id: str) -> dict:
     return json.loads((folder / "patient.json").read_text(encoding="utf-8"))
 
 
+def _patient_id_from_folder_name(folder_name: str) -> str:
+    """Resolve stable patient id from an id_cases folder name (pid-only or …__pid)."""
+    name = (folder_name or "").strip()
+    if "__" in name:
+        return name.rsplit("__", 1)[-1].strip()
+    return name
+
+
 ALERTS_FILENAME = "alerts_dashboard.json"
 
 def _ensure_json_file(path: str, default_obj=None):
@@ -330,6 +338,11 @@ class App(tk.Tk):
         self._tk_logo_image = None     
 
         self.current_patient_id = None
+
+        self._patient_search_popup = None
+        self._patient_search_listbox = None
+        self._patient_search_after_id = None
+        self._patient_search_results: list[dict] = []
 
         self.current_doc_label_var = tk.StringVar(value="")
 
@@ -3376,7 +3389,43 @@ class App(tk.Tk):
             text="Hide Demographics",
             command=self._toggle_demographics
         )
-        self.demo_toggle_btn.pack(side="left")          
+        self.demo_toggle_btn.pack(side="left")
+
+        self._patient_search_last_var = tk.StringVar(value="")
+        self._patient_search_first_var = tk.StringVar(value="")
+        self._patient_search_dob_var = tk.StringVar(value="")
+
+        ttk.Label(demo_top, text="  Find:", foreground="gray").pack(side="left", padx=(10, 4))
+
+        ttk.Label(demo_top, text="Last").pack(side="left", padx=(0, 2))
+        self._patient_search_last_entry = ttk.Entry(
+            demo_top, textvariable=self._patient_search_last_var, width=14
+        )
+        self._patient_search_last_entry.pack(side="left", padx=(0, 6))
+
+        ttk.Label(demo_top, text="First").pack(side="left", padx=(0, 2))
+        self._patient_search_first_entry = ttk.Entry(
+            demo_top, textvariable=self._patient_search_first_var, width=14
+        )
+        self._patient_search_first_entry.pack(side="left", padx=(0, 6))
+
+        ttk.Label(demo_top, text="DOB").pack(side="left", padx=(0, 2))
+        self._patient_search_dob_entry = ttk.Entry(
+            demo_top, textvariable=self._patient_search_dob_var, width=12
+        )
+        self._patient_search_dob_entry.pack(side="left", padx=(0, 0))
+
+        self._patient_search_entries = [
+            self._patient_search_last_entry,
+            self._patient_search_first_entry,
+            self._patient_search_dob_entry,
+        ]
+        for _ent in self._patient_search_entries:
+            _ent.bind("<KeyRelease>", self._on_patient_search_keyrelease)
+            _ent.bind("<FocusOut>", lambda e: self.after(120, self._patient_search_focus_out_check))
+            _ent.bind("<Escape>", self._on_patient_search_escape)
+            _ent.bind("<Return>", self._on_patient_search_return)
+            _ent.bind("<Down>", self._on_patient_search_down)
         
         # One-line summary row (shown only when collapsed)
         self.demo_summary_row = ttk.Frame(demo_wrap)
@@ -3869,23 +3918,23 @@ class App(tk.Tk):
             else:
                 btn.configure(style="TButton")
     
-    # Then update _exam_index_path() (lines 1809-1816) to:
-    def _exam_index_path(self) -> str | None:
-        patient_root = self.get_current_patient_root()
+    def _exam_index_path_for_root(self, patient_root: str | None) -> str | None:
         if not patient_root:
             return None
         ensure_patient_dirs(patient_root)
-        index_dir = os.path.join(patient_root, EXAM_INDEX_SUBDIR)  
+        index_dir = os.path.join(patient_root, EXAM_INDEX_SUBDIR)
         os.makedirs(index_dir, exist_ok=True)
         return os.path.join(index_dir, EXAM_INDEX_FILENAME)
 
-    def _load_dynamic_exams_for_patient(self) -> list[str]:
+    def _exam_index_path(self) -> str | None:
+        return self._exam_index_path_for_root(self.get_current_patient_root())
+
+    def _load_dynamic_exams_for_patient_root(self, patient_root: str | None) -> list[str]:
         """
-        Returns patient-specific exam list from _exam_index.json.
+        Returns patient-specific exam list from _exam_index.json for a given folder.
         Checks index_exam_number/ first, then exams/ (legacy). Migrates if found in legacy.
         Returns empty list if no index or invalid; no base exams are injected.
         """
-        patient_root = self.get_current_patient_root()
         if not patient_root:
             return list(EMPTY_EXAMS)
 
@@ -3894,7 +3943,6 @@ class App(tk.Tk):
         index_dir = os.path.join(patient_root, EXAM_INDEX_SUBDIR)
         os.makedirs(index_dir, exist_ok=True)
 
-        # Try new location first, then legacy (exams/)
         primary_path = os.path.join(index_dir, EXAM_INDEX_FILENAME)
         legacy_path = os.path.join(exams_dir, EXAM_INDEX_FILENAME)
 
@@ -3909,7 +3957,6 @@ class App(tk.Tk):
             if not isinstance(lst, list):
                 return list(EMPTY_EXAMS)
 
-            # normalize + de-dupe but preserve order
             out = []
             seen = set()
             for x in lst:
@@ -3922,7 +3969,6 @@ class App(tk.Tk):
                 seen.add(k)
                 out.append(s)
 
-            # Migrate from legacy to new location
             if p == legacy_path and out:
                 try:
                     with open(primary_path, "w", encoding="utf-8") as f:
@@ -3933,6 +3979,9 @@ class App(tk.Tk):
             return out
         except Exception:
             return list(EMPTY_EXAMS)
+
+    def _load_dynamic_exams_for_patient(self) -> list[str]:
+        return self._load_dynamic_exams_for_patient_root(self.get_current_patient_root())
 
     def _classify_exam_type(self, exam_name: str) -> str | None:
         """
@@ -4023,6 +4072,519 @@ class App(tk.Tk):
                 json.dump({"exams": list(self.exams)}, f, indent=2)
         except Exception:
             pass
+
+    # ---------- Patient search (id_cases) ----------
+
+    def _read_patient_json_from_folder(self, folder: Path) -> dict:
+        """Return merged patient dict from patient.json if present; {} if missing/unreadable."""
+        pjson = folder / "patient.json"
+        if not pjson.is_file():
+            return {}
+        try:
+            raw = json.loads(pjson.read_text(encoding="utf-8"))
+        except Exception:
+            return {}
+        if not isinstance(raw, dict):
+            return {}
+        inner = raw.get("patient")
+        if isinstance(inner, dict):
+            return inner
+        return raw
+
+    def _read_demographics_from_any_exam(self, folder: Path) -> dict:
+        """Pull last/first/dob from any exam JSON in <folder>/exams; prefer most recently modified."""
+        exams_dir = folder / PATIENT_SUBDIR_EXAMS
+        if not exams_dir.is_dir():
+            return {}
+        try:
+            files = [p for p in exams_dir.iterdir() if p.is_file() and p.suffix.lower() == ".json"]
+        except Exception:
+            return {}
+        files = [p for p in files if p.name.lower() != "_exam_index.json"]
+        if not files:
+            return {}
+        try:
+            files.sort(key=lambda p: p.stat().st_mtime, reverse=True)
+        except Exception:
+            pass
+        for p in files:
+            try:
+                payload = json.loads(p.read_text(encoding="utf-8")) or {}
+            except Exception:
+                continue
+            patient = payload.get("patient") if isinstance(payload, dict) else None
+            if isinstance(patient, dict):
+                last = (patient.get("last_name") or "").strip()
+                first = (patient.get("first_name") or "").strip()
+                dob = (patient.get("dob") or "").strip()
+                pid = (patient.get("patient_id") or "").strip()
+                if last or first or dob or pid:
+                    return {
+                        "last_name": last,
+                        "first_name": first,
+                        "dob": dob,
+                        "patient_id": pid,
+                    }
+        return {}
+
+    def _names_from_folder_name(self, folder_name: str) -> tuple[str, str]:
+        """Parse 'last_first__pid' folder names; returns ('', '') if not in that format."""
+        name = (folder_name or "").strip()
+        if "__" not in name:
+            return ("", "")
+        prefix = name.rsplit("__", 1)[0]
+        if "_" not in prefix:
+            return ("", "")
+        last_tok, first_tok = prefix.split("_", 1)
+        clean = lambda s: re.sub(r"_+", " ", s).strip()
+        last = clean(last_tok)
+        first = clean(first_tok)
+        if last.lower() == "unknown":
+            last = ""
+        if first.lower() == "unknown":
+            first = ""
+        return (last, first)
+
+    def _patient_folder_search_record(self, folder: Path) -> dict | None:
+        if not folder.is_dir():
+            return None
+        patient = self._read_patient_json_from_folder(folder)
+        if not patient:
+            patient = self._read_demographics_from_any_exam(folder)
+
+        pid = (patient.get("patient_id") or "").strip() or _patient_id_from_folder_name(folder.name)
+        last = (patient.get("last_name") or "").strip()
+        first = (patient.get("first_name") or "").strip()
+        dob = (patient.get("dob") or "").strip()
+
+        if not last and not first:
+            fl, ff = self._names_from_folder_name(folder.name)
+            last = last or fl
+            first = first or ff
+
+        label = to_last_first(last, first) or folder.name
+        return {
+            "folder": str(folder.resolve()),
+            "patient_id": pid,
+            "last": last,
+            "first": first,
+            "dob": dob,
+            "label": label,
+        }
+
+    def _patient_record_matches_filters(
+        self, rec: dict, last_q: str, first_q: str, dob_q: str
+    ) -> bool:
+        last_n = (rec.get("last") or "").lower()
+        first_n = (rec.get("first") or "").lower()
+        dob_s = rec.get("dob") or ""
+
+        if last_q and not last_n.startswith(last_q):
+            return False
+        if first_q and not first_n.startswith(first_q):
+            return False
+        if dob_q and not dob_s.startswith(dob_q):
+            return False
+        return True
+
+    def _scan_patients_for_search(
+        self, last_q: str, first_q: str, dob_q: str
+    ) -> list[dict]:
+        last_q = (last_q or "").strip().lower()
+        first_q = (first_q or "").strip().lower()
+        dob_q = (dob_q or "").strip()
+
+        if not (last_q or first_q or dob_q):
+            return []
+
+        root = Path(PATIENTS_ID_ROOT)
+        matches: list[dict] = []
+        try:
+            children = sorted([p for p in root.iterdir() if p.is_dir()], key=lambda p: p.name.lower())
+        except Exception:
+            return []
+        for folder in children:
+            rec = self._patient_folder_search_record(folder)
+            if rec and self._patient_record_matches_filters(rec, last_q, first_q, dob_q):
+                matches.append(rec)
+        matches.sort(
+            key=lambda r: (
+                (r.get("last") or "").lower(),
+                (r.get("first") or "").lower(),
+                r.get("patient_id") or "",
+            )
+        )
+        return matches[:80]
+
+    def _patient_search_widget_is_descendant(self, widget, ancestor) -> bool:
+        w = widget
+        while w is not None:
+            try:
+                if w == ancestor:
+                    return True
+            except Exception:
+                break
+            w = getattr(w, "master", None)
+        return False
+
+    def _patient_search_hide_popup(self):
+        if self._patient_search_popup is not None:
+            try:
+                if self._patient_search_popup.winfo_exists():
+                    self._patient_search_popup.destroy()
+            except Exception:
+                pass
+        self._patient_search_popup = None
+        self._patient_search_listbox = None
+
+    def _patient_search_focus_out_check(self):
+        pop = self._patient_search_popup
+        if pop is None:
+            return
+        try:
+            exists = pop.winfo_exists()
+        except Exception:
+            exists = False
+        if not exists:
+            self._patient_search_popup = None
+            self._patient_search_listbox = None
+            return
+        fg = self.focus_get()
+        if fg is None:
+            self._patient_search_hide_popup()
+            return
+        for ent in getattr(self, "_patient_search_entries", []) or []:
+            if fg == ent:
+                return
+        if self._patient_search_widget_is_descendant(fg, pop):
+            return
+        self._patient_search_hide_popup()
+
+    def _on_patient_search_escape(self, event=None):
+        self._patient_search_hide_popup()
+        return "break"
+
+    def _on_patient_search_down(self, event=None):
+        lb = self._patient_search_listbox
+        pop = self._patient_search_popup
+        if lb is None or pop is None:
+            return None
+        try:
+            if not pop.winfo_exists():
+                return None
+        except Exception:
+            return None
+        if lb.size() < 1:
+            return None
+        lb.focus_set()
+        lb.selection_clear(0, tk.END)
+        lb.selection_set(0)
+        lb.activate(0)
+        return "break"
+
+    def _on_patient_search_return(self, event=None):
+        if self._patient_search_popup and self._patient_search_popup.winfo_exists():
+            if self._patient_search_results:
+                idx = 0
+                lb = self._patient_search_listbox
+                if lb:
+                    sel = lb.curselection()
+                    if sel:
+                        idx = int(sel[0])
+                self._activate_patient_search_index(idx)
+            return "break"
+        return None
+
+    def _on_patient_search_keyrelease(self, event=None):
+        keysym = getattr(event, "keysym", "") or ""
+        if keysym in ("Shift_L", "Shift_R", "Control_L", "Control_R", "Alt_L", "Alt_R", "Escape"):
+            return
+        if keysym in ("Up", "Down", "Return") and self._patient_search_popup and self._patient_search_popup.winfo_exists():
+            return
+        if self._patient_search_after_id is not None:
+            try:
+                self.after_cancel(self._patient_search_after_id)
+            except Exception:
+                pass
+        self._patient_search_after_id = self.after(220, self._patient_search_refresh_debounced)
+
+    def _patient_search_refresh_debounced(self):
+        self._patient_search_after_id = None
+        last_q = self._patient_search_last_var.get()
+        first_q = self._patient_search_first_var.get()
+        dob_q = self._patient_search_dob_var.get()
+        rows = self._scan_patients_for_search(last_q, first_q, dob_q)
+        self._patient_search_results = rows
+        if not rows:
+            self._patient_search_hide_popup()
+            return
+        self._patient_search_show_popup(rows)
+
+    def _patient_search_show_popup(self, rows: list[dict]):
+        self._patient_search_hide_popup()
+        pop = tk.Toplevel(self)
+        pop.wm_overrideredirect(True)
+        try:
+            pop.attributes("-topmost", True)
+        except Exception:
+            pass
+
+        lb_h = min(14, max(5, len(rows)))
+        lb = tk.Listbox(
+            pop,
+            height=lb_h,
+            width=62,
+            activestyle="dotbox",
+            font=("Segoe UI", 10),
+            selectmode=tk.SINGLE,
+        )
+        lb.pack(fill="both", expand=True)
+
+        for rec in rows:
+            dob_s = (rec.get("dob") or "").strip()
+            tail = f"   ·   DOB {dob_s}" if dob_s else ""
+            lb.insert(tk.END, f"{rec.get('label', '')}   ({rec.get('patient_id', '')}){tail}")
+
+        self.update_idletasks()
+        ent = self._patient_search_last_entry
+        x = ent.winfo_rootx()
+        y = ent.winfo_rooty() + ent.winfo_height()
+        pop.geometry(f"+{x}+{y}")
+
+        def pick_from_event(event=None):
+            sel = lb.curselection()
+            if not sel:
+                return
+            self._activate_patient_search_index(int(sel[0]))
+
+        lb.bind("<Double-Button-1>", pick_from_event)
+        lb.bind("<Return>", pick_from_event)
+        pop.bind("<Escape>", lambda e: self._on_patient_search_escape())
+        lb.bind("<Escape>", lambda e: self._on_patient_search_escape())
+
+        self._patient_search_popup = pop
+        self._patient_search_listbox = lb
+
+    def _activate_patient_search_index(self, index: int):
+        if index < 0 or index >= len(self._patient_search_results):
+            return
+        rec = self._patient_search_results[index]
+        self._switch_to_patient_from_search(rec)
+
+    def _collect_visits_for_patient_root(self, patient_root: str) -> list[tuple[str, str, str]]:
+        """Saved exams with files: [(exam_name, exam_date_mmddyyyy, path), ...] newest first."""
+        out: list[tuple[str, str, str]] = []
+        exams_dir = os.path.join(patient_root, PATIENT_SUBDIR_EXAMS)
+        if not os.path.isdir(exams_dir):
+            return out
+
+        indexed = self._load_dynamic_exams_for_patient_root(patient_root)
+        seen: set[str] = set()
+
+        def push_row(exam_name: str, path: str):
+            nc = os.path.normcase(os.path.normpath(path))
+            if nc in seen:
+                return
+            exam_date = ""
+            display_exam = exam_name
+            try:
+                with open(path, "r", encoding="utf-8") as f:
+                    payload = json.load(f) or {}
+                display_exam = (payload.get("exam") or "").strip() or exam_name
+                patient = payload.get("patient") or {}
+                if isinstance(patient, dict):
+                    exam_date = normalize_mmddyyyy(patient.get("exam_date") or "") or ""
+            except Exception:
+                display_exam = exam_name
+            out.append((display_exam, exam_date, path))
+            seen.add(nc)
+
+        for exam in indexed:
+            path = os.path.join(exams_dir, f"{safe_slug(exam)}.json")
+            if os.path.isfile(path):
+                push_row(exam, path)
+
+        try:
+            for fn in os.listdir(exams_dir):
+                if not fn.lower().endswith(".json"):
+                    continue
+                if fn.lower() == "_exam_index.json":
+                    continue
+                path = os.path.join(exams_dir, fn)
+                nc = os.path.normcase(os.path.normpath(path))
+                if nc in seen:
+                    continue
+                try:
+                    with open(path, "r", encoding="utf-8") as f:
+                        payload = json.load(f) or {}
+                    ex_name = (payload.get("exam") or "").strip()
+                    if not ex_name:
+                        continue
+                    push_row(ex_name, path)
+                except Exception:
+                    continue
+        except Exception:
+            pass
+
+        def sort_key(item: tuple[str, str, str]):
+            _, date_s, _ = item
+            try:
+                if date_s:
+                    return datetime.strptime(date_s, "%m/%d/%Y")
+            except Exception:
+                pass
+            return datetime.min
+
+        out.sort(key=sort_key, reverse=True)
+        return out
+
+    def _apply_demographics_from_patient_folder(self, folder: Path):
+        patient = self._read_patient_json_from_folder(folder)
+        pid = (patient.get("patient_id") or "").strip() or _patient_id_from_folder_name(folder.name)
+
+        self.current_patient_id = pid
+        self.last_name_var.set(patient.get("last_name", "") or "")
+        self.first_name_var.set(patient.get("first_name", "") or "")
+        self.dob_var.set(patient.get("dob", "") or "")
+        self.doi_var.set(patient.get("doi", "") or "")
+        self.exam_date_var.set(
+            normalize_mmddyyyy(patient.get("exam_date", "")) or today_mmddyyyy()
+        )
+        self.claim_var.set(patient.get("claim", "") or "")
+        prov = (patient.get("provider") or "").strip()
+        self.provider_var.set(prov if prov else PROVIDER_NAME)
+
+    def _finish_patient_switch_no_saved_visits(self):
+        self._loading = True
+        try:
+            self._apply_soap_to_ui({})
+            if self.exams:
+                self.current_exam.set(self.exams[0])
+            else:
+                self.current_exam.set("")
+            self.current_case_path = None
+            exams_list = list(self.exams or [])
+            self.last_exam_pdf_paths = {e: "" for e in exams_list}
+            self.last_imaging_letter_pdf_paths = {e: [] for e in exams_list}
+            self.last_modalities_letter_pdf_paths = {e: "" for e in exams_list}
+            self.last_referral_letter_pdf_paths = {e: [] for e in exams_list}
+            self.imaging_letter_dx_selections = {e: {} for e in exams_list}
+            self.imaging_letter_text_overrides = {e: {} for e in exams_list}
+            self.referral_letter_text_overrides = {e: {} for e in exams_list}
+            self.modalities_letter_text_overrides = {e: "" for e in exams_list}
+            self.modalities_letter_staff_signatures = {e: "" for e in exams_list}
+            self._set_current_doc_label()
+            self._apply_exam_color_theme()
+            self._refresh_exam_button_styles()
+            try:
+                self.tk_docs_page.refresh()
+            except Exception:
+                pass
+            self.after_idle(self.show_current_patient_alerts_popup)
+            try:
+                self._refresh_referral_toggle_buttons()
+            except Exception:
+                pass
+        finally:
+            self._loading = False
+        self.status_var.set("Patient loaded (no saved visits yet).")
+
+    def _show_visit_picker_for_search(self, visits: list[tuple[str, str, str]], rec: dict, folder: Path):
+        dlg = tk.Toplevel(self)
+        dlg.title("Choose visit")
+        dlg.transient(self)
+        dlg.grab_set()
+
+        who = (rec.get("label") or "").strip() or rec.get("patient_id") or "Patient"
+        ttk.Label(dlg, text=f"Open a visit for {who}").pack(anchor="w", padx=12, pady=(12, 6))
+
+        frame = ttk.Frame(dlg)
+        frame.pack(fill="both", expand=True, padx=12, pady=(0, 10))
+
+        lb = tk.Listbox(frame, height=min(18, max(6, len(visits))), width=72, font=("Segoe UI", 10))
+        scroll = ttk.Scrollbar(frame, orient="vertical", command=lb.yview)
+        lb.configure(yscrollcommand=scroll.set)
+
+        for exam_name, exam_date, _path in visits:
+            disp_date = exam_date.strip() if exam_date else "(no date)"
+            lb.insert(tk.END, f"{exam_name}   —   Visit date: {disp_date}")
+
+        lb.pack(side="left", fill="both", expand=True)
+        scroll.pack(side="right", fill="y")
+
+        def cleanup_grab():
+            try:
+                dlg.grab_release()
+            except Exception:
+                pass
+
+        def open_selected(event=None):
+            sel = lb.curselection()
+            if not sel:
+                messagebox.showwarning("Choose visit", "Select a visit from the list.", parent=dlg)
+                return
+            idx = int(sel[0])
+            path = visits[idx][2]
+            cleanup_grab()
+            dlg.destroy()
+            self._apply_demographics_from_patient_folder(folder)
+            self.exams = self._load_dynamic_exams_for_patient_root(str(folder))
+            self._rebuild_exam_nav_buttons()
+            try:
+                self.load_case_from_path(path)
+            except Exception as e:
+                messagebox.showerror("Load failed", f"Could not open visit:\n{e}")
+                self._finish_patient_switch_no_saved_visits()
+
+        def cancel():
+            cleanup_grab()
+            dlg.destroy()
+
+        btns = ttk.Frame(dlg)
+        btns.pack(fill="x", padx=12, pady=(0, 12))
+        ttk.Button(btns, text="Open", command=open_selected).pack(side="right", padx=(8, 0))
+        ttk.Button(btns, text="Cancel", command=cancel).pack(side="right")
+
+        lb.bind("<Double-Button-1>", open_selected)
+        lb.bind("<Return>", open_selected)
+
+        dlg.protocol("WM_DELETE_WINDOW", cancel)
+        dlg.update_idletasks()
+        dlg.geometry(f"+{self.winfo_rootx() + 80}+{self.winfo_rooty() + 80}")
+
+    def _switch_to_patient_from_search(self, rec: dict):
+        folder = Path(rec["folder"])
+        patient_root = str(folder)
+        try:
+            self._autosave(force=True)
+        except Exception:
+            pass
+
+        visits = self._collect_visits_for_patient_root(patient_root)
+        self._patient_search_last_var.set("")
+        self._patient_search_first_var.set("")
+        self._patient_search_dob_var.set("")
+        self._patient_search_hide_popup()
+
+        if len(visits) == 1:
+            self._apply_demographics_from_patient_folder(folder)
+            self.exams = self._load_dynamic_exams_for_patient_root(patient_root)
+            self._rebuild_exam_nav_buttons()
+            try:
+                self.load_case_from_path(visits[0][2])
+            except Exception as e:
+                messagebox.showerror("Load failed", f"Could not open visit:\n{e}")
+                self._finish_patient_switch_no_saved_visits()
+            return
+
+        if len(visits) > 1:
+            self._show_visit_picker_for_search(visits, rec, folder)
+            return
+
+        self._apply_demographics_from_patient_folder(folder)
+        self.exams = self._load_dynamic_exams_for_patient_root(patient_root)
+        self._rebuild_exam_nav_buttons()
+        self._finish_patient_switch_no_saved_visits()
 
     # ---------- Settings ----------
 
