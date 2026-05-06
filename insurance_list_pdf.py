@@ -1,17 +1,19 @@
-# attorney_list_pdf.py
+# insurance_list_pdf.py
 """
-PDF generator for the clinic-wide 'List of Attorneys' directory.
+PDF generator for the clinic-wide 'List of Insurance Carriers' directory.
 
 Public entry points:
-    - build_attorney_list_pdf(out_path, *, clinic_name, attorneys)
-    - canonical_pdf_paths(*, patient_root=None) -> dict
-        Returns the canonical write paths the rest of the app uses so that
+    - build_insurance_list_pdf(out_path, *, clinic_name, carriers)
+    - canonical_pdf_paths() -> dict
+        Returns the canonical write path the rest of the app uses so that
         every regeneration overwrites the SAME file (never creating
-        list_of_attorneys (1).pdf, etc.).
+        list_of_insurances (1).pdf, etc.). The PDF lives in the shared
+        Global Vault and is reachable from every patient chart.
 
-Layout: portrait Letter, header band with clinic name + 'List of Attorneys',
-generated date, and a paginated Table flowable listing each attorney with
-firm, contact, phone, fax, email, and city/state.
+Layout: portrait Letter, header band with clinic name + 'List of Insurance
+Carriers', generated date, and a paginated Table flowable listing each
+carrier with name/parent, payer ID, claims phone, fax, claims address,
+portal, and notes.
 """
 from __future__ import annotations
 
@@ -37,35 +39,23 @@ except Exception:
     REPORTLAB_OK = False
 
 
-# Filename is fixed so each regeneration overwrites the same file.
-LIST_PDF_FILENAME = "List_of_Attorneys.pdf"
+LIST_PDF_FILENAME = "List_of_Insurance_Carriers.pdf"
 
 
 # ---------------------------------------------------------------------------
 # Path helpers
 # ---------------------------------------------------------------------------
-def canonical_pdf_paths(*, patient_root: str | os.PathLike | None = None) -> dict:
-    """Where the 'List of Attorneys' PDF should always live.
+def canonical_pdf_paths() -> dict:
+    """Where the 'List of Insurance Carriers' PDF should always live.
 
-    The Attorney List is a clinic-wide reference document, not a per-patient
-    document, so it now lives in the shared Global Vault and is reachable from
-    every patient chart's "Global Vault" tab.
-
-    Returns:
-        {
-          "primary": <DATA_DIR>/global_vault/attorneys/List_of_Attorneys.pdf,
-        }
-
-    The ``patient_root`` argument is accepted for backward compatibility but
-    is intentionally ignored — we no longer mirror this PDF into per-patient
-    vaults. Existing copies inside <patient_root>/vault/attorney/ are left
-    untouched; they simply stop being refreshed.
+    The Insurance Directory is a clinic-wide reference document, so it lives
+    in the shared Global Vault (visible from every patient chart's Global
+    Vault tab).
     """
     from paths import global_vault_dir
-    out: dict = {}
-    primary = Path(global_vault_dir()) / "attorneys" / LIST_PDF_FILENAME
-    out["primary"] = primary
-    return out
+    return {
+        "primary": Path(global_vault_dir()) / "insurance" / LIST_PDF_FILENAME,
+    }
 
 
 # ---------------------------------------------------------------------------
@@ -89,49 +79,41 @@ def _text_para(text: str, style: ParagraphStyle) -> Paragraph:
 
 
 def _html_para(html: str, style: ParagraphStyle) -> Paragraph:
-    """Paragraph for already-built HTML-ish markup (caller is responsible
-    for escaping any user fragments inside)."""
+    """Paragraph for already-built HTML-ish markup."""
     return Paragraph(html or "", style)
 
 
-def _attorney_label_html(rec: dict) -> str:
-    firm = (rec.get("firm_name") or "").strip()
-    name = (rec.get("attorney_name") or "").strip()
-    if firm and name:
-        return f"<b>{_esc(firm)}</b><br/>{_esc(name)}"
-    return f"<b>{_esc(firm or name or '(unnamed)')}</b>"
+def _carrier_label_html(rec: dict) -> str:
+    name = (rec.get("name") or "").strip()
+    parent = (rec.get("parent_company") or "").strip()
+    if name and parent and parent.lower() != name.lower():
+        return f"<b>{_esc(name)}</b><br/><font size=8 color='#555555'>{_esc(parent)}</font>"
+    return f"<b>{_esc(name or parent or '(unnamed carrier)')}</b>"
 
 
-def _addr_line(rec: dict) -> str:
+def _addr_block(rec: dict) -> str:
+    a1 = (rec.get("claims_address1") or "").strip()
+    a2 = (rec.get("claims_address2") or "").strip()
     cs = ", ".join(filter(None, [
         (rec.get("city") or "").strip(),
         (rec.get("state") or "").strip(),
     ]))
     z = (rec.get("zip") or "").strip()
-    return (cs + " " + z).strip()
-
-
-def _contact_line(rec: dict) -> str:
-    bits = []
-    if rec.get("contact_name"):
-        bits.append(f"Contact: {rec['contact_name']}")
-    if rec.get("paralegal_name"):
-        bits.append(f"Paralegal: {rec['paralegal_name']}")
-    if rec.get("case_manager"):
-        bits.append(f"Case mgr: {rec['case_manager']}")
-    return "  •  ".join(bits)
+    last_line = (cs + " " + z).strip()
+    bits = [b for b in (a1, a2, last_line) if b]
+    return "<br/>".join(_esc(b) for b in bits)
 
 
 # ---------------------------------------------------------------------------
 # Public entry point
 # ---------------------------------------------------------------------------
-def build_attorney_list_pdf(
+def build_insurance_list_pdf(
     out_path: str | os.PathLike,
     *,
     clinic_name: str,
-    attorneys: Iterable[dict],
+    carriers: Iterable[dict],
 ) -> str:
-    """Render the 'List of Attorneys' PDF to out_path. Overwrites if exists."""
+    """Render the 'List of Insurance Carriers' PDF to out_path. Overwrites if exists."""
     if not REPORTLAB_OK:
         raise RuntimeError("ReportLab is not installed. Install with: pip install reportlab")
 
@@ -140,7 +122,7 @@ def build_attorney_list_pdf(
     if out_dir:
         os.makedirs(out_dir, exist_ok=True)
 
-    items = list(attorneys or [])
+    items = list(carriers or [])
 
     page_w, page_h = LETTER
     margin = 0.5 * inch
@@ -152,33 +134,33 @@ def build_attorney_list_pdf(
         rightMargin=margin,
         topMargin=margin,
         bottomMargin=margin,
-        title="List of Attorneys",
+        title="List of Insurance Carriers",
         author="Chiro EMR",
     )
 
     styles = getSampleStyleSheet()
     title_style = ParagraphStyle(
-        "AttyTitle", parent=styles["Title"],
+        "InsTitle", parent=styles["Title"],
         fontName="Helvetica-Bold", fontSize=20, leading=24,
         alignment=1, spaceAfter=2,
     )
     subtitle_style = ParagraphStyle(
-        "AttySubtitle", parent=styles["Normal"],
+        "InsSubtitle", parent=styles["Normal"],
         fontName="Helvetica", fontSize=10, leading=12,
         alignment=1, textColor=colors.HexColor("#444444"),
         spaceAfter=10,
     )
     h_style = ParagraphStyle(
-        "AttyTableH", parent=styles["Normal"],
+        "InsTableH", parent=styles["Normal"],
         fontName="Helvetica-Bold", fontSize=9, leading=11,
         textColor=colors.white, alignment=0,
     )
     cell_style = ParagraphStyle(
-        "AttyCell", parent=styles["Normal"],
+        "InsCell", parent=styles["Normal"],
         fontName="Helvetica", fontSize=9, leading=11,
     )
     cell_dim_style = ParagraphStyle(
-        "AttyCellDim", parent=cell_style,
+        "InsCellDim", parent=cell_style,
         textColor=colors.HexColor("#555555"), fontSize=8, leading=10,
     )
 
@@ -186,13 +168,13 @@ def build_attorney_list_pdf(
 
     # --- Header band -----------------------------------------------------
     flow.append(_html_para(
-        f"<b>{_esc((clinic_name or '').strip() or 'Attorney Directory')}</b>",
+        f"<b>{_esc((clinic_name or '').strip() or 'Insurance Directory')}</b>",
         subtitle_style,
     ))
-    flow.append(_text_para("List of Attorneys", title_style))
+    flow.append(_text_para("List of Insurance Carriers", title_style))
     flow.append(_text_para(
         f"Generated {datetime.now().strftime('%B %d, %Y at %I:%M %p')}  •  "
-        f"{len(items)} attorney{'s' if len(items) != 1 else ''} on file",
+        f"{len(items)} carrier{'s' if len(items) != 1 else ''} on file",
         subtitle_style,
     ))
     flow.append(Spacer(1, 4))
@@ -200,56 +182,56 @@ def build_attorney_list_pdf(
     # --- Table -----------------------------------------------------------
     header_cells = [
         _text_para("#", h_style),
-        _text_para("Firm / Attorney", h_style),
-        _text_para("Phone", h_style),
+        _text_para("Carrier", h_style),
+        _text_para("Payer ID", h_style),
+        _text_para("Claims Phone", h_style),
         _text_para("Fax", h_style),
-        _text_para("Email", h_style),
-        _text_para("City, State", h_style),
+        _text_para("Claims Address", h_style),
+        _text_para("Portal / Notes", h_style),
     ]
 
     body_rows: list[list] = []
     for i, rec in enumerate(items, start=1):
-        firm_cell_html = _attorney_label_html(rec)
-        contact_line = _contact_line(rec)
-        if contact_line:
-            firm_cell_html += f"<br/><font size=8 color='#555555'>{_esc(contact_line)}</font>"
+        carrier_cell = _carrier_label_html(rec)
+        addr_html = _addr_block(rec) or "—"
 
-        # Address shown as smaller second line if present
-        addr1 = (rec.get("address1") or "").strip()
-        addr2 = (rec.get("address2") or "").strip()
-        addr_extras = " ".join(filter(None, [addr1, addr2]))
-        city_state_cell_html = _esc(_addr_line(rec))
-        if addr_extras:
-            city_state_cell_html = (
-                f"{city_state_cell_html}"
-                f"<br/><font size=8 color='#555555'>{_esc(addr_extras)}</font>"
-            )
+        portal = (rec.get("portal_url") or "").strip()
+        notes = (rec.get("notes") or "").strip()
+        portal_bits = []
+        if portal:
+            portal_bits.append(_esc(portal))
+        if notes:
+            portal_bits.append(f"<font size=8 color='#555555'>{_esc(notes)}</font>")
+        portal_html = "<br/>".join(portal_bits) if portal_bits else "—"
 
         body_rows.append([
             _text_para(str(i), cell_style),
-            _html_para(firm_cell_html, cell_style),
-            _text_para((rec.get("phone") or "").strip(), cell_style),
+            _html_para(carrier_cell, cell_style),
+            _text_para((rec.get("payer_id") or "").strip(), cell_style),
+            _text_para((rec.get("claims_phone") or "").strip(), cell_style),
             _text_para((rec.get("fax") or "").strip(), cell_style),
-            _text_para((rec.get("email") or "").strip(), cell_style),
-            _html_para(city_state_cell_html, cell_style),
+            _html_para(addr_html, cell_style),
+            _html_para(portal_html, cell_style),
         ])
 
     if not body_rows:
         body_rows.append([
             _text_para("", cell_style),
-            _html_para("<i>(no attorneys on file)</i>", cell_dim_style),
+            _html_para("<i>(no carriers on file)</i>", cell_dim_style),
             _text_para("", cell_style), _text_para("", cell_style),
             _text_para("", cell_style), _text_para("", cell_style),
+            _text_para("", cell_style),
         ])
 
     table = Table(
         [header_cells] + body_rows,
         colWidths=[
             0.30 * inch,
-            2.40 * inch,
+            1.85 * inch,
+            0.75 * inch,
             0.95 * inch,
             0.85 * inch,
-            1.85 * inch,
+            1.65 * inch,
             1.15 * inch,
         ],
         repeatRows=1,
@@ -278,7 +260,7 @@ def build_attorney_list_pdf(
         canv.saveState()
         canv.setFont("Helvetica", 8)
         canv.setFillColor(colors.HexColor("#666666"))
-        canv.drawString(margin, margin / 2, f"List of Attorneys — {datetime.now().strftime('%Y-%m-%d')}")
+        canv.drawString(margin, margin / 2, f"List of Insurance Carriers — {datetime.now().strftime('%Y-%m-%d')}")
         page_str = f"Page {doc_.page}"
         canv.drawRightString(page_w - margin, margin / 2, page_str)
         canv.restoreState()

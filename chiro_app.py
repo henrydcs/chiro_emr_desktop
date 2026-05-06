@@ -45,6 +45,7 @@ from tkinter import ttk, messagebox, filedialog, simpledialog
 from datetime import datetime
 from diagnosis_page import DiagnosisPage
 from doc_vault_page import DocVaultPage
+from global_vault_page import GlobalVaultPage
 import re
 from HOI import HOIPage
 from plan_page import PlanPage
@@ -53,6 +54,7 @@ import tkinter.font as tkfont
 from alerts_popup import AlertsPopup
 import attorney_data as adata
 from attorney_demographics import AttorneyDemographicsWindow, AttorneyPickerDialog
+from insurance_demographics import InsuranceDemographicsWindow
 from config import PATIENTS_ID_ROOT
 from doc_vault_page import upsert_vault_file
 from patient_storage import new_patient_id, get_patient_root, find_patient_root
@@ -62,6 +64,7 @@ from pdf_export import (
     build_combined_pdf,
     build_imaging_recommendation_letter_pdf,
     build_modalities_recommendation_letter_pdf,
+    build_referral_letter_pdf,
     imaging_dx_all_ui_choices,
     imaging_dx_choices_by_body_part,
     imaging_recommendation_letter_editable_text,
@@ -69,6 +72,9 @@ from pdf_export import (
     imaging_recommendation_letter_should_generate,
     modalities_recommendation_letter_editable_text,
     modalities_recommendation_letter_should_generate,
+    referral_letter_editable_text,
+    referral_letter_should_generate,
+    referral_provider_types_in_payload,
 )
 from pdf_export import diagnosis_struct_to_live_preview_runs
 import copy
@@ -311,8 +317,10 @@ class App(tk.Tk):
         self.last_exam_pdf_paths: dict[str, str] = {}
         self.last_imaging_letter_pdf_paths: dict[str, list[str]] = {}
         self.last_modalities_letter_pdf_paths: dict[str, str] = {}
+        self.last_referral_letter_pdf_paths: dict[str, list[str]] = {}
         self.imaging_letter_dx_selections: dict[str, dict[str, dict[str, str]]] = {}
         self.imaging_letter_text_overrides: dict[str, dict[str, str]] = {}
+        self.referral_letter_text_overrides: dict[str, dict[str, str]] = {}
         self.modalities_letter_text_overrides: dict[str, str] = {}
         # When staff-letter region/exclude mappings change, ignore stale overrides until Save.
         self.modalities_letter_staff_signatures: dict[str, str] = {}
@@ -1637,6 +1645,12 @@ class App(tk.Tk):
         if not hasattr(self, "imaging_letter_text_overrides") or not isinstance(self.imaging_letter_text_overrides, dict):
             self.imaging_letter_text_overrides = {}
         self.imaging_letter_text_overrides[exam_name] = {}
+        if not hasattr(self, "last_referral_letter_pdf_paths") or not isinstance(self.last_referral_letter_pdf_paths, dict):
+            self.last_referral_letter_pdf_paths = {}
+        self.last_referral_letter_pdf_paths[exam_name] = []
+        if not hasattr(self, "referral_letter_text_overrides") or not isinstance(self.referral_letter_text_overrides, dict):
+            self.referral_letter_text_overrides = {}
+        self.referral_letter_text_overrides[exam_name] = {}
         if not hasattr(self, "modalities_letter_text_overrides") or not isinstance(self.modalities_letter_text_overrides, dict):
             self.modalities_letter_text_overrides = {}
         self.modalities_letter_text_overrides[exam_name] = ""
@@ -1753,6 +1767,24 @@ class App(tk.Tk):
                                 os.remove(os.path.join(vault_mod, fn))
                             except Exception:
                                 pass
+                        elif f"__{exam_slug}__referral_" in low and low.endswith(".pdf"):
+                            # Legacy: referral letters used to land here.
+                            try:
+                                os.remove(os.path.join(vault_mod, fn))
+                            except Exception:
+                                pass
+
+                vault_ref = os.path.join(patient_root, "vault", "referrals")
+                if os.path.isdir(vault_ref):
+                    for fn in os.listdir(vault_ref):
+                        low = fn.lower()
+                        if not low.endswith(".pdf"):
+                            continue
+                        if f"__{exam_slug}__referral_" in low:
+                            try:
+                                os.remove(os.path.join(vault_ref, fn))
+                            except Exception:
+                                pass
         except Exception:
             pass
 
@@ -1788,6 +1820,16 @@ class App(tk.Tk):
         try:
             if hasattr(self, "imaging_letter_text_overrides") and isinstance(self.imaging_letter_text_overrides, dict):
                 self.imaging_letter_text_overrides.pop(exam_name, None)
+        except Exception:
+            pass
+        try:
+            if hasattr(self, "last_referral_letter_pdf_paths") and isinstance(self.last_referral_letter_pdf_paths, dict):
+                self.last_referral_letter_pdf_paths.pop(exam_name, None)
+        except Exception:
+            pass
+        try:
+            if hasattr(self, "referral_letter_text_overrides") and isinstance(self.referral_letter_text_overrides, dict):
+                self.referral_letter_text_overrides.pop(exam_name, None)
         except Exception:
             pass
         try:
@@ -2331,6 +2373,303 @@ class App(tk.Tk):
             return
         self._on_imaging_recommendation_added(modality, body_part)
 
+    # =====================================================================
+    # Medical Referral Recommendation Letters
+    # (sibling of the imaging-letter system, but provider-type-driven)
+    # =====================================================================
+    def _on_referral_added(self, provider_type: str) -> None:
+        """Hook fired when the user adds a new referral provider type from
+        the Diagnosis page. The default behavior is a no-op: referral letters
+        autofill with all current diagnosis ICDs, so we don't prompt at add
+        time. Kept as a stub so the symmetry with imaging is obvious."""
+        return None
+
+    def _on_referral_clicked(self, provider_type: str) -> None:
+        """Double-click on an existing referral row → quick path to the
+        letter editor for that provider type."""
+        if not (provider_type or "").strip():
+            return
+        self._open_referral_recommendation_letter_editor(provider_type)
+
+    def _open_referral_recommendation_letter_editor(self, provider_type: str) -> None:
+        """Open editable text popup for a provider-specific medical referral letter."""
+        exam = (self.current_exam.get() or "").strip()
+        if not exam:
+            return
+        payload = self.make_payload() or {}
+        prov_key = (provider_type or "").strip().lower()
+
+        exam_override_map = self.referral_letter_text_overrides.get(exam, {})
+        if not isinstance(exam_override_map, dict):
+            exam_override_map = {}
+        current_text = (exam_override_map.get(prov_key) or "").strip()
+        if not current_text:
+            current_text = referral_letter_editable_text(payload, provider_type)
+
+        dlg = tk.Toplevel(self)
+        dlg.title(f"{provider_type} Referral Letter Editor")
+        dlg.transient(self)
+        dlg.grab_set()
+
+        outer = ttk.Frame(dlg, padding=10)
+        outer.grid(row=0, column=0, sticky="nsew")
+        dlg.rowconfigure(0, weight=1)
+        dlg.columnconfigure(0, weight=1)
+        outer.rowconfigure(1, weight=1)
+        outer.columnconfigure(0, weight=1)
+
+        ttk.Label(
+            outer,
+            text="Edit the letter text (from salutation through signature):",
+        ).grid(row=0, column=0, sticky="w", pady=(0, 6))
+
+        txt = tk.Text(outer, wrap="word", width=92, height=24, font=("Segoe UI", 10))
+        txt.grid(row=1, column=0, sticky="nsew")
+        txt.insert("1.0", current_text)
+
+        btns = ttk.Frame(outer)
+        btns.grid(row=2, column=0, sticky="e", pady=(8, 0))
+
+        def _reset_default():
+            fresh = referral_letter_editable_text(payload, provider_type)
+            txt.delete("1.0", "end")
+            txt.insert("1.0", fresh)
+
+        def _save_close():
+            val = txt.get("1.0", "end").strip()
+            if not hasattr(self, "referral_letter_text_overrides") or not isinstance(self.referral_letter_text_overrides, dict):
+                self.referral_letter_text_overrides = {}
+            em = self.referral_letter_text_overrides.get(exam, {})
+            if not isinstance(em, dict):
+                em = {}
+            em[prov_key] = val
+            self.referral_letter_text_overrides[exam] = em
+            try:
+                self.write_settings({"referral_letter_text_overrides": self.referral_letter_text_overrides})
+            except Exception:
+                pass
+            dlg.destroy()
+
+        ttk.Button(btns, text="Reset Default", command=_reset_default).grid(row=0, column=0, padx=(0, 6))
+        ttk.Button(btns, text="Cancel", command=dlg.destroy).grid(row=0, column=1, padx=(0, 6))
+        ttk.Button(btns, text="Save", command=_save_close).grid(row=0, column=2)
+
+        self.wait_window(dlg)
+
+    def _purge_stale_referral_letters_vault(self, patient_root: str, exam: str) -> None:
+        """Remove every prior referral-letter PDF for this exam in vault/referrals
+        (and any legacy copies still sitting in vault/messages from earlier builds).
+        Used when the referral set changes; the export step then re-creates only
+        the letters that still match the chart."""
+        exam_slug = safe_slug(exam).lower()
+        for sub in ("referrals", "messages"):
+            vault_dir = os.path.join(patient_root, "vault", sub)
+            if not os.path.isdir(vault_dir):
+                continue
+            try:
+                for fn in os.listdir(vault_dir):
+                    low = fn.lower()
+                    if not low.endswith(".pdf"):
+                        continue
+                    if f"__{exam_slug}__referral_" in low:
+                        try:
+                            os.remove(os.path.join(vault_dir, fn))
+                        except Exception:
+                            pass
+            except Exception:
+                pass
+
+    def _archive_referral_letters_off_chart(
+        self,
+        patient_root: str,
+        exam: str,
+        active_provider_slugs: set[str],
+    ) -> None:
+        """Rename auto-generated referral letters for this exam whose provider
+        type is no longer on the chart, instead of deleting (so historical
+        copies aren't lost when a referral is re-added it gets a fresh dated
+        filename). Also sweeps any legacy copies left behind in vault/messages
+        from before referrals had their own folder."""
+        exam_slug = safe_slug(exam).lower()
+        for sub in ("referrals", "messages"):
+            vault_dir = os.path.join(patient_root, "vault", sub)
+            if not os.path.isdir(vault_dir):
+                continue
+            try:
+                for fn in os.listdir(vault_dir):
+                    low = fn.lower()
+                    if not low.endswith(".pdf"):
+                        continue
+                    if "__archived_" in low:
+                        continue
+                    if f"__{exam_slug}__referral_" not in low:
+                        continue
+                    path = os.path.join(vault_dir, fn)
+                    if not os.path.isfile(path):
+                        continue
+                    m = re.search(rf"__{re.escape(exam_slug)}__referral_(.+)\.pdf$", low)
+                    if not m:
+                        continue
+                    slug = m.group(1)
+                    # In legacy vault/messages, also archive every referral PDF
+                    # because the new home is vault/referrals — even active ones
+                    # need to leave the old folder.
+                    if sub == "messages" or slug not in active_provider_slugs:
+                        self._rename_vault_file_archived(path)
+            except Exception:
+                pass
+
+    def _export_referral_recommendation_letter_vault(self, payload: dict, patient_root: str) -> list[str]:
+        """Build one referral-letter PDF per distinct provider type into
+        vault/messages. Returns the list of vault paths just written.
+
+        Filenames: ``MMDDYYYY__<exam>__referral_<provider_slug>.pdf``."""
+        exam = (payload.get("exam") or self.current_exam.get() or "").strip()
+        if not exam:
+            return []
+
+        provs = referral_provider_types_in_payload(payload)
+        should = referral_letter_should_generate(payload)
+
+        active_file_slugs: set[str] = set()
+        if should and provs:
+            active_file_slugs = {safe_slug(p).lower().replace(" ", "_") for p in provs}
+
+        if patient_root:
+            self._archive_referral_letters_off_chart(patient_root, exam, active_file_slugs)
+
+        if not should or not provs:
+            try:
+                self.last_referral_letter_pdf_paths[exam] = []
+                self.referral_letter_text_overrides[exam] = {}
+            except Exception:
+                pass
+            return []
+
+        if not patient_root or not REPORTLAB_OK:
+            return []
+
+        ensure_patient_dirs(patient_root)
+        pdf_dir = os.path.join(patient_root, PATIENT_SUBDIR_PDFS)
+        os.makedirs(pdf_dir, exist_ok=True)
+
+        date_str = normalize_mmddyyyy(self.exam_date_var.get()) or today_mmddyyyy()
+        date_slug = safe_slug(date_str)
+        exam_slug = safe_slug(exam)
+
+        # Drop overrides for provider types no longer on the chart.
+        keep_keys = {(p or "").strip().lower() for p in provs}
+        em_ov = self.referral_letter_text_overrides.get(exam, {})
+        if not isinstance(em_ov, dict):
+            em_ov = {}
+        trimmed_ov = {k: v for k, v in em_ov.items() if k in keep_keys}
+        self.referral_letter_text_overrides[exam] = trimmed_ov
+
+        vault_paths: list[str] = []
+        for prov in provs:
+            prov_slug = safe_slug(prov).lower().replace(" ", "_")
+            prov_key = (prov or "").strip().lower()
+            letter_text_override = (trimmed_ov.get(prov_key) or "").strip()
+            vault_name = f"{date_slug}__{exam_slug}__referral_{prov_slug}.pdf"
+            tmp_path = os.path.join(
+                pdf_dir, f".tmp_referral_letter__{exam_slug}__{prov_slug}.pdf",
+            )
+            try:
+                if build_referral_letter_pdf(
+                    tmp_path, payload, prov, letter_text_override,
+                ):
+                    vp = upsert_vault_file(patient_root, "referrals", tmp_path, vault_name)
+                    vault_paths.append(vp)
+            except Exception as e:
+                print("Referral letter vault upsert failed:", e)
+            finally:
+                try:
+                    if os.path.exists(tmp_path):
+                        os.remove(tmp_path)
+                except Exception:
+                    pass
+
+        try:
+            self.last_referral_letter_pdf_paths[exam] = list(vault_paths)
+        except Exception:
+            pass
+        return vault_paths
+
+    def _resolve_referral_letter_vault_paths(self, patient_root: str, exam: str) -> list[str]:
+        """All currently-named referral-letter PDFs for this exam in
+        vault/referrals (sorted by mtime). Skips archived copies."""
+        exam_slug = safe_slug(exam).lower()
+        vault_dir = os.path.join(patient_root, "vault", "referrals")
+        if not os.path.isdir(vault_dir):
+            return []
+        matches: list[str] = []
+        try:
+            for fn in os.listdir(vault_dir):
+                low = fn.lower()
+                if not low.endswith(".pdf"):
+                    continue
+                if "__archived_" in low:
+                    continue
+                if f"__{exam_slug}__referral_" in low:
+                    matches.append(os.path.join(vault_dir, fn))
+        except Exception:
+            return []
+        if not matches:
+            return []
+        try:
+            return sorted(matches, key=os.path.getmtime)
+        except Exception:
+            return matches
+
+    def _filter_active_referral_letter_paths(self, paths: list[str], exam: str) -> list[str]:
+        """Paths whose provider slug still matches a referral on the chart."""
+        exam = (exam or "").strip()
+        if not exam or not paths:
+            return list(paths or [])
+        ex_slug = safe_slug(exam).lower()
+        payload = self.make_payload() or {}
+        active_slugs = {
+            safe_slug(p).lower().replace(" ", "_")
+            for p in referral_provider_types_in_payload(payload)
+        }
+        out: list[str] = []
+        for p in paths:
+            if not p or not os.path.isfile(p):
+                continue
+            base = os.path.basename(p).lower()
+            if "__archived_" in base:
+                continue
+            m = re.search(rf"__{re.escape(ex_slug)}__referral_(.+)\.pdf$", base)
+            if not m:
+                continue
+            slug = m.group(1)
+            if not slug or slug not in active_slugs:
+                continue
+            out.append(p)
+        return out
+
+    def _on_referrals_changed_cleanup(self) -> None:
+        """After referral rows are removed in Diagnosis, sync vault PDFs and
+        saved letter state so the chart's referral letters always match the
+        current set of provider types."""
+        payload = self.make_payload() or {}
+        pr = self.get_current_patient_root() or ""
+        try:
+            self._export_referral_recommendation_letter_vault(payload, pr)
+        except Exception as e:
+            print("Referral letter sync after referral edit failed:", e)
+        try:
+            self.write_settings({
+                "last_referral_letter_pdfs": self.last_referral_letter_pdf_paths,
+                "referral_letter_text_overrides": self.referral_letter_text_overrides,
+            })
+        except Exception:
+            pass
+        try:
+            self.doc_vault_page.refresh_current_folder()
+        except Exception:
+            pass
+
     def _open_imaging_recommendation_letter_editor(self, modality: str) -> None:
         """Open editable text popup for a modality-specific imaging recommendation letter."""
         exam = (self.current_exam.get() or "").strip()
@@ -2730,6 +3069,10 @@ class App(tk.Tk):
             self._export_modalities_recommendation_letter_vault(payload, patient_root)
         except Exception as e:
             print("Modalities letter export failed:", e)
+        try:
+            self._export_referral_recommendation_letter_vault(payload, patient_root)
+        except Exception as e:
+            print("Referral letter export failed:", e)
 
         try:
             self.doc_vault_page.refresh_current_folder()
@@ -2742,8 +3085,10 @@ class App(tk.Tk):
             "last_all_exams_pdf": self.last_all_exams_pdf_path,
             "last_imaging_letter_pdfs": self.last_imaging_letter_pdf_paths,
             "last_modalities_letter_pdfs": self.last_modalities_letter_pdf_paths,
+            "last_referral_letter_pdfs": self.last_referral_letter_pdf_paths,
             "imaging_letter_dx_selections": self.imaging_letter_dx_selections,
             "imaging_letter_text_overrides": self.imaging_letter_text_overrides,
+            "referral_letter_text_overrides": self.referral_letter_text_overrides,
             "modalities_letter_text_overrides": self.modalities_letter_text_overrides,
             "modalities_letter_staff_signatures": self.modalities_letter_staff_signatures,
         })
@@ -2889,6 +3234,36 @@ class App(tk.Tk):
         if mod_valid:
             self.open_pdf_file(mod_valid)
 
+        # Referral letters (one PDF per provider type, vault/referrals).
+        ref_raw = self.last_referral_letter_pdf_paths.get(exam)
+        if isinstance(ref_raw, str):
+            ref_paths = [ref_raw] if ref_raw.strip() else []
+        elif isinstance(ref_raw, list):
+            ref_paths = [p for p in ref_raw if isinstance(p, str) and p.strip()]
+        else:
+            ref_paths = []
+
+        ref_valid = [p for p in ref_paths if p and os.path.isfile(p)]
+        ref_filtered = self._filter_active_referral_letter_paths(ref_valid, exam)
+        if len(ref_filtered) != len(ref_valid):
+            try:
+                self.last_referral_letter_pdf_paths[exam] = ref_filtered
+            except Exception:
+                pass
+        ref_valid = ref_filtered
+
+        patient_root = self.get_current_patient_root()
+        if patient_root and not ref_valid:
+            resolved_ref = self._resolve_referral_letter_vault_paths(patient_root, exam)
+            if resolved_ref:
+                resolved_ref = self._filter_active_referral_letter_paths(resolved_ref, exam)
+            if resolved_ref:
+                self.last_referral_letter_pdf_paths[exam] = resolved_ref
+                ref_valid = resolved_ref
+
+        for rp in ref_valid:
+            self.open_pdf_file(rp)
+
     def open_all_exams_pdf(self):
         self.open_pdf_file(self.last_all_exams_pdf_path)
 
@@ -2945,7 +3320,14 @@ class App(tk.Tk):
             text="Attorney Demographics",
             command=self._open_attorney_demographics_popup,
         )
-        self.attorney_btn.pack(side="left", padx=5)        
+        self.attorney_btn.pack(side="left", padx=5)
+
+        self.insurance_btn = ttk.Button(
+            toggle_row,
+            text="Insurance Demographics",
+            command=self._open_insurance_demographics_popup,
+        )
+        self.insurance_btn.pack(side="left", padx=5)
 
         # The actual clinic header frame (this will be hidden/shown)
         self.clinic_frame = ttk.Frame(self.header_container)
@@ -3147,6 +3529,10 @@ class App(tk.Tk):
             on_click_imaging_callback=self._on_imaging_recommendation_clicked,
             on_open_imaging_letter_callback=self._open_imaging_recommendation_letter_editor,
             on_imaging_recs_removed_callback=self._on_imaging_recs_changed_cleanup,
+            on_add_referral_callback=self._on_referral_added,
+            on_click_referral_callback=self._on_referral_clicked,
+            on_open_referral_letter_callback=self._open_referral_recommendation_letter_editor,
+            on_referrals_removed_callback=self._on_referrals_changed_cleanup,
         )
 
         self.plan_page = PlanPage(self.content, on_change=self.schedule_autosave)
@@ -3163,7 +3549,12 @@ class App(tk.Tk):
             get_patient_root_fn=self.get_current_patient_root,
             list_item_style_fn=self._vault_list_item_meta,
             sort_files_fn=self._sort_vault_imaging_files,
-        )        
+        )
+
+        self.global_vault_page = GlobalVaultPage(
+            self.content,
+            on_change_callback=self.schedule_autosave,
+        )
 
         # --- Tk Docs timeline page ---
         self.tk_docs_page = TkDocsPage(
@@ -3193,6 +3584,7 @@ class App(tk.Tk):
             "Plan": self.plan_page,
             "Docs": self.tk_docs_page,
             "Doc Vault": self.doc_vault_page,
+            "Global Vault": self.global_vault_page,
         }
 
         for page in self.pages.values():
@@ -3798,6 +4190,39 @@ class App(tk.Tk):
                         cleaned_mods[mk] = raw_text
                 self.imaging_letter_text_overrides[exam_clean] = cleaned_mods
 
+        # Referral letter persisted state (paths + text overrides) ---------
+        ref_pdf_map = settings.get("last_referral_letter_pdfs", {})
+        self.last_referral_letter_pdf_paths = {}
+        if isinstance(ref_pdf_map, dict):
+            for exam in self.exams:
+                v = ref_pdf_map.get(exam)
+                if isinstance(v, list):
+                    self.last_referral_letter_pdf_paths[exam] = [
+                        x for x in v if isinstance(x, str) and x.strip()
+                    ]
+                elif isinstance(v, str) and v.strip():
+                    self.last_referral_letter_pdf_paths[exam] = [v.strip()]
+                else:
+                    self.last_referral_letter_pdf_paths[exam] = []
+
+        ref_txt_map = settings.get("referral_letter_text_overrides", {})
+        self.referral_letter_text_overrides = {}
+        if isinstance(ref_txt_map, dict):
+            for exam, prov_map in ref_txt_map.items():
+                if not isinstance(exam, str) or not isinstance(prov_map, dict):
+                    continue
+                exam_clean = exam.strip()
+                if not exam_clean:
+                    continue
+                cleaned_provs: dict[str, str] = {}
+                for prov_key, raw_text in prov_map.items():
+                    if not isinstance(prov_key, str) or not isinstance(raw_text, str):
+                        continue
+                    pk = prov_key.strip().lower()
+                    if pk:
+                        cleaned_provs[pk] = raw_text
+                self.referral_letter_text_overrides[exam_clean] = cleaned_provs
+
         modal_txt_map = settings.get("modalities_letter_text_overrides", {})
         self.modalities_letter_text_overrides = {}
         if isinstance(modal_txt_map, dict):
@@ -4178,6 +4603,24 @@ class App(tk.Tk):
             "patient_root": patient_root,
             "current_exam": (self.current_exam.get() or "").strip(),
         }
+
+    # ============================================================
+    # Insurance Demographics + Stats
+    # ============================================================
+    def _open_insurance_demographics_popup(self):
+        """Open the Insurance Demographics + Stats window.
+
+        If a patient is currently loaded, lands on the 'This Patient' tab so
+        the user can immediately see/manage that patient's insurance policies.
+        Otherwise falls back to the Insurance Directory tab.
+        """
+        start = "patient" if self.get_current_patient_root() else "directory"
+        InsuranceDemographicsWindow(
+            self,
+            start_tab=start,
+            get_current_patient_fn=self._attorney_window_patient_info,
+            on_change_callback=self.schedule_autosave,
+        )
 
     def _build_referral_toggle_row(self, parent, *, row: int, padx: int):
         """Referral toggle buttons + at-a-glance patient attorney panel.
@@ -4930,8 +5373,9 @@ class App(tk.Tk):
             if pr:
                 self._export_imaging_recommendation_letter_vault(payload, pr)
                 self._export_modalities_recommendation_letter_vault(payload, pr)
+                self._export_referral_recommendation_letter_vault(payload, pr)
         except Exception as e:
-            print("Imaging letter export failed:", e)
+            print("Imaging / referral letter export failed:", e)
 
         try:
             self.doc_vault_page.refresh_current_folder()
@@ -4944,8 +5388,10 @@ class App(tk.Tk):
             "last_all_exams_pdf": self.last_all_exams_pdf_path,
             "last_imaging_letter_pdfs": self.last_imaging_letter_pdf_paths,
             "last_modalities_letter_pdfs": self.last_modalities_letter_pdf_paths,
+            "last_referral_letter_pdfs": self.last_referral_letter_pdf_paths,
             "imaging_letter_dx_selections": self.imaging_letter_dx_selections,
             "imaging_letter_text_overrides": self.imaging_letter_text_overrides,
+            "referral_letter_text_overrides": self.referral_letter_text_overrides,
             "modalities_letter_text_overrides": self.modalities_letter_text_overrides,
             "modalities_letter_staff_signatures": self.modalities_letter_staff_signatures,
         })
@@ -5091,8 +5537,10 @@ class App(tk.Tk):
         self.last_exam_pdf_paths = {e: "" for e in self.exams}
         self.last_imaging_letter_pdf_paths = {e: [] for e in self.exams}
         self.last_modalities_letter_pdf_paths = {e: "" for e in self.exams}
+        self.last_referral_letter_pdf_paths = {e: [] for e in self.exams}
         self.imaging_letter_dx_selections = {e: {} for e in self.exams}
         self.imaging_letter_text_overrides = {e: {} for e in self.exams}
+        self.referral_letter_text_overrides = {e: {} for e in self.exams}
         self.modalities_letter_text_overrides = {e: "" for e in self.exams}
         self.modalities_letter_staff_signatures = {e: "" for e in self.exams}
         self.last_all_exams_pdf_path = ""

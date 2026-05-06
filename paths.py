@@ -33,6 +33,7 @@ def get_data_dir() -> Path:
     (base / "exports").mkdir(parents=True, exist_ok=True)
     (base / "uploads").mkdir(parents=True, exist_ok=True)
     (base / "db").mkdir(parents=True, exist_ok=True)
+    (base / "global_vault").mkdir(parents=True, exist_ok=True)
 
     return base
 
@@ -51,3 +52,12 @@ def uploads_dir() -> Path:
 def db_dir() -> Path:
     """Root folder for SQLite databases"""
     return get_data_dir() / "db"
+
+def global_vault_dir() -> Path:
+    """Clinic-wide document vault (shared across all patient charts).
+
+    Holds reference documents that aren't tied to any single patient:
+    Attorney Lists, Doctors-on-Liens Referral Logs, Insurance directories,
+    Company Stats, etc.
+    """
+    return get_data_dir() / "global_vault"

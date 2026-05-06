@@ -308,6 +308,10 @@ class DiagnosisPage(ttk.Frame):
         on_click_imaging_callback=None,
         on_open_imaging_letter_callback=None,
         on_imaging_recs_removed_callback=None,
+        on_add_referral_callback=None,
+        on_click_referral_callback=None,
+        on_open_referral_letter_callback=None,
+        on_referrals_removed_callback=None,
     ):
         super().__init__(parent)
         self.on_change_callback = on_change_callback
@@ -315,6 +319,10 @@ class DiagnosisPage(ttk.Frame):
         self.on_click_imaging_callback = on_click_imaging_callback
         self.on_open_imaging_letter_callback = on_open_imaging_letter_callback
         self.on_imaging_recs_removed_callback = on_imaging_recs_removed_callback
+        self.on_add_referral_callback = on_add_referral_callback
+        self.on_click_referral_callback = on_click_referral_callback
+        self.on_open_referral_letter_callback = on_open_referral_letter_callback
+        self.on_referrals_removed_callback = on_referrals_removed_callback
         self.max_blocks = max_blocks
 
         self._loading = False
@@ -493,6 +501,45 @@ class DiagnosisPage(ttk.Frame):
             p = _clean(it.get("provider_type", ""))
             if p:
                 self.ref_list.insert("end", p)
+        self._refresh_referral_letter_buttons()
+
+    def _refresh_referral_letter_buttons(self):
+        """Render one 'X Referral Letter' button per distinct provider type
+        currently in self.referrals (skipping '(select)' / 'None at this time').
+        Mirrors the imaging modality letter buttons."""
+        if not hasattr(self, "referral_letter_btns"):
+            return
+        for child in self.referral_letter_btns.winfo_children():
+            child.destroy()
+        provs: list[str] = []
+        seen: set[str] = set()
+        for it in self.referrals:
+            if not isinstance(it, dict):
+                continue
+            p = _clean(it.get("provider_type", ""))
+            if not p:
+                continue
+            low = p.lower()
+            if low in ("(select)", "none at this time"):
+                continue
+            if low in seen:
+                continue
+            seen.add(low)
+            provs.append(p)
+        for p in provs:
+            ttk.Button(
+                self.referral_letter_btns,
+                text=f"{p} Referral Letter",
+                command=lambda pp=p: self._open_referral_letter_editor(pp),
+            ).pack(side="left", padx=(8, 0))
+
+    def _open_referral_letter_editor(self, provider_type: str):
+        cb = getattr(self, "on_open_referral_letter_callback", None)
+        if callable(cb):
+            try:
+                cb(provider_type)
+            except Exception:
+                pass
 
     def _add_referral(self):
         p = _clean(self.ref_var.get())
@@ -501,6 +548,12 @@ class DiagnosisPage(ttk.Frame):
         self.referrals.append({"provider_type": p})
         self._refresh_ref_list()
         self._changed()
+        try:
+            cb = getattr(self, "on_add_referral_callback", None)
+            if callable(cb):
+                cb(p)
+        except Exception:
+            pass
 
     def _remove_referral(self):
         sel = list(self.ref_list.curselection())
@@ -510,8 +563,44 @@ class DiagnosisPage(ttk.Frame):
             if 0 <= i < len(self.referrals):
                 self.referrals.pop(i)
         self._refresh_ref_list()
-        self._changed()    
-    
+        self._changed()
+        self._notify_referrals_removed()
+
+    def _remove_all_referrals(self):
+        if not self.referrals:
+            return
+        self.referrals.clear()
+        self._refresh_ref_list()
+        self._changed()
+        self._notify_referrals_removed()
+
+    def _notify_referrals_removed(self):
+        cb = getattr(self, "on_referrals_removed_callback", None)
+        if not callable(cb):
+            return
+        try:
+            cb()
+        except Exception:
+            pass
+
+    def _on_ref_list_click(self, _evt=None):
+        sel = list(self.ref_list.curselection())
+        if not sel:
+            return
+        i = sel[0]
+        if i < 0 or i >= len(self.referrals):
+            return
+        rec = self.referrals[i] if isinstance(self.referrals[i], dict) else {}
+        p = _clean(rec.get("provider_type", ""))
+        if not p or p.lower() in ("(select)", "none at this time"):
+            return
+        try:
+            cb = getattr(self, "on_click_referral_callback", None)
+            if callable(cb):
+                cb(p)
+        except Exception:
+            pass
+
     def _changed(self):
         if callable(self.on_change_callback):
             self.on_change_callback()
@@ -852,9 +941,13 @@ class DiagnosisPage(ttk.Frame):
         ref_btns.grid(row=1, column=0, sticky="w", padx=8, pady=(0, 6))
         ttk.Button(ref_btns, text="Add", command=self._add_referral).pack(side="left")
         ttk.Button(ref_btns, text="Remove Selected", command=self._remove_referral).pack(side="left", padx=(8, 0))
+        ttk.Button(ref_btns, text="Remove All", command=self._remove_all_referrals).pack(side="left", padx=(8, 0))
+        self.referral_letter_btns = ttk.Frame(ref_btns)
+        self.referral_letter_btns.pack(side="left")
 
-        self.ref_list = tk.Listbox(ref_box, height=4)
+        self.ref_list = tk.Listbox(ref_box, height=4, selectmode=tk.EXTENDED)
         self.ref_list.grid(row=2, column=0, sticky="ew", padx=8, pady=(0, 8))
+        self.ref_list.bind("<Double-Button-1>", self._on_ref_list_click)
         if not hasattr(self, "referrals_notes_var"):
             self.referrals_notes_var = tk.StringVar(value="")
         ttk.Label(ref_box, text="Notes (general text):").grid(row=3, column=0, sticky="w", padx=8, pady=(14, 4))

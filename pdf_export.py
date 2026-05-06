@@ -887,6 +887,297 @@ def build_modalities_recommendation_letter_pdf(
         return False
 
 
+# =======================================================
+# Medical Referral Recommendation Letters
+# (mirrors the imaging-letter system but works off
+#  diagnosis_struct.referrals[*].provider_type)
+# =======================================================
+def _referral_provider_types(dx_struct: dict) -> list[str]:
+    """First-seen order of distinct, valid referral provider types.
+    Filters out empty strings, '(select)', and 'None at this time'."""
+    out: list[str] = []
+    seen: set[str] = set()
+    if not isinstance(dx_struct, dict):
+        return out
+    for r in dx_struct.get("referrals") or []:
+        if not isinstance(r, dict):
+            continue
+        p = (r.get("provider_type") or "").strip()
+        if not p:
+            continue
+        low = p.lower()
+        if low in ("(select)", "none at this time"):
+            continue
+        if low in seen:
+            continue
+        seen.add(low)
+        out.append(p)
+    return out
+
+
+def referral_letter_should_generate(payload: dict) -> bool:
+    """True iff there is at least one structured referral (excluding placeholders)."""
+    soap = (payload or {}).get("soap") or {}
+    dx = soap.get("diagnosis_struct") or {}
+    return bool(_referral_provider_types(dx if isinstance(dx, dict) else {}))
+
+
+def referral_provider_types_in_payload(payload: dict) -> list[str]:
+    """Public accessor: distinct provider types in their original UI order."""
+    soap = (payload or {}).get("soap") or {}
+    dx = soap.get("diagnosis_struct") or {}
+    return _referral_provider_types(dx if isinstance(dx, dict) else {})
+
+
+def _referral_provider_phrase(provider_type: str) -> str:
+    """Human-friendly noun phrase for the body paragraph.
+
+    'Pain Management'      -> 'a Pain Management specialist'
+    'Orthopedist'          -> 'an Orthopedist'
+    'Primary Care'         -> 'a Primary Care provider'
+    'Physical Therapy'     -> 'a Physical Therapist'
+    'Chiropractic Specialty' -> 'a Chiropractic Specialist'
+    'Radiology'            -> 'a Radiologist'
+    'Psychology'           -> 'a Psychologist'
+    'Neurologist'          -> 'a Neurologist'
+    """
+    p = (provider_type or "").strip()
+    if not p:
+        return "an appropriate specialist"
+    pl = p.lower()
+    overrides = {
+        "pain management":         "a Pain Management specialist",
+        "primary care":            "a Primary Care provider",
+        "physical therapy":        "a Physical Therapist",
+        "chiropractic specialty":  "a Chiropractic Specialist",
+        "radiology":               "a Radiologist",
+        "psychology":              "a Psychologist",
+    }
+    if pl in overrides:
+        return overrides[pl]
+    art = "an" if p[:1].lower() in ("a", "e", "i", "o", "u") else "a"
+    return f"{art} {p}"
+
+
+def _referral_letter_title(provider_type: str) -> str:
+    p = (provider_type or "").strip()
+    if not p:
+        return "Medical Referral Letter"
+    return f"{p} Referral Letter"
+
+
+def _referral_letter_body(payload: dict, provider_type: str) -> str:
+    """Single body paragraph for a medical referral letter (no salutation/signature)."""
+    payload = payload or {}
+    patient = payload.get("patient") or {}
+    soap = payload.get("soap") or {}
+    hoi_struct = soap.get("hoi_struct") or {}
+
+    inj = _injury_event_phrase(hoi_struct if isinstance(hoi_struct, dict) else {})
+    doi = _doi_for_imaging_letter(
+        patient if isinstance(patient, dict) else {},
+        hoi_struct if isinstance(hoi_struct, dict) else {},
+    )
+    doi_part = f" The documented date of injury is {doi}." if doi else ""
+
+    phrase = _referral_provider_phrase(provider_type)
+
+    return (
+        f"The above-named patient remains under our chiropractic care following {inj}.{doi_part} "
+        f"Despite a course of conservative therapy to date, the patient continues to "
+        f"experience symptoms warranting specialist evaluation. We are therefore "
+        f"referring this patient to {phrase} for further assessment and management. "
+        f"We respectfully request your consultation and any recommendations you may "
+        f"have to assist with ongoing therapeutic management."
+    )
+
+
+# Bullet styling shared by editor preview and PDF rendering.
+# A leading TAB in the editor text marks an indented bullet line; the PDF
+# builder strips the TAB and renders that line with leftIndent.
+_REFERRAL_BULLET_PREFIX = "\t\u2022 "  # tab + • + space
+_REFERRAL_HEADER_LABEL = "Specialist Referrals:"
+
+
+def _provider_bullet_lines(payload: dict) -> list[str]:
+    """One bullet line per distinct referral provider type (chart UI order).
+    Each line starts with TAB + bullet + space so the editor renders it
+    indented and the PDF builder can detect & indent it."""
+    return [
+        f"{_REFERRAL_BULLET_PREFIX}{p}"
+        for p in referral_provider_types_in_payload(payload or {})
+    ]
+
+
+def referral_letter_editable_text(payload: dict, provider_type: str) -> str:
+    """Editable letter body for a single referral provider type, salutation
+    through signature. The 'Specialist Referrals:' block lists every provider
+    type the patient is being referred to as indented bullet points."""
+    if not referral_letter_should_generate(payload):
+        return ""
+    body = _referral_letter_body(payload, provider_type)
+
+    bullets = _provider_bullet_lines(payload)
+
+    patient = (payload or {}).get("patient") or {}
+    if not isinstance(patient, dict):
+        patient = {}
+    prov = ((patient.get("provider") or "").strip() or (PROVIDER_NAME or "").strip())
+
+    lines: list[str] = []
+    lines.append("To Whom It May Concern,")
+    lines.append("")
+    lines.append(body.strip())
+    if bullets:
+        lines.append("")
+        lines.append(_REFERRAL_HEADER_LABEL)
+        lines.append("")  # extra space between header and first bullet
+        lines.extend(bullets)
+    lines.append("")
+    lines.append("Sincerely,")
+    lines.append("")
+    lines.append("")  # two extra blank lines before the signature
+    lines.append("")
+    if prov:
+        lines.append(prov)
+    return "\n".join(lines).rstrip()
+
+
+def build_referral_letter_pdf(
+    path: str,
+    payload: dict,
+    provider_type: str,
+    editable_letter_text: str | None = None,
+) -> bool:
+    """One-page medical referral letter for a single provider type
+    (Pain Management, Orthopedist, etc.). Mirrors the imaging-letter PDF."""
+    if not REPORTLAB_OK:
+        return False
+    if not referral_letter_should_generate(payload):
+        return False
+
+    title = _referral_letter_title(provider_type)
+    patient = payload.get("patient") or {}
+    if not isinstance(patient, dict):
+        patient = {}
+    exam_date = normalize_mmddyyyy(patient.get("exam_date", "")) or today_mmddyyyy()
+    exam_name = title.strip()
+
+    last = (patient.get("last_name") or "").strip()
+    first = (patient.get("first_name") or "").strip()
+    display = (patient.get("display_name") or "").strip() or f"{last}, {first}".strip(", ")
+    doi = _doi_for_imaging_letter(patient, (payload.get("soap") or {}).get("hoi_struct") or {})
+    dob = normalize_mmddyyyy(patient.get("dob", ""))
+
+    re_line = f"RE: {last}, {first}".strip()
+    if doi:
+        re_line += f" | DOI: {doi}"
+    if dob:
+        re_line += f" | DOB: {dob}"
+
+    patient_header = {
+        "display_name": display,
+        "first_name": first,
+        "last_name": last,
+        "dob": dob,
+        "doi": patient.get("doi") or "",
+        "provider": (patient.get("provider") or "").strip(),
+        "exam_date": exam_date,
+    }
+
+    try:
+        styles = getSampleStyleSheet()
+        title_style = ParagraphStyle(
+            name="ReferralLetterTitle",
+            parent=styles["Title"],
+            fontName="Helvetica-Bold",
+            fontSize=14,
+            leading=17,
+            spaceAfter=10,
+            alignment=1,
+        )
+        if "ReferralLetterTitle" not in styles.byName:
+            styles.add(title_style)
+
+        letter_body = ParagraphStyle(
+            name="ReferralLetterBody",
+            parent=styles["BodyText"],
+            fontName="Helvetica",
+            fontSize=11,
+            leading=14,
+            alignment=TA_LEFT,
+            spaceAfter=0,
+        )
+        if "ReferralLetterBody" not in styles.byName:
+            styles.add(letter_body)
+
+        bullet_body = ParagraphStyle(
+            name="ReferralLetterBullet",
+            parent=letter_body,
+            leftIndent=28,
+            firstLineIndent=0,
+            spaceAfter=0,
+        )
+        if "ReferralLetterBullet" not in styles.byName:
+            styles.add(bullet_body)
+
+        story = []
+        story.append(ExamStart(exam_name, patient_header, exam_date))
+        story.append(Spacer(1, 0.22 * inch))
+        story.append(Paragraph(xml_escape(title.strip()), styles["ReferralLetterTitle"]))
+        story.append(Spacer(1, 0.12 * inch))
+        re_safe = xml_escape(re_line.strip()).replace("\n", "<br/>")
+        story.append(Paragraph(f"<b>{re_safe}</b>", styles["ReferralLetterBody"]))
+
+        letter_text = (editable_letter_text or "").strip()
+        if not letter_text:
+            letter_text = referral_letter_editable_text(payload, provider_type)
+
+        lines = letter_text.replace("\r\n", "\n").split("\n")
+        if lines:
+            story.append(Spacer(1, 0.14 * inch))
+            for line in lines:
+                if not line.strip():
+                    story.append(Spacer(1, 0.12 * inch))
+                    continue
+                stripped = line.strip()
+                low = stripped.lower()
+                # Bold section headers (current + legacy "Diagnostic Codes:" overrides).
+                if low in (_REFERRAL_HEADER_LABEL.lower(), "diagnostic codes:"):
+                    story.append(Paragraph(
+                        f"<b>{xml_escape(stripped)}</b>",
+                        styles["ReferralLetterBody"],
+                    ))
+                    continue
+                # Lines the editor (or user) marked as indented bullets get the
+                # bullet paragraph style so the indent is preserved in the PDF.
+                if line.startswith("\t") or line.startswith("    "):
+                    story.append(Paragraph(
+                        xml_escape(stripped),
+                        styles["ReferralLetterBullet"],
+                    ))
+                else:
+                    story.append(Paragraph(
+                        xml_escape(line),
+                        styles["ReferralLetterBody"],
+                    ))
+
+        story.append(Spacer(1, 0.18 * inch))
+
+        doc = SimpleDocTemplate(
+            path,
+            pagesize=LETTER,
+            rightMargin=72,
+            leftMargin=72,
+            topMargin=170,
+            bottomMargin=72,
+        )
+        doc.build(story, canvasmaker=HeaderExamNumberedCanvas)
+        return True
+    except Exception:
+        return False
+
+
 def build_imaging_recommendation_letter_pdf(
     path: str,
     payload: dict,

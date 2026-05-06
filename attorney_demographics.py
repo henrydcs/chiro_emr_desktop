@@ -783,11 +783,11 @@ class AttorneyDemographicsWindow(tk.Toplevel):
     def _build_attorney_list_pdf(self, *, open_after: bool, show_message: bool):
         """Generate / overwrite the canonical 'List of Attorneys' PDF.
 
-        - Always writes to <DATA_DIR>/exports/attorneys/List_of_Attorneys.pdf
-          (single canonical file; never accumulates duplicates).
-        - If a patient is currently loaded, also overwrites the same filename
-          inside that patient's vault/attorney/ folder so it surfaces in the
-          Doc Vault → 'attorney' section.
+        Writes to <DATA_DIR>/global_vault/attorneys/List_of_Attorneys.pdf
+        (single canonical file; never accumulates duplicates). The Attorney
+        List is clinic-wide, not patient-specific, so it lives in the Global
+        Vault and is visible from every patient chart's Global Vault tab.
+
         Returns the primary path (str) or None on failure.
         """
         try:
@@ -825,12 +825,11 @@ class AttorneyDemographicsWindow(tk.Toplevel):
             saved = self._read_dol_settings() if hasattr(self, "_read_dol_settings") else {}
             clinic_name = (saved.get("clinic_name") or _CFG_CLINIC or "").strip()
 
-        info = self._current_patient_info()
-        patient_root = info.get("patient_root") if info else None
-        paths = canonical_pdf_paths(patient_root=patient_root)
-
+        paths = canonical_pdf_paths()
         primary = str(paths["primary"])
         try:
+            from pathlib import Path
+            Path(primary).parent.mkdir(parents=True, exist_ok=True)
             build_attorney_list_pdf(
                 primary,
                 clinic_name=clinic_name,
@@ -841,20 +840,6 @@ class AttorneyDemographicsWindow(tk.Toplevel):
                 messagebox.showerror("Print PDF", f"Could not build PDF:\n\n{e}", parent=self)
             return None
 
-        # Mirror to current patient's vault/attorney/ if applicable.
-        copied_to_patient = False
-        if "patient_copy" in paths:
-            try:
-                import shutil
-                dest = paths["patient_copy"]
-                dest.parent.mkdir(parents=True, exist_ok=True)
-                tmp = str(dest) + ".tmp"
-                shutil.copy2(primary, tmp)
-                os.replace(tmp, dest)
-                copied_to_patient = True
-            except Exception:
-                copied_to_patient = False
-
         if open_after:
             try:
                 self._open_with_default_app(primary)
@@ -862,10 +847,11 @@ class AttorneyDemographicsWindow(tk.Toplevel):
                 pass
 
         if show_message:
-            msg = [f"Saved: {primary}"]
-            if copied_to_patient:
-                msg.append(f"Also filed in: {paths['patient_copy']}")
-            messagebox.showinfo("List of Attorneys — PDF", "\n".join(msg), parent=self)
+            messagebox.showinfo(
+                "List of Attorneys — PDF",
+                f"Saved to Global Vault → 'attorneys':\n\n{primary}",
+                parent=self,
+            )
 
         return primary
 
@@ -1068,8 +1054,12 @@ class AttorneyDemographicsWindow(tk.Toplevel):
 
     def _dol_print_pdf(self):
         """Build the Doctors on Liens referral log PDF for the selected month
-        and (a) save it to the EMR exports folder, (b) copy it into each
-        DoL-flagged patient's vault/doctors_on_liens/ folder, (c) open it."""
+        and save it to the Global Vault → 'doctors on liens' folder.
+
+        The referral log is a clinic-wide document, so it lives in the shared
+        Global Vault and is reachable from every patient chart's Global Vault
+        tab. It is no longer mirrored into each DoL patient's per-patient
+        vault."""
         try:
             from dol_referral_pdf import (
                 build_dol_referral_log_pdf,
@@ -1120,9 +1110,10 @@ class AttorneyDemographicsWindow(tk.Toplevel):
                 "address_phone": " — ".join(addr_phone_bits),
             })
 
-        # Output path under EMR exports
-        from paths import exports_dir
-        out_dir = exports_dir() / "dol_referrals"
+        # Save into the Global Vault → 'doctors on liens' folder so every
+        # patient chart can see the latest referral log.
+        from paths import global_vault_dir
+        out_dir = global_vault_dir() / "doctors_on_liens"
         out_dir.mkdir(parents=True, exist_ok=True)
         out_path = out_dir / referral_log_filename(year, month)
 
@@ -1139,22 +1130,16 @@ class AttorneyDemographicsWindow(tk.Toplevel):
             messagebox.showerror("Print PDF", f"Could not build PDF:\n\n{e}", parent=self)
             return
 
-        # File a copy into each DoL patient's vault/doctors_on_liens folder
-        copies = self._distribute_dol_pdf_to_patient_vaults(
-            pdf_path=str(out_path),
-            year=year, month=month,
-        )
-
-        # Open the PDF
         try:
             self._open_with_default_app(str(out_path))
         except Exception:
             pass
 
-        msg_lines = [f"Saved: {out_path}"]
-        if copies:
-            msg_lines.append(f"Filed in {copies} patient vault(s) → 'doctors on liens'.")
-        messagebox.showinfo("Doctors on Liens — PDF", "\n".join(msg_lines), parent=self)
+        messagebox.showinfo(
+            "Doctors on Liens — PDF",
+            f"Saved to Global Vault → 'doctors on liens':\n\n{out_path}",
+            parent=self,
+        )
 
     def _distribute_dol_pdf_to_patient_vaults(
         self, *, pdf_path: str, year: int, month: int,
