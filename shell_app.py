@@ -22,10 +22,13 @@ from datetime import datetime
 from pathlib import Path
 from tkinter import messagebox, ttk
 
+import shutil
+
 import auth
 from config import PATIENT_SUBDIR_EXAMS, PATIENTS_ID_ROOT
 from paths import get_data_dir
-from utils import normalize_mmddyyyy, to_last_first
+from patient_storage import get_patient_root, new_patient_id
+from utils import find_patient_folder_by_id, normalize_mmddyyyy, to_last_first
 
 # ---------------- App constants ----------------
 
@@ -234,6 +237,62 @@ def scan_patients(last_q: str, first_q: str, dob_q: str, limit: int = 80) -> lis
                                 (r.get("first") or "").lower(),
                                 r.get("patient_id") or ""))
     return matches[:limit]
+
+
+def list_all_patients(limit: int = 5000) -> list[dict]:
+    """Return all patient records from id_cases (no query needed)."""
+    root = Path(PATIENTS_ID_ROOT)
+    out: list[dict] = []
+    try:
+        children = sorted([p for p in root.iterdir() if p.is_dir()],
+                          key=lambda p: p.name.lower())
+    except Exception:
+        return []
+    for folder in children:
+        rec = patient_record_from_folder(folder)
+        if rec:
+            out.append(rec)
+    out.sort(key=lambda r: ((r.get("last") or "").lower(),
+                            (r.get("first") or "").lower(),
+                            r.get("patient_id") or ""))
+    return out[:limit]
+
+
+def read_patient_profile(folder: Path) -> dict:
+    """
+    Read a patient profile from <folder>/patient.json.
+
+    Returns the inner ``patient`` dict if the envelope form is used,
+    otherwise the raw top-level dict, or {} if missing/unreadable.
+    """
+    p = folder / "patient.json"
+    if not p.is_file():
+        return {}
+    try:
+        raw = json.loads(p.read_text(encoding="utf-8"))
+    except Exception:
+        return {}
+    if not isinstance(raw, dict):
+        return {}
+    inner = raw.get("patient")
+    return dict(inner) if isinstance(inner, dict) else dict(raw)
+
+
+def write_patient_profile(folder: Path, profile: dict) -> None:
+    """Atomically write <folder>/patient.json with the {patient: profile} envelope."""
+    folder.mkdir(parents=True, exist_ok=True)
+    p = folder / "patient.json"
+    payload = {"patient": dict(profile)}
+    tmp = p.with_suffix(".json.tmp")
+    with open(tmp, "w", encoding="utf-8") as f:
+        json.dump(payload, f, indent=2)
+    os.replace(tmp, p)
+
+
+def get_last_visit_date(folder: Path) -> str:
+    """Latest exam_date (MM/DD/YYYY) for this patient, or '' if no visits."""
+    visits = collect_visits_for_patient(folder)
+    return visits[0]["exam_date"] if visits else ""
 
 
 def collect_visits_for_patient(folder: Path) -> list[dict]:
@@ -524,6 +583,8 @@ class ShellLayout(tk.Frame):
             elif nav_id == "documents":
                 page = DocumentsPage(self.page_area, self)
                 self.documents_page = page
+            elif nav_id == "patients":
+                page = PatientsPage(self.page_area, self)
             else:
                 page = PlaceholderPage(self.page_area, label)
             self._pages[nav_id] = page
@@ -666,6 +727,11 @@ class DocumentsPage(tk.Frame):
         self._soap_poll_after_id: str | None = None
 
         self._build()
+
+        # Whenever this page becomes visible again, re-pull the active
+        # patient from disk so edits made elsewhere (Patients page, SOAP)
+        # are reflected immediately.
+        self.bind("<Map>", lambda _e: self.refresh_active_patient_from_disk())
 
     # ---- layout ----
     def _build(self) -> None:
@@ -894,14 +960,11 @@ class DocumentsPage(tk.Frame):
         visits = collect_visits_for_patient(folder)
 
         if not visits:
-            tk.Label(self.enc_inner,
-                     text="No saved visits for this patient yet.",
-                     bg=COLOR_CARD, fg=COLOR_MUTED, font=FONT_BASE
-                     ).pack(anchor="center", pady=40)
             self.enc_hint_var.set(
                 f"{patient['label']} — no encounters yet. "
-                "Open the SOAP builder from any other patient or create one to see them here."
+                "Click below to start the first visit."
             )
+            self._make_start_first_visit_row(patient)
             return
 
         self.enc_hint_var.set(
@@ -910,6 +973,55 @@ class DocumentsPage(tk.Frame):
 
         for visit in visits:
             self._make_encounter_row(visit)
+
+    def _make_start_first_visit_row(self, patient: dict) -> None:
+        """Empty-state placeholder: a clickable row that launches SOAP with a
+        fresh Initial 1 exam ready for the just-created patient."""
+        row = tk.Frame(self.enc_inner, bg=COLOR_CARD,
+                       highlightbackground=COLOR_BORDER,
+                       highlightthickness=1, cursor="hand2")
+        row.pack(fill="x", padx=8, pady=(20, 4))
+
+        marker = tk.Label(row, text="  +  ",
+                          bg="#EEF2FF", fg=COLOR_ACCENT,
+                          font=("Segoe UI", 12, "bold"), padx=4)
+        marker.pack(side="left", fill="y")
+
+        text_box = tk.Frame(row, bg=COLOR_CARD)
+        text_box.pack(side="left", fill="both", expand=True, padx=8, pady=10)
+
+        tk.Label(text_box, text="Start Initial Visit",
+                 bg=COLOR_CARD, fg=COLOR_ACCENT,
+                 font=FONT_BASE_BOLD).pack(anchor="w")
+        tk.Label(text_box,
+                 text="Opens the SOAP builder with a blank Initial 1 exam ready to fill in.",
+                 bg=COLOR_CARD, fg=COLOR_MUTED, font=FONT_SMALL,
+                 wraplength=320, justify="left").pack(anchor="w", pady=(2, 0))
+
+        def open_new(_e=None, _pid=patient.get("patient_id") or ""):
+            if not _pid:
+                messagebox.showerror("Cannot start visit",
+                                     "This patient is missing a patient_id.")
+                return
+            self.launch_soap_for_patient_id(_pid)
+
+        for w in (row, marker, text_box, *text_box.winfo_children()):
+            w.bind("<Button-1>", open_new)
+
+        def hover_in(_e=None):
+            row.configure(bg="#F8FAFC")
+
+        def hover_out(_e=None):
+            row.configure(bg=COLOR_CARD)
+
+        row.bind("<Enter>", hover_in)
+        row.bind("<Leave>", hover_out)
+
+        # Helpful hint below
+        tk.Label(self.enc_inner,
+                 text="The visit will appear here automatically once you save it.",
+                 bg=COLOR_CARD, fg=COLOR_MUTED, font=FONT_SMALL
+                 ).pack(anchor="center", pady=(6, 4))
 
     def _make_encounter_row(self, visit: dict) -> None:
         row = tk.Frame(self.enc_inner, bg=COLOR_CARD,
@@ -1175,8 +1287,48 @@ class DocumentsPage(tk.Frame):
                 "label": st.get("active_patient_label") or "",
             })
 
+    def refresh_active_patient_from_disk(self) -> None:
+        """
+        Re-resolve the active patient from disk by patient_id.
+
+        Called when the page is shown again or when the Patients page edits a
+        patient. The folder may have been renamed (last/first changed) so we
+        look up by patient_id rather than the cached folder path. The header
+        label and Encounters list are repainted with fresh data.
+        """
+        if not self.active_patient:
+            return
+        pid = (self.active_patient.get("patient_id") or "").strip()
+        if not pid:
+            return
+
+        folder: Path | None = None
+        try:
+            f = find_patient_folder_by_id(Path(PATIENTS_ID_ROOT), pid)
+            if f and f.is_dir():
+                folder = f
+        except Exception:
+            folder = None
+
+        if folder is None:
+            # Cached folder path — try as last resort
+            cached = self.active_patient.get("folder") or ""
+            if cached and Path(cached).is_dir():
+                folder = Path(cached)
+
+        if folder is None:
+            # The patient was deleted under us — clear the page.
+            self.clear_active_patient()
+            return
+
+        rec = patient_record_from_folder(folder)
+        if rec:
+            self.set_active_patient(rec)
+
     # ---- launch SOAP ----
-    def launch_soap_for_path(self, exam_path: str) -> None:
+    def _launch_soap(self, extra_args: list[str]) -> None:
+        """Common launcher: start chiro_app.py as a subprocess, hide the shell,
+        poll for exit, then restore the shell + refresh active patient."""
         if self._soap_proc is not None and self._soap_proc.poll() is None:
             messagebox.showinfo("SOAP open",
                                 "The SOAP builder is already open. Exit it first.")
@@ -1200,9 +1352,8 @@ class DocumentsPage(tk.Frame):
             str(chiro),
             "--from-shell",
             "--shell-state-file", str(shell_state_path()),
+            *extra_args,
         ]
-        if exam_path:
-            args.extend(["--open-exam", exam_path])
 
         try:
             self._soap_proc = subprocess.Popen(args)
@@ -1215,6 +1366,17 @@ class DocumentsPage(tk.Frame):
 
         # Poll for subprocess exit
         self._poll_soap_proc()
+
+    def launch_soap_for_path(self, exam_path: str) -> None:
+        """Open SOAP focused on a specific saved exam JSON."""
+        self._launch_soap(["--open-exam", exam_path] if exam_path else [])
+
+    def launch_soap_for_patient_id(self, patient_id: str) -> None:
+        """Open SOAP focused on this patient with a fresh Initial 1 exam
+        ready to fill in (if they have no exams yet) or their newest exam."""
+        if not (patient_id or "").strip():
+            return
+        self._launch_soap(["--patient-id", patient_id])
 
     def _poll_soap_proc(self):
         proc = self._soap_proc
@@ -1235,6 +1397,672 @@ class DocumentsPage(tk.Frame):
         except Exception:
             pass
         self.reload_active_patient_from_shell_state()
+
+
+# ============================================================
+# PATIENTS PAGE — list / detail / form (new + edit)
+# ============================================================
+
+GENDER_CHOICES = ["MALE", "FEMALE", "OTHER"]
+
+
+def _format_address(addr) -> str:
+    """Render the address dict (or legacy string) as a single display line."""
+    if isinstance(addr, str):
+        return addr.strip()
+    if not isinstance(addr, dict):
+        return ""
+    street = (addr.get("street") or "").strip()
+    city = (addr.get("city") or "").strip()
+    state = (addr.get("state") or "").strip()
+    zipc = (addr.get("zip") or "").strip()
+    parts = []
+    if street:
+        parts.append(street)
+    tail = ", ".join(p for p in [city] if p)
+    last = " ".join(p for p in [state, zipc] if p)
+    line2 = ", ".join(p for p in [tail, last] if p)
+    if line2:
+        parts.append(line2)
+    return ", ".join(parts)
+
+
+class PatientsPage(tk.Frame):
+    """List / detail / new+edit form for patient records."""
+
+    def __init__(self, parent: tk.Misc, shell: ShellLayout):
+        super().__init__(parent, bg=COLOR_BG_APP)
+        self.shell = shell
+
+        # Three subviews stacked in self; only one packed at a time.
+        self._views: dict[str, tk.Frame] = {}
+        for name in ("list", "detail", "form"):
+            self._views[name] = tk.Frame(self, bg=COLOR_BG_APP)
+
+        # Selected record (used by detail and edit-mode form)
+        self._selected_rec: dict | None = None
+        self._form_mode: str = "new"  # "new" | "edit"
+
+        # Sort state for the patient list
+        self._sort_col: str = "name"
+        self._sort_desc: bool = False
+
+        # Treeview row id -> patient record (so click handler can resolve)
+        self._row_to_rec: dict[str, dict] = {}
+
+        # Build list view once; detail/form rebuilt on demand
+        self._build_list_view(self._views["list"])
+
+        # Track which subview is currently active (so we can refresh the right
+        # one when the page becomes visible again)
+        self._active_subview: str = "list"
+
+        self._show("list")
+
+        # When this page becomes visible, refresh whichever subview is active
+        # so changes made elsewhere (e.g. SOAP rename) are picked up.
+        self.bind("<Map>", lambda _e: self._on_page_shown())
+
+    # ---- subview switching ----
+    def _show(self, name: str) -> None:
+        for n, v in self._views.items():
+            v.pack_forget()
+        self._views[name].pack(fill="both", expand=True)
+        self._active_subview = name
+
+    def _on_page_shown(self) -> None:
+        """Refresh the currently-visible subview from disk."""
+        if self._active_subview == "list":
+            self._refresh_list()
+        elif self._active_subview == "detail" and self._selected_rec:
+            # Patient may have been renamed elsewhere — re-resolve folder by
+            # patient_id and rebuild the detail view from fresh disk data.
+            pid = (self._selected_rec.get("patient_id") or "").strip()
+            if pid:
+                folder = find_patient_folder_by_id(Path(PATIENTS_ID_ROOT), pid)
+                if folder and folder.is_dir():
+                    fresh = patient_record_from_folder(folder)
+                    if fresh:
+                        self._selected_rec = fresh
+            self._rebuild("detail", self._build_detail_view)
+        # form: don't trample user's input
+
+    def _rebuild(self, name: str, builder) -> None:
+        frame = self._views[name]
+        for w in frame.winfo_children():
+            w.destroy()
+        builder(frame)
+
+    # ============================================================
+    # LIST VIEW
+    # ============================================================
+    def _build_list_view(self, parent: tk.Frame) -> None:
+        wrap = tk.Frame(parent, bg=COLOR_BG_APP)
+        wrap.pack(fill="both", expand=True, padx=20, pady=20)
+
+        # Header
+        header = tk.Frame(wrap, bg=COLOR_BG_APP)
+        header.pack(fill="x")
+        tk.Label(header, text="Patients", bg=COLOR_BG_APP, fg=COLOR_TEXT,
+                 font=FONT_TITLE).pack(side="left")
+
+        new_btn = tk.Button(header, text="+ New Patient",
+                            command=self._on_new,
+                            bg=COLOR_ACCENT, fg="white",
+                            relief="flat", bd=0, padx=14, pady=6,
+                            font=FONT_BASE_BOLD, cursor="hand2",
+                            activebackground="#1D4ED8",
+                            activeforeground="white")
+        new_btn.pack(side="right")
+
+        # Filter row
+        filter_row = tk.Frame(wrap, bg=COLOR_BG_APP)
+        filter_row.pack(fill="x", pady=(10, 8))
+        tk.Label(filter_row, text="Filter:", bg=COLOR_BG_APP,
+                 fg=COLOR_MUTED, font=FONT_BASE).pack(side="left", padx=(0, 6))
+        self.filter_var = tk.StringVar()
+        self.filter_var.trace_add("write", lambda *_: self._refresh_list())
+        ttk.Entry(filter_row, textvariable=self.filter_var, width=36).pack(side="left")
+
+        self.count_var = tk.StringVar(value="")
+        tk.Label(filter_row, textvariable=self.count_var,
+                 bg=COLOR_BG_APP, fg=COLOR_MUTED,
+                 font=FONT_SMALL).pack(side="right")
+
+        # Card containing the table
+        card = tk.Frame(wrap, bg=COLOR_CARD,
+                        highlightbackground=COLOR_BORDER, highlightthickness=1)
+        card.pack(fill="both", expand=True)
+
+        cols = ("name", "dob", "gender", "phone", "email", "last_visit")
+        col_titles = {
+            "name": "NAME",
+            "dob": "DATE OF BIRTH",
+            "gender": "GENDER",
+            "phone": "PHONE",
+            "email": "EMAIL",
+            "last_visit": "LAST VISIT",
+        }
+        col_widths = {
+            "name": 220, "dob": 120, "gender": 90,
+            "phone": 130, "email": 220, "last_visit": 120,
+        }
+
+        # Style headings + rows
+        try:
+            style = ttk.Style()
+            style.configure("Patients.Treeview",
+                            background=COLOR_CARD, fieldbackground=COLOR_CARD,
+                            foreground=COLOR_TEXT, rowheight=28,
+                            borderwidth=0, font=FONT_BASE)
+            style.configure("Patients.Treeview.Heading",
+                            background="#F8FAFC", foreground=COLOR_MUTED,
+                            font=("Segoe UI", 9, "bold"))
+            style.layout("Patients.Treeview",
+                         [("Patients.Treeview.treearea", {"sticky": "nswe"})])
+        except Exception:
+            pass
+
+        tree = ttk.Treeview(card, columns=cols, show="headings",
+                            style="Patients.Treeview", selectmode="browse")
+        for c in cols:
+            tree.heading(c, text=col_titles[c],
+                         command=lambda cc=c: self._sort_by(cc))
+            tree.column(c, width=col_widths[c], anchor="w")
+
+        vsb = ttk.Scrollbar(card, orient="vertical", command=tree.yview)
+        tree.configure(yscrollcommand=vsb.set)
+        tree.pack(side="left", fill="both", expand=True)
+        vsb.pack(side="right", fill="y")
+
+        tree.tag_configure("name_link", foreground=COLOR_ACCENT)
+        tree.bind("<Double-Button-1>", self._on_row_open)
+        tree.bind("<Return>", self._on_row_open)
+        tree.bind("<<TreeviewSelect>>", lambda _e: None)
+
+        self._tree = tree
+
+    def _refresh_list(self) -> None:
+        if not hasattr(self, "_tree"):
+            return
+        try:
+            self._tree.delete(*self._tree.get_children())
+        except Exception:
+            return
+
+        self._row_to_rec.clear()
+        q = (getattr(self, "filter_var", tk.StringVar()).get() or "").strip().lower()
+
+        all_patients = list_all_patients()
+        rows: list[tuple[dict, str, str, str, str, str, str]] = []
+        for rec in all_patients:
+            folder = Path(rec["folder"])
+            profile = read_patient_profile(folder)
+
+            last = (profile.get("last_name") or rec.get("last") or "").strip()
+            first = (profile.get("first_name") or rec.get("first") or "").strip()
+            dob = (profile.get("dob") or rec.get("dob") or "").strip()
+            gender = (profile.get("gender") or "").strip().upper()
+            phone = (profile.get("phone") or "").strip()
+            email = (profile.get("email") or "").strip()
+            last_visit = get_last_visit_date(folder)
+
+            name = to_last_first(last, first) or folder.name
+            if q:
+                hay = " ".join([name, dob, gender, phone, email]).lower()
+                if q not in hay:
+                    continue
+            rows.append((rec, name, dob, gender, phone, email, last_visit))
+
+        # Sort
+        def sort_key(item):
+            _rec, name, dob, gender, phone, email, lv = item
+            if self._sort_col == "name":
+                return name.lower()
+            if self._sort_col == "dob":
+                return dob
+            if self._sort_col == "gender":
+                return gender
+            if self._sort_col == "phone":
+                return phone
+            if self._sort_col == "email":
+                return email.lower()
+            if self._sort_col == "last_visit":
+                return lv
+            return name.lower()
+
+        rows.sort(key=sort_key, reverse=self._sort_desc)
+
+        for rec, name, dob, gender, phone, email, lv in rows:
+            row_id = self._tree.insert(
+                "", "end",
+                values=(name, dob, gender, phone, email, lv),
+                tags=("name_link",),
+            )
+            self._row_to_rec[row_id] = rec
+
+        try:
+            self.count_var.set(f"{len(rows)} patient(s)")
+        except Exception:
+            pass
+
+    def _sort_by(self, col: str) -> None:
+        if self._sort_col == col:
+            self._sort_desc = not self._sort_desc
+        else:
+            self._sort_col = col
+            self._sort_desc = False
+        self._refresh_list()
+
+    def _on_row_open(self, _event=None) -> None:
+        sel = self._tree.selection()
+        if not sel:
+            return
+        rec = self._row_to_rec.get(sel[0])
+        if not rec:
+            return
+        self._open_detail(rec)
+
+    # ============================================================
+    # DETAIL VIEW
+    # ============================================================
+    def _open_detail(self, rec: dict) -> None:
+        self._selected_rec = rec
+        self._rebuild("detail", self._build_detail_view)
+        self._show("detail")
+
+    def _build_detail_view(self, parent: tk.Frame) -> None:
+        rec = self._selected_rec or {}
+        folder = Path(rec.get("folder") or "")
+        profile = read_patient_profile(folder) if folder.exists() else {}
+
+        wrap = tk.Frame(parent, bg=COLOR_BG_APP)
+        wrap.pack(fill="both", expand=True, padx=20, pady=20)
+
+        # Back link
+        back = tk.Label(wrap, text="← Back to Patients",
+                        bg=COLOR_BG_APP, fg=COLOR_ACCENT,
+                        font=("Segoe UI", 9), cursor="hand2")
+        back.pack(anchor="w")
+        back.bind("<Button-1>", lambda _e: self._show("list"))
+
+        # Header row
+        header = tk.Frame(wrap, bg=COLOR_BG_APP)
+        header.pack(fill="x", pady=(8, 14))
+        last = (profile.get("last_name") or rec.get("last") or "").strip()
+        first = (profile.get("first_name") or rec.get("first") or "").strip()
+        title = (f"{first} {last}".strip()) or rec.get("label") or "Patient"
+        tk.Label(header, text=title, bg=COLOR_BG_APP, fg=COLOR_TEXT,
+                 font=FONT_TITLE).pack(side="left")
+
+        edit_btn = tk.Button(header, text="Edit", command=self._on_edit,
+                             bg=COLOR_ACCENT, fg="white",
+                             activebackground="#1D4ED8", activeforeground="white",
+                             relief="flat", bd=0, padx=14, pady=6,
+                             font=FONT_BASE_BOLD, cursor="hand2")
+        edit_btn.pack(side="right", padx=(8, 0))
+
+        del_btn = tk.Button(header, text="Delete", command=self._on_delete,
+                            bg=COLOR_CARD, fg=COLOR_RED,
+                            activebackground="#FEF2F2", activeforeground=COLOR_RED,
+                            relief="solid", bd=1,
+                            highlightbackground=COLOR_RED,
+                            padx=14, pady=5,
+                            font=FONT_BASE_BOLD, cursor="hand2")
+        del_btn.pack(side="right")
+
+        # Card with fields
+        card = tk.Frame(wrap, bg=COLOR_CARD,
+                        highlightbackground=COLOR_BORDER, highlightthickness=1)
+        card.pack(fill="x", pady=(0, 12))
+
+        body = tk.Frame(card, bg=COLOR_CARD)
+        body.pack(fill="x", padx=20, pady=20)
+
+        def field_pair(row, col, label, value):
+            cell = tk.Frame(body, bg=COLOR_CARD)
+            cell.grid(row=row, column=col, sticky="nw", padx=(0, 30), pady=(0, 14))
+            tk.Label(cell, text=label.upper(), bg=COLOR_CARD, fg=COLOR_MUTED,
+                     font=("Segoe UI", 9, "bold")).pack(anchor="w")
+            tk.Label(cell, text=(value or "—"), bg=COLOR_CARD, fg=COLOR_TEXT,
+                     font=FONT_BASE).pack(anchor="w", pady=(2, 0))
+
+        gender = (profile.get("gender") or "").strip().upper()
+        email = (profile.get("email") or "").strip()
+        phone = (profile.get("phone") or "").strip()
+        dob = (profile.get("dob") or rec.get("dob") or "").strip()
+        addr = profile.get("address")
+
+        field_pair(0, 0, "First name", first)
+        field_pair(0, 1, "Last name", last)
+        field_pair(1, 0, "Date of birth", dob)
+        field_pair(1, 1, "Gender", gender)
+        field_pair(2, 0, "Email", email)
+        field_pair(2, 1, "Phone", phone)
+        field_pair(3, 0, "Address", _format_address(addr))
+
+        body.grid_columnconfigure(0, weight=1, uniform="d")
+        body.grid_columnconfigure(1, weight=1, uniform="d")
+
+        # Patient ID hint
+        tk.Label(wrap, text=f"Patient ID: {rec.get('patient_id', '')}",
+                 bg=COLOR_BG_APP, fg=COLOR_MUTED, font=FONT_SMALL
+                 ).pack(anchor="w")
+
+    # ============================================================
+    # FORM VIEW (new + edit)
+    # ============================================================
+    def _on_new(self) -> None:
+        self._selected_rec = None
+        self._form_mode = "new"
+        self._rebuild("form", self._build_form_view)
+        self._show("form")
+
+    def _on_edit(self) -> None:
+        if not self._selected_rec:
+            return
+        self._form_mode = "edit"
+        self._rebuild("form", self._build_form_view)
+        self._show("form")
+
+    def _build_form_view(self, parent: tk.Frame) -> None:
+        is_edit = (self._form_mode == "edit")
+        rec = self._selected_rec or {}
+        folder = Path(rec.get("folder") or "")
+        profile = read_patient_profile(folder) if (is_edit and folder.exists()) else {}
+
+        # Pre-fill vars
+        self.f_first = tk.StringVar(value=profile.get("first_name") or "")
+        self.f_last = tk.StringVar(value=profile.get("last_name") or "")
+        self.f_dob = tk.StringVar(value=profile.get("dob") or "")
+        self.f_gender = tk.StringVar(value=(profile.get("gender") or "").upper())
+        self.f_email = tk.StringVar(value=profile.get("email") or "")
+        self.f_phone = tk.StringVar(value=profile.get("phone") or "")
+        addr = profile.get("address") or {}
+        if isinstance(addr, str):
+            addr = {"street": addr, "city": "", "state": "", "zip": ""}
+        self.f_street = tk.StringVar(value=addr.get("street") or "")
+        self.f_city = tk.StringVar(value=addr.get("city") or "")
+        self.f_state = tk.StringVar(value=addr.get("state") or "")
+        self.f_zip = tk.StringVar(value=addr.get("zip") or "")
+
+        wrap = tk.Frame(parent, bg=COLOR_BG_APP)
+        wrap.pack(fill="both", expand=True, padx=20, pady=20)
+
+        back = tk.Label(wrap, text="← Back to Patients",
+                        bg=COLOR_BG_APP, fg=COLOR_ACCENT,
+                        font=("Segoe UI", 9), cursor="hand2")
+        back.pack(anchor="w")
+        back.bind("<Button-1>", lambda _e: self._cancel_form())
+
+        # Title
+        if is_edit:
+            first = self.f_first.get().strip() or rec.get("first") or ""
+            last = self.f_last.get().strip() or rec.get("last") or ""
+            title = (f"{first} {last}".strip()) or rec.get("label") or "Edit patient"
+        else:
+            title = "New Patient"
+        tk.Label(wrap, text=title, bg=COLOR_BG_APP, fg=COLOR_TEXT,
+                 font=FONT_TITLE).pack(anchor="w", pady=(8, 14))
+
+        # Card
+        card = tk.Frame(wrap, bg=COLOR_CARD,
+                        highlightbackground=COLOR_BORDER, highlightthickness=1)
+        card.pack(fill="x")
+
+        body = tk.Frame(card, bg=COLOR_CARD)
+        body.pack(fill="x", padx=20, pady=20)
+
+        def label(row, col, text, required=False):
+            t = text + (" *" if required else "")
+            cell = tk.Frame(body, bg=COLOR_CARD)
+            cell.grid(row=row, column=col, sticky="ew", padx=(0, 14), pady=(0, 4))
+            tk.Label(cell, text=t, bg=COLOR_CARD, fg=COLOR_TEXT,
+                     font=FONT_BASE).pack(anchor="w")
+            return cell
+
+        def entry(row, col, var, **kwargs):
+            ent = ttk.Entry(body, textvariable=var, **kwargs)
+            ent.grid(row=row, column=col, sticky="ew", padx=(0, 14), pady=(0, 12))
+            return ent
+
+        # Row 0: First/Last labels
+        label(0, 0, "First Name", required=True)
+        label(0, 1, "Last Name", required=True)
+        # Row 1: First/Last entries
+        entry(1, 0, self.f_first)
+        entry(1, 1, self.f_last)
+
+        # Row 2: DOB / Gender labels
+        label(2, 0, "Date of Birth", required=True)
+        label(2, 1, "Gender", required=True)
+        # Row 3: DOB / Gender entries
+        dob_frame = tk.Frame(body, bg=COLOR_CARD)
+        dob_frame.grid(row=3, column=0, sticky="ew", padx=(0, 14), pady=(0, 12))
+        ttk.Entry(dob_frame, textvariable=self.f_dob, width=24).pack(side="left", fill="x", expand=True)
+        tk.Label(dob_frame, text="MM/DD/YYYY", bg=COLOR_CARD, fg=COLOR_MUTED,
+                 font=FONT_SMALL).pack(side="left", padx=(8, 0))
+
+        gender_combo = ttk.Combobox(body, textvariable=self.f_gender,
+                                    values=GENDER_CHOICES, state="readonly")
+        gender_combo.grid(row=3, column=1, sticky="ew", padx=(0, 14), pady=(0, 12))
+
+        # Row 4–5: Email
+        label(4, 0, "Email")
+        entry(5, 0, self.f_email)
+        body.grid_rowconfigure(5, weight=0)
+        # span email across both columns visually
+        body.grid_slaves(row=5, column=0)[0].grid_configure(columnspan=2)
+        body.grid_slaves(row=4, column=0)[0].grid_configure(columnspan=2)
+
+        # Row 6–7: Phone
+        label(6, 0, "Phone")
+        entry(7, 0, self.f_phone)
+        body.grid_slaves(row=7, column=0)[0].grid_configure(columnspan=2)
+        body.grid_slaves(row=6, column=0)[0].grid_configure(columnspan=2)
+
+        # Row 8–9: Street (full width)
+        label(8, 0, "Address — Street")
+        entry(9, 0, self.f_street)
+        body.grid_slaves(row=9, column=0)[0].grid_configure(columnspan=2)
+        body.grid_slaves(row=8, column=0)[0].grid_configure(columnspan=2)
+
+        # Row 10: City | State | ZIP labels (3-up)
+        addr_lbl = tk.Frame(body, bg=COLOR_CARD)
+        addr_lbl.grid(row=10, column=0, columnspan=2, sticky="ew", pady=(0, 0))
+        addr_lbl.grid_columnconfigure(0, weight=3, uniform="addr")
+        addr_lbl.grid_columnconfigure(1, weight=1, uniform="addr")
+        addr_lbl.grid_columnconfigure(2, weight=1, uniform="addr")
+        tk.Label(addr_lbl, text="City", bg=COLOR_CARD, fg=COLOR_TEXT,
+                 font=FONT_BASE).grid(row=0, column=0, sticky="w", padx=(0, 8))
+        tk.Label(addr_lbl, text="State", bg=COLOR_CARD, fg=COLOR_TEXT,
+                 font=FONT_BASE).grid(row=0, column=1, sticky="w", padx=(0, 8))
+        tk.Label(addr_lbl, text="ZIP", bg=COLOR_CARD, fg=COLOR_TEXT,
+                 font=FONT_BASE).grid(row=0, column=2, sticky="w")
+
+        # Row 11: City / State / ZIP entries
+        addr_row = tk.Frame(body, bg=COLOR_CARD)
+        addr_row.grid(row=11, column=0, columnspan=2, sticky="ew", pady=(2, 12))
+        addr_row.grid_columnconfigure(0, weight=3, uniform="addr")
+        addr_row.grid_columnconfigure(1, weight=1, uniform="addr")
+        addr_row.grid_columnconfigure(2, weight=1, uniform="addr")
+        ttk.Entry(addr_row, textvariable=self.f_city).grid(row=0, column=0, sticky="ew", padx=(0, 8))
+        ttk.Entry(addr_row, textvariable=self.f_state).grid(row=0, column=1, sticky="ew", padx=(0, 8))
+        ttk.Entry(addr_row, textvariable=self.f_zip).grid(row=0, column=2, sticky="ew")
+
+        body.grid_columnconfigure(0, weight=1, uniform="form")
+        body.grid_columnconfigure(1, weight=1, uniform="form")
+
+        # Status / error line
+        self.form_status_var = tk.StringVar(value="")
+        tk.Label(card, textvariable=self.form_status_var,
+                 bg=COLOR_CARD, fg=COLOR_RED, font=FONT_SMALL,
+                 wraplength=600, justify="left"
+                 ).pack(anchor="w", padx=20)
+
+        # Buttons
+        btns = tk.Frame(card, bg=COLOR_CARD)
+        btns.pack(fill="x", padx=20, pady=(8, 16))
+        save_btn = tk.Button(btns, text="Save Changes" if is_edit else "Save",
+                             command=self._save_form,
+                             bg=COLOR_ACCENT, fg="white",
+                             activebackground="#1D4ED8", activeforeground="white",
+                             relief="flat", bd=0, padx=18, pady=8,
+                             font=FONT_BASE_BOLD, cursor="hand2")
+        save_btn.pack(side="left")
+
+        cancel_btn = tk.Button(btns, text="Cancel",
+                               command=self._cancel_form,
+                               bg=COLOR_CARD, fg=COLOR_TEXT,
+                               relief="solid", bd=1,
+                               padx=18, pady=7,
+                               font=FONT_BASE, cursor="hand2",
+                               activebackground="#F1F5F9",
+                               activeforeground=COLOR_TEXT)
+        cancel_btn.pack(side="left", padx=(8, 0))
+
+    def _cancel_form(self) -> None:
+        if self._form_mode == "edit" and self._selected_rec:
+            self._open_detail(self._selected_rec)
+        else:
+            self._show("list")
+
+    def _save_form(self) -> None:
+        first = (self.f_first.get() or "").strip()
+        last = (self.f_last.get() or "").strip()
+        dob_raw = (self.f_dob.get() or "").strip()
+        gender = (self.f_gender.get() or "").strip().upper()
+        email = (self.f_email.get() or "").strip()
+        phone = (self.f_phone.get() or "").strip()
+        street = (self.f_street.get() or "").strip()
+        city = (self.f_city.get() or "").strip()
+        state = (self.f_state.get() or "").strip()
+        zipc = (self.f_zip.get() or "").strip()
+
+        # Required
+        missing = [name for name, val in [
+            ("First Name", first), ("Last Name", last),
+            ("Date of Birth", dob_raw), ("Gender", gender),
+        ] if not val]
+        if missing:
+            self.form_status_var.set("Please fill in: " + ", ".join(missing))
+            return
+
+        if gender not in GENDER_CHOICES:
+            self.form_status_var.set("Gender must be one of: " + ", ".join(GENDER_CHOICES))
+            return
+
+        dob = normalize_mmddyyyy(dob_raw)
+        if not re.fullmatch(r"\d{2}/\d{2}/\d{4}", dob):
+            self.form_status_var.set("Date of Birth must be MM/DD/YYYY (e.g. 02/02/1972).")
+            return
+
+        # Build profile
+        now_iso = datetime.utcnow().isoformat(timespec="seconds") + "Z"
+
+        if self._form_mode == "edit" and self._selected_rec:
+            pid = (self._selected_rec.get("patient_id") or "").strip()
+            if not pid:
+                self.form_status_var.set("Cannot edit: missing patient_id.")
+                return
+        else:
+            pid = new_patient_id()
+
+        # Make / locate folder. get_patient_root will rename it on edit if name changed.
+        try:
+            folder = get_patient_root(pid, last, first)
+        except Exception as e:
+            self.form_status_var.set(f"Could not create patient folder: {e}")
+            return
+
+        # Preserve any existing profile fields we don't manage (forward-compat)
+        existing = read_patient_profile(folder) if self._form_mode == "edit" else {}
+        profile = dict(existing)
+        profile.update({
+            "patient_id": pid,
+            "first_name": first,
+            "last_name": last,
+            "dob": dob,
+            "gender": gender,
+            "email": email,
+            "phone": phone,
+            "address": {
+                "street": street, "city": city, "state": state, "zip": zipc,
+            },
+            "updated_at": now_iso,
+        })
+        if "created_at" not in profile:
+            profile["created_at"] = now_iso
+
+        try:
+            write_patient_profile(folder, profile)
+        except Exception as e:
+            self.form_status_var.set(f"Could not save patient.json: {e}")
+            return
+
+        # Build a fresh record + open detail
+        new_rec = patient_record_from_folder(folder) or {
+            "folder": str(folder.resolve()),
+            "patient_id": pid, "last": last, "first": first, "dob": dob,
+            "label": to_last_first(last, first) or pid,
+        }
+        self._selected_rec = new_rec
+
+        # If the edited patient is the active patient on the Documents page,
+        # push the refreshed record over so its header and Encounters list
+        # repaint immediately (folder may have been renamed).
+        try:
+            doc = self.shell.documents_page
+            if doc and doc.active_patient and \
+               (doc.active_patient.get("patient_id") or "").strip() == pid:
+                doc.set_active_patient(new_rec)
+        except Exception:
+            pass
+
+        self._open_detail(new_rec)
+
+    # ============================================================
+    # DELETE
+    # ============================================================
+    def _on_delete(self) -> None:
+        rec = self._selected_rec
+        if not rec:
+            return
+        folder = Path(rec.get("folder") or "")
+        if not folder.exists():
+            messagebox.showerror("Delete", "Patient folder not found.")
+            return
+
+        visit_count = len(collect_visits_for_patient(folder))
+        warn = (
+            f"Permanently delete this patient and ALL their data?\n\n"
+            f"  Name:   {rec.get('label') or folder.name}\n"
+            f"  Folder: {folder}\n"
+            f"  Visits: {visit_count}\n\n"
+            f"This will remove every exam, PDF, document, and image stored "
+            f"under this patient. This cannot be undone."
+        )
+        if not messagebox.askyesno("Delete patient — confirm", warn, icon="warning"):
+            return
+
+        try:
+            shutil.rmtree(folder)
+        except Exception as e:
+            messagebox.showerror("Delete failed", f"Could not delete folder:\n{e}")
+            return
+
+        # If this patient was the active patient on Documents, clear it
+        try:
+            doc = self.shell.documents_page
+            if doc and doc.active_patient and \
+               Path(doc.active_patient.get("folder") or "").resolve() == folder.resolve():
+                doc.clear_active_patient()
+        except Exception:
+            pass
+
+        self._selected_rec = None
+        self._show("list")
+        self._refresh_list()
 
 
 # ============================================================

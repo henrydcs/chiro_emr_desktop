@@ -291,11 +291,15 @@ class App(tk.Tk):
         # --from-shell                : show the "Exit to Documents" button
         # --shell-state-file <path>   : where to mirror the active patient
         # --open-exam <path>          : auto-load this exam JSON on startup
+        # --patient-id <pid>          : load this patient and start a fresh
+        #                               Initial 1 exam if they have none yet
         self._from_shell = "--from-shell" in sys.argv
         self._shell_state_file: str | None = _argv_value("--shell-state-file")
         self._startup_open_exam: str | None = _argv_value("--open-exam")
-        # When launched from the shell, do NOT autoload last case unless --open-exam was given
-        if self._from_shell and not self._startup_open_exam:
+        self._startup_patient_id: str | None = _argv_value("--patient-id")
+        # When launched from the shell, do NOT autoload last case unless one
+        # of the targeted-startup flags was given.
+        if self._from_shell and not self._startup_open_exam and not self._startup_patient_id:
             self._start_blank = True
 
         self.title("PI Exams – SOAP Builder")
@@ -4546,6 +4550,80 @@ class App(tk.Tk):
         except Exception:
             os._exit(0)
 
+    def _upsert_patient_profile_from_demographics(self) -> None:
+        """
+        Mirror the current core identity fields (last/first/dob/patient_id)
+        into <patient_root>/patient.json so the Patients section list stays
+        in sync with edits typed in the SOAP demographics row.
+
+        Only touches a small whitelist of fields. Anything else already in
+        patient.json (gender, email, phone, address, created_at, …) is
+        preserved untouched. Failures are swallowed so this never breaks
+        an exam save.
+        """
+        try:
+            pid = (getattr(self, "current_patient_id", None) or "").strip()
+            if not pid:
+                return
+
+            patient_root = self.get_current_patient_root()
+            if not patient_root:
+                return
+
+            folder = Path(patient_root)
+            if not folder.is_dir():
+                return
+
+            last = (self.last_name_var.get() or "").strip()
+            first = (self.first_name_var.get() or "").strip()
+            dob = normalize_mmddyyyy(self.dob_var.get() or "") or (self.dob_var.get() or "").strip()
+
+            # Skip until we actually have something useful to mirror.
+            if not (last or first or dob):
+                return
+
+            # Preserve any existing profile fields managed by the Patients page.
+            existing: dict = {}
+            pjson = folder / "patient.json"
+            if pjson.is_file():
+                try:
+                    raw = json.loads(pjson.read_text(encoding="utf-8")) or {}
+                    if isinstance(raw, dict):
+                        inner = raw.get("patient")
+                        existing = dict(inner) if isinstance(inner, dict) else dict(raw)
+                except Exception:
+                    existing = {}
+
+            now_iso = datetime.utcnow().isoformat(timespec="seconds") + "Z"
+
+            updated = dict(existing)
+            updated["patient_id"] = pid
+            if last:
+                updated["last_name"] = last
+            if first:
+                updated["first_name"] = first
+            if dob:
+                updated["dob"] = dob
+            updated["updated_at"] = now_iso
+            if "created_at" not in updated:
+                updated["created_at"] = now_iso
+
+            # Skip the write if nothing actually changed (avoids needless disk I/O)
+            interesting_keys = ("patient_id", "last_name", "first_name", "dob")
+            if existing and all(
+                existing.get(k) == updated.get(k) for k in interesting_keys
+            ):
+                return
+
+            payload = {"patient": updated}
+            tmp = pjson.with_suffix(".json.tmp")
+            with open(tmp, "w", encoding="utf-8") as f:
+                json.dump(payload, f, indent=2)
+            os.replace(tmp, pjson)
+        except Exception:
+            # Never let a profile-mirror failure break the actual exam save.
+            pass
+
     def _finish_patient_switch_no_saved_visits(self):
         self._loading = True
         try:
@@ -4752,6 +4830,57 @@ class App(tk.Tk):
             except Exception as e:
                 self.status_var.set(f"Could not open requested exam: {e}")
                 # fall through to default behavior
+
+        # If launched by the shell with just a patient_id (no exam yet),
+        # load that patient's demographics and prepare a blank Initial 1
+        # exam so the user can start filling it in immediately.
+        startup_pid = getattr(self, "_startup_patient_id", None)
+        if startup_pid:
+            try:
+                folder = find_patient_root(startup_pid)
+                if folder is None:
+                    self.status_var.set(f"Patient not found: {startup_pid}")
+                else:
+                    self._loading = True
+                    try:
+                        self._apply_demographics_from_patient_folder(folder)
+                        self.exams = self._load_dynamic_exams_for_patient_root(str(folder))
+                    finally:
+                        self._loading = False
+                    self._rebuild_exam_nav_buttons()
+
+                    if not self.exams:
+                        # Brand-new patient — create a fresh Initial 1 in memory.
+                        # Won't write to disk until the user adds content (autosave guards this).
+                        first_name = "Initial 1"
+                        self._add_dynamic_exam(first_name, copy_current=False)
+                        self.after(0, lambda: self.switch_exam(first_name, force=True))
+                    else:
+                        # Patient already has exams — open the most recent.
+                        target = self.exams[0]
+                        self.current_exam.set(target)
+                        path = self.compute_exam_path(target)
+                        if path and os.path.exists(path):
+                            try:
+                                self.load_case_from_path(path)
+                            except Exception:
+                                pass
+                        self._refresh_exam_button_styles()
+
+                    try:
+                        self.tk_docs_page.refresh()
+                    except Exception:
+                        pass
+                    self._mirror_active_patient_to_shell_state()
+                    self.status_var.set(
+                        "New visit ready. Fill in the exam and Save."
+                        if not self.exams or len(self.exams) == 1
+                        else f"Opened patient: {to_last_first(self.last_name_var.get(), self.first_name_var.get())}"
+                    )
+                    return
+            except Exception as e:
+                self.status_var.set(f"Could not open patient: {e}")
+                # fall through
 
         if getattr(self, "_start_blank", False):
             self.status_var.set("Ready. (New blank form)")
@@ -5739,6 +5868,11 @@ class App(tk.Tk):
         except Exception:
             pass
 
+        # Keep the Patients-page profile (patient.json) in sync with the
+        # on-screen core identity fields. Safe no-op if there's nothing to
+        # write. Preserves gender/email/phone/address managed by Patients.
+        self._upsert_patient_profile_from_demographics()
+
 
     def save_case_now(self):
         """
@@ -5822,7 +5956,30 @@ class App(tk.Tk):
             
             prov = (patient.get("provider") or "").strip()
             self.provider_var.set(prov if prov else "")
-            
+
+            # ----- Identity overlay from patient.json (single source of truth) -----
+            # Exam JSONs carry their own embedded patient block which can drift from
+            # patient.json when the patient is renamed via the Patients page. So we
+            # overlay last_name / first_name / dob / patient_id from patient.json
+            # whenever it exists. Case-level fields (DOI, claim, provider, exam_date)
+            # stay sourced from the exam JSON above.
+            try:
+                folder = Path(path).parent.parent
+                if folder.is_dir():
+                    profile = self._read_patient_json_from_folder(folder)
+                    if profile:
+                        if (profile.get("last_name") or "").strip():
+                            self.last_name_var.set(profile["last_name"])
+                        if (profile.get("first_name") or "").strip():
+                            self.first_name_var.set(profile["first_name"])
+                        if (profile.get("dob") or "").strip():
+                            self.dob_var.set(profile["dob"])
+                        ppid = (profile.get("patient_id") or "").strip()
+                        if ppid:
+                            self.current_patient_id = ppid
+            except Exception:
+                pass
+
             soap = payload.get("soap", {}) or {}
             self._apply_soap_to_ui(soap)
 
