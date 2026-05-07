@@ -814,14 +814,14 @@ class FamilySocialSectionCore(ttk.Frame):
                     for pix in po:
                         if pix < 0 or pix >= len(pitems):
                             continue
-                        hdr = str(pitems[pix]).strip()
+                        hdr = self._resolve_vars(str(pitems[pix])).strip()
                         if not hdr:
                             continue
                         chosen_assoc = sorted(abp.get(pix, set()))
                         detail_parts = [
-                            str(alist[ai]).strip()
+                            self._resolve_vars(str(alist[ai])).strip()
                             for ai in chosen_assoc
-                            if 0 <= ai < len(alist) and str(alist[ai]).strip()
+                            if 0 <= ai < len(alist) and self._resolve_vars(str(alist[ai])).strip()
                         ]
                         detail = _join_with_oxford_and(detail_parts)
                         if detail:
@@ -848,7 +848,7 @@ class FamilySocialSectionCore(ttk.Frame):
                         except Exception:
                             chosen_idxs = None
                     if chosen_idxs:
-                        chosen = [str(its[k]).strip() for k in chosen_idxs if 0 <= k < len(its)]
+                        chosen = [self._resolve_vars(str(its[k])).strip() for k in chosen_idxs if 0 <= k < len(its)]
                         chosen = [x for x in chosen if x]
                         if chosen:
                             block = "\n\n\t• " + "\n\t• ".join(chosen)
@@ -856,13 +856,13 @@ class FamilySocialSectionCore(ttk.Frame):
                             appended = True
                     if appended:
                         continue
-                    val_fb = (var.get() or "").strip()
+                    val_fb = self._resolve_vars(var.get() or "").strip()
                     if not val_fb or _is_omit_phrase(val_fb):
                         continue
                     dropdown_parts.append(val_fb)
                     continue
 
-                val = (var.get() or "").strip()
+                val = self._resolve_vars(var.get() or "").strip()
                 if not val or _is_omit_phrase(val):
                     continue
 
@@ -1247,6 +1247,12 @@ class FamilySocialSectionCore(ttk.Frame):
 
         pt = (dd_ref.get("label") or "Option") + " — select one or more (each choice adds its paired detail list below):"
         ttk.Label(top_fr, text=pt).pack(anchor="w")
+        ttk.Label(
+            top_fr,
+            text="Click to select  •  Ctrl+click to deselect",
+            font=("Segoe UI", 8),
+            foreground="gray",
+        ).pack(anchor="w")
 
         search_var = tk.StringVar(value="")
         selected_set_primary: set[int] = set()
@@ -1492,16 +1498,79 @@ class FamilySocialSectionCore(ttk.Frame):
 
         meta["_rebuild_associated_cols"] = _rebuild_assoc_columns
 
-        def _primary_changed(_e=None) -> None:
-            _schedule_primary_sync()
+        _hint_tip: list[tk.Toplevel | None] = [None]
 
-        # Use release/final-state events instead of raw <<ListboxSelect>> to avoid
-        # transient selection states during Ctrl-toggle.
-        plb.bind("<ButtonRelease-1>", _primary_changed)
-        plb.bind("<KeyRelease-Up>", _primary_changed)
-        plb.bind("<KeyRelease-Down>", _primary_changed)
-        plb.bind("<KeyRelease-space>", _primary_changed)
-        plb.bind("<KeyRelease-Return>", _primary_changed)
+        def _dismiss_hint() -> None:
+            tip = _hint_tip[0]
+            if tip is not None:
+                try:
+                    tip.destroy()
+                except Exception:
+                    pass
+                _hint_tip[0] = None
+
+        def _show_deselect_hint(event) -> None:
+            _dismiss_hint()
+            tip = tk.Toplevel(self)
+            tip.overrideredirect(True)
+            tip.wm_geometry(f"+{event.x_root + 14}+{event.y_root + 14}")
+            tk.Label(
+                tip,
+                text="Hold Ctrl and click the item to deselect it.",
+                background="#fff9c4",
+                foreground="#333333",
+                relief="solid",
+                borderwidth=1,
+                padx=8,
+                pady=5,
+                font=("Segoe UI", 9),
+            ).pack()
+            _hint_tip[0] = tip
+            tip.after(2500, _dismiss_hint)
+
+        def _on_primary_press(event, _plb=plb, _vis=visible_pri, _ss=selected_set_primary) -> str:
+            """Plain click — add to selection only; show hint if item is already selected."""
+            idx = _plb.nearest(event.y)
+            if 0 <= idx < _plb.size() and idx < len(_vis):
+                src = _vis[idx]
+                if src not in _ss:
+                    _dismiss_hint()
+                    _plb.selection_set(idx)
+                    _schedule_primary_sync()
+                else:
+                    _show_deselect_hint(event)
+            return "break"
+
+        def _on_primary_ctrl_press(event, _plb=plb, _vis=visible_pri, _ss=selected_set_primary) -> str:
+            """Ctrl+click — confirm then deselect; Ctrl+clicking an unselected item is a no-op."""
+            _dismiss_hint()
+            idx = _plb.nearest(event.y)
+            if 0 <= idx < _plb.size() and idx < len(_vis):
+                src = _vis[idx]
+                if src in _ss:
+                    item_name = primary_items[src] if 0 <= src < len(primary_items) else "this item"
+                    if messagebox.askyesno(
+                        "Remove selection",
+                        f"Remove \"{item_name}\"?\n\n"
+                        "This will also delete its associated paired-detail dropdown.",
+                        icon="warning",
+                    ):
+                        _plb.selection_clear(idx)
+                        _schedule_primary_sync()
+            return "break"
+
+        # Intercept mouse events before Tk's class-level EXTENDED bindings fire.
+        # "break" prevents the default clear-and-select (or toggle) behaviour.
+        plb.bind("<ButtonPress-1>", _on_primary_press)
+        plb.bind("<Control-ButtonPress-1>", _on_primary_ctrl_press)
+        # Suppress default Shift-click range-extend and button-motion drag-extend.
+        plb.bind("<Shift-ButtonPress-1>", lambda e: "break")
+        plb.bind("<B1-Motion>", lambda e: "break")
+        # Keep keyboard navigation for accessibility.
+        plb.bind("<KeyRelease-Up>", lambda _e: _schedule_primary_sync())
+        plb.bind("<KeyRelease-Down>", lambda _e: _schedule_primary_sync())
+        plb.bind("<KeyRelease-space>", lambda _e: _schedule_primary_sync())
+        plb.bind("<KeyRelease-Return>", lambda _e: _schedule_primary_sync())
         self._bind_listbox_mousewheel_local(plb)
 
         def _add_primary_item() -> None:
