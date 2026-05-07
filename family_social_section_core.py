@@ -27,6 +27,53 @@ TEMPLATE_BAND_COLORS = ("#9D9D9D", "#C5C5C5")
 # (used for intra-line header / detail segments in Associated Multiple bullet lines).
 _ATTACH = "\x02"
 
+# Per-dropdown bullet icon (Template editor). Used after tab for bullet lines / associated-multi rows.
+# Keys are stored in each dropdown dict as `bullet_style`.
+_BULLET_STYLE_TAB_SUFFIX: dict[str, str] = {
+    # “none”: same tabbed line breaks as bulleted lines, with a space after the tab (no icon).
+    "none": " ",
+    "round_circle": "○ ",
+    "filled_circle": "● ",
+    "square": "□ ",
+    "filled_square": "■ ",
+    "dash_line": "– ",  # en dash
+    "hyphen": "- ",
+    "bullet": "• ",
+}
+
+VALID_DROPDOWN_BULLET_STYLES: frozenset[str] = frozenset(_BULLET_STYLE_TAB_SUFFIX.keys())
+
+_BULLET_STYLE_CHOICES: tuple[tuple[str, str], ...] = (
+    ("none", "None (no icon, indented lines)"),
+    ("round_circle", "Round circle ○"),
+    ("filled_circle", "Filled circle ●"),
+    ("square", "Square □"),
+    ("filled_square", "Filled square ■"),
+    ("dash_line", "Dash line –"),
+    ("hyphen", "Hyphen -"),
+    ("bullet", "Classic bullet •"),
+)
+
+
+def _effective_bullet_style_key(dd: dict) -> str:
+    st = dd.get("bullet_style")
+    if isinstance(st, str) and st in _BULLET_STYLE_TAB_SUFFIX:
+        return st
+    if dd.get("associated_multi"):
+        return "hyphen"
+    return "bullet"
+
+
+def _bullet_tab_suffix(dd: dict) -> str:
+    return _BULLET_STYLE_TAB_SUFFIX[_effective_bullet_style_key(dd)]
+
+
+def _bullet_line_prefix(dd: dict, first_line: bool) -> str:
+    suf = _bullet_tab_suffix(dd)
+    if first_line:
+        return "\n\n\t" + suf
+    return "\n\t" + suf
+
 # Template editor: button bank order — keep aligned with keys returned by `_format_context`.
 PREFIX_PLACEHOLDER_TOKEN_KEYS: tuple[str, ...] = (
     "age",
@@ -78,29 +125,35 @@ def _finalize_sentence(parts: list[str]) -> str:
     return out
 
 
-def _finalize_family_social_block(parts: list[str]) -> str:
+def _rstrip_trailing_newlines_only(s: str) -> str:
+    """Trim only \\r/\\n at end so spaces after tab (bullet icon gap) stay on the line."""
+    return str(s).rstrip("\r\n")
+
+
+def _finalize_family_social_block(parts: list[str] | None) -> str:
     """Join prefix + dropdown fragments in a single pass.
 
     Joining rules per part (after filtering None / whitespace-only):
-    • starts with "\\n"   → attach directly, rstrip the part (bullet block)
+    • starts with "\\n"   → attach directly, rstrip trailing newlines only (keeps space after icon/tab)
     • starts with _ATTACH → strip the marker and attach directly (intra-line join)
     • otherwise           → strip and prepend a single space (except for the first part)
 
     No sentence-final period is added when the block contains any bullet ("\\n") part.
     """
+    pl = list(parts or [])
     has_bullet = any(
-        str(p).startswith("\n") for p in (parts or []) if p is not None and str(p).strip()
+        p is not None and str(p).startswith("\n") for p in pl
     )
     out = ""
     first = True
-    for p in parts:
+    for p in pl:
         if p is None:
             continue
         s = str(p)
-        if not s.strip():
+        if not s.strip() and not s.startswith("\n"):
             continue
         if s.startswith("\n"):
-            cleaned = s.rstrip()
+            cleaned = _rstrip_trailing_newlines_only(s)
             out = cleaned if first else (out + cleaned)
         elif s.startswith(_ATTACH):
             cleaned = s[len(_ATTACH):]
@@ -145,28 +198,29 @@ def _dd_fmt_tag(dd: dict | None) -> str | None:
 
 
 def _finalize_family_social_block_annotated(
-    parts: list[str], dds: list["dict | None"]
+    parts: list[str] | None, dds: list["dict | None"]
 ) -> list[tuple[str, "str | None"]]:
     """
     Mirror of _finalize_family_social_block but return (text_chunk, tag) pairs.
     dds[i] is the dropdown dict for parts[i], or None for the prefix.
     Joining rules match _finalize_family_social_block exactly.
     """
+    pl = list(parts or [])
+    dl = list(dds or [])
     has_bullet = any(
-        str(p).startswith("\n") for p, _ in zip(parts, dds)
-        if p is not None and str(p).strip()
+        p is not None and str(p).startswith("\n") for p in pl
     )
     runs: list[tuple[str, "str | None"]] = []
     first = True
-    for p, d in zip(parts, dds):
+    for p, d in zip(pl, dl):
         if p is None:
             continue
         s = str(p)
-        if not s.strip():
+        if not s.strip() and not s.startswith("\n"):
             continue
         tag = _dd_fmt_tag(d)
         if s.startswith("\n"):
-            cleaned = s.rstrip()
+            cleaned = _rstrip_trailing_newlines_only(s)
             runs.append((cleaned if first else cleaned, tag))
         elif s.startswith(_ATTACH):
             cleaned = s[len(_ATTACH):]
@@ -919,7 +973,7 @@ class FamilySocialSectionCore(ttk.Frame):
                         ]
                         detail = _join_with_oxford_and(detail_parts)
                         # Line prefix (structural, no formatting)
-                        line_pfx = "\n\n\t- " if first_bullet else "\n\t- "
+                        line_pfx = _bullet_line_prefix(dd, first_bullet)
                         dropdown_parts.append(line_pfx)
                         _dropdown_dds.append(None)
                         # Header text (primary formatting)
@@ -954,7 +1008,9 @@ class FamilySocialSectionCore(ttk.Frame):
                         chosen = [self._resolve_vars(str(its[k])).strip() for k in chosen_idxs if 0 <= k < len(its)]
                         chosen = [x for x in chosen if x]
                         if chosen:
-                            block = "\n\n\t• " + "\n\t• ".join(chosen)
+                            bp0 = _bullet_line_prefix(dd, True)
+                            bpn = _bullet_line_prefix(dd, False)
+                            block = bp0 + chosen[0] + "".join(bpn + c for c in chosen[1:])
                             dropdown_parts.append(block)
                             _dropdown_dds.append(dd)
                             appended = True
@@ -972,7 +1028,7 @@ class FamilySocialSectionCore(ttk.Frame):
                     continue
 
                 if not is_multi and bool(dd.get("multi_bullets")):
-                    block = "\n\n\t• " + val.strip()
+                    block = _bullet_line_prefix(dd, True) + val.strip()
                     dropdown_parts.append(block)
                     _dropdown_dds.append(dd)
                     continue
@@ -2378,6 +2434,31 @@ class FamilySocialSectionCore(ttk.Frame):
         ttk.Checkbutton(fr, text="Italic",    variable=ital_var, command=_save_fmt).pack(side="left", padx=(0, 8))
         ttk.Checkbutton(fr, text="Underline", variable=unde_var, command=_save_fmt).pack(side="left")
 
+    def _build_dd_bullet_style_row(self, parent: ttk.Frame, dd: dict) -> None:
+        """Combobox for bullet icon when output uses bullet lines or associated-multi rows."""
+        key_to_label = {k: lab for k, lab in _BULLET_STYLE_CHOICES}
+        label_to_key = {lab: k for k, lab in _BULLET_STYLE_CHOICES}
+        labels = [lab for _, lab in _BULLET_STYLE_CHOICES]
+
+        fr = ttk.Frame(parent)
+        fr.pack(fill="x", padx=6, pady=(0, 6))
+        ttk.Label(fr, text="Bullet icon (for bullet-style lines):").pack(side="left", padx=(0, 8))
+        var = tk.StringVar(value=key_to_label[_effective_bullet_style_key(dd)])
+        cb = ttk.Combobox(fr, textvariable=var, values=labels, state="readonly", width=46)
+        cb.pack(side="left", fill="x", expand=True)
+
+        def _save(_e=None, _d=dd, _v=var):
+            lab = (_v.get() or "").strip()
+            k = label_to_key.get(lab)
+            if k:
+                _d["bullet_style"] = k
+                self._persist_templates()
+                self._render_note_builder()
+                self._apply_builder_to_note()
+                self.on_change_callback()
+
+        cb.bind("<<ComboboxSelected>>", _save)
+
     def _build_dropdown_editor_block(self, parent: ttk.Frame, tmpl: dict, di: int, dd: dict) -> None:
         frame = ttk.LabelFrame(parent, text=f"Dropdown {di + 1}")
         frame.pack(fill="x", padx=8, pady=6)
@@ -2455,6 +2536,7 @@ class FamilySocialSectionCore(ttk.Frame):
                 fmt_key="assoc_text_format",
                 label_text="Paired items text style:",
             )
+            self._build_dd_bullet_style_row(frame, dd)
             ttk.Button(
                 frame, text="Remove dropdown", command=lambda t=tmpl, d=di: self._remove_dropdown(t, d)
             ).pack(anchor="e", padx=6, pady=(0, 6))
@@ -2481,6 +2563,7 @@ class FamilySocialSectionCore(ttk.Frame):
         ttk.Button(mode_row, text="Switch single / multiple", command=_flip_mode).pack(side="right")
 
         self._build_dd_format_row(frame, dd)
+        self._build_dd_bullet_style_row(frame, dd)
         ttk.Button(
             frame, text="Remove dropdown", command=lambda t=tmpl, d=di: self._remove_dropdown(t, d)
         ).pack(anchor="e", padx=6)
@@ -2741,6 +2824,38 @@ class FamilySocialSectionCore(ttk.Frame):
         self.text.insert("1.0", value or "")
         if self.note_combo_vars and self._note_builder_meta:
             self._apply_builder_state(builder_state if isinstance(builder_state, dict) else None)
+        # Deferred re-syncs ensure UI matches saved state even after later widget rebuilds
+        # (e.g. associated-multiple columns) settle.
+        self.after_idle(self._sync_skip_checkbuttons)
+        self.after_idle(self._reapply_builder_text_formatting)
+
+    def _reapply_builder_text_formatting(self) -> None:
+        """Re-render the note textbox with format tags (bold/italic/underline + bullet styles)
+        when the loaded plain text matches what the builder would produce. This makes
+        formatting visible after a fresh app load without losing manual edits — if the user
+        edited the note by hand, plain != builder output and we leave the textbox alone."""
+        try:
+            runs = self._compose_builder_annotated_runs()
+        except Exception:
+            return
+        if not runs:
+            return
+        plain = "".join(t for t, _ in runs)
+        try:
+            current = self.text.get("1.0", tk.END)
+        except tk.TclError:
+            return
+        if plain.strip() != current.strip():
+            return  # user manually edited the textbox; don't overwrite
+        try:
+            self.text.delete("1.0", tk.END)
+            for chunk, tag in runs:
+                if tag:
+                    self.text.insert(tk.END, chunk, (tag,))
+                else:
+                    self.text.insert(tk.END, chunk)
+        except tk.TclError:
+            pass
 
     def has_content(self) -> bool:
         return bool(self.get_value().strip())

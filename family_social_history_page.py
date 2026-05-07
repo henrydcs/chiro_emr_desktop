@@ -15,6 +15,7 @@ from family_social_section_core import (
     DEFAULT_TEMPLATES,
     FamilySocialSectionCore,
     TEMPLATES_FILENAME,
+    VALID_DROPDOWN_BULLET_STYLES,
 )
 
 # Exam JSON key `family_social_builder` top-level version (wraps per-block builder states).
@@ -46,6 +47,9 @@ def _normalize_template_dd(dd: dict) -> None:
         dd.setdefault("associate_label", "Associated detail")
         if not isinstance(dd.get("associate_items"), list) or not dd.get("associate_items"):
             dd["associate_items"] = ["Option A", "Option B"]
+    bst = dd.get("bullet_style")
+    if bst is not None and (not isinstance(bst, str) or bst not in VALID_DROPDOWN_BULLET_STYLES):
+        dd.pop("bullet_style", None)
 
 
 def _normalize_template_list(templates: list) -> list[dict]:

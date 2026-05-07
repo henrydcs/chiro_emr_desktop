@@ -3001,6 +3001,214 @@ def therapy_paragraph_from_subjectives(subj: dict, first_name: str = "") -> tupl
 # =======================================================
 # Family / Social History (PDF)
 # =======================================================
+
+# Built-in PDF fonts (e.g. Helvetica) lack glyphs for geometric bullets (○●■□); viewers
+# substitute wrong shapes. Register a Unicode-capable TTF family so this section body matches
+# what's shown in the Note builder / Live Preview.
+_FS_FONT_FAMILY: "str | None" = None  # set after first successful registration
+
+# Family candidates: (normal, bold, italic, bold-italic). First entry whose Regular face
+# exists AND covers the bullet codepoints is used.
+_FS_FONT_CANDIDATES: tuple[tuple[str, str, str, str, str], ...] = (
+    # display name, Regular, Bold, Italic, BoldItalic  (file basenames)
+    ("Arial",      "arial.ttf",       "arialbd.ttf",   "ariali.ttf",     "arialbi.ttf"),
+    ("DejaVuSans", "DejaVuSans.ttf",  "DejaVuSans-Bold.ttf", "DejaVuSans-Oblique.ttf", "DejaVuSans-BoldOblique.ttf"),
+    ("SegoeUI",    "segoeui.ttf",     "segoeuib.ttf",  "segoeuii.ttf",   "segoeuiz.ttf"),
+)
+
+# Codepoints we need correct rendering for in the F/S body (geometric bullet shapes).
+_FS_REQUIRED_BULLETS: tuple[int, ...] = (0x25CB, 0x25CF, 0x25A0, 0x25A1, 0x2022, 0x2013)
+
+
+def _font_search_dirs() -> list[str]:
+    dirs: list[str] = []
+    win = os.environ.get("WINDIR")
+    if win:
+        dirs.append(os.path.join(win, "Fonts"))
+    local = os.environ.get("LOCALAPPDATA")
+    if local:
+        dirs.append(os.path.join(local, "Microsoft", "Windows", "Fonts"))
+    dirs.extend([
+        "/usr/share/fonts/truetype/dejavu",
+        "/usr/share/fonts/truetype/liberation",
+        "/usr/share/fonts",
+        "/Library/Fonts",
+        "/System/Library/Fonts",
+    ])
+    return [d for d in dirs if d and os.path.isdir(d)]
+
+
+def _find_font_file(basename: str) -> "str | None":
+    if not basename:
+        return None
+    for d in _font_search_dirs():
+        p = os.path.join(d, basename)
+        if os.path.isfile(p):
+            return p
+    return None
+
+
+def _font_covers_bullets(path: str) -> bool:
+    """Inspect the cmap (format 4, platform 3 / encoding 1) and confirm all required
+    geometric-shape codepoints map to a non-zero glyph id."""
+    try:
+        import struct
+        with open(path, "rb") as fh:
+            data = fh.read()
+
+        def u16(o: int) -> int:
+            return struct.unpack(">H", data[o:o + 2])[0]
+
+        def u32(o: int) -> int:
+            return struct.unpack(">I", data[o:o + 4])[0]
+
+        # Skip TTC wrapper (first font only).
+        offset = 0
+        if data[:4] == b"ttcf":
+            offset = u32(12)
+
+        num_tables = u16(offset + 4)
+        cmap_off = None
+        for i in range(num_tables):
+            rec = offset + 12 + i * 16
+            if data[rec:rec + 4] == b"cmap":
+                cmap_off = u32(rec + 8)
+                break
+        if cmap_off is None:
+            return False
+
+        num_sub = u16(cmap_off + 2)
+        sub_off = None
+        for i in range(num_sub):
+            r = cmap_off + 4 + i * 8
+            pid = u16(r)
+            eid = u16(r + 2)
+            off = u32(r + 4)
+            if pid == 3 and eid == 1 and u16(cmap_off + off) == 4:
+                sub_off = cmap_off + off
+                break
+        if sub_off is None:
+            return False
+
+        seg_count = u16(sub_off + 6) // 2
+        end_arr = sub_off + 14
+        end = [u16(end_arr + i * 2) for i in range(seg_count)]
+        start_arr = end_arr + seg_count * 2 + 2
+        start = [u16(start_arr + i * 2) for i in range(seg_count)]
+        delta_arr = start_arr + seg_count * 2
+        delta = [struct.unpack(">h", data[delta_arr + i * 2:delta_arr + i * 2 + 2])[0] for i in range(seg_count)]
+        ro_arr = delta_arr + seg_count * 2
+        ro = [u16(ro_arr + i * 2) for i in range(seg_count)]
+
+        for cp in _FS_REQUIRED_BULLETS:
+            gid = 0
+            for i in range(seg_count):
+                if start[i] <= cp <= end[i]:
+                    if ro[i] == 0:
+                        gid = (cp + delta[i]) & 0xFFFF
+                    else:
+                        addr = ro_arr + i * 2 + ro[i] + (cp - start[i]) * 2
+                        gid = u16(addr)
+                        if gid != 0:
+                            gid = (gid + delta[i]) & 0xFFFF
+                    break
+            if gid == 0:
+                return False
+        return True
+    except Exception:
+        return False
+
+
+def _ensure_unicode_font_family() -> "str | None":
+    """Register a Unicode-capable TTF family with ReportLab. Returns the family name
+    to use as fontName, or None if nothing usable was found."""
+    global _FS_FONT_FAMILY
+    if _FS_FONT_FAMILY:
+        return _FS_FONT_FAMILY
+
+    try:
+        import reportlab
+        from reportlab.pdfbase import pdfmetrics
+        from reportlab.pdfbase.ttfonts import TTFont
+        from reportlab.pdfbase.pdfmetrics import registerFontFamily, getRegisteredFontNames
+    except Exception:
+        return None
+
+    registered = set(getRegisteredFontNames() or [])
+
+    for family, reg, bold, ital, boldit in _FS_FONT_CANDIDATES:
+        reg_path = _find_font_file(reg)
+        if not reg_path or not _font_covers_bullets(reg_path):
+            continue
+        # Register Regular (required); register optional faces only when present so
+        # bold/italic markup degrades gracefully if a specific face is missing.
+        try:
+            if family not in registered:
+                pdfmetrics.registerFont(TTFont(family, reg_path))
+
+            def _maybe(name: str, basename: str) -> str:
+                if not basename:
+                    return family
+                if name in registered:
+                    return name
+                p = _find_font_file(basename)
+                if not p:
+                    return family
+                pdfmetrics.registerFont(TTFont(name, p))
+                return name
+
+            bold_name   = _maybe(f"{family}-Bold",       bold)
+            ital_name   = _maybe(f"{family}-Italic",     ital)
+            boldit_name = _maybe(f"{family}-BoldItalic", boldit)
+
+            registerFontFamily(
+                family,
+                normal=family,
+                bold=bold_name,
+                italic=ital_name,
+                boldItalic=boldit_name,
+            )
+            _FS_FONT_FAMILY = family
+            return _FS_FONT_FAMILY
+        except Exception:
+            continue
+
+    # Final fallback: ReportLab-bundled Vera (does NOT cover geometric shapes, but at least
+    # keeps PDF renderable when no system font is available).
+    try:
+        import reportlab
+        from reportlab.pdfbase import pdfmetrics
+        from reportlab.pdfbase.ttfonts import TTFont
+        from reportlab.pdfbase.pdfmetrics import registerFontFamily
+
+        root = os.path.join(os.path.dirname(reportlab.__file__), "fonts")
+        pdfmetrics.registerFont(TTFont("Vera",          os.path.join(root, "Vera.ttf")))
+        pdfmetrics.registerFont(TTFont("Vera-Bold",     os.path.join(root, "VeraBd.ttf")))
+        pdfmetrics.registerFont(TTFont("Vera-Italic",   os.path.join(root, "VeraIt.ttf")))
+        pdfmetrics.registerFont(TTFont("Vera-BoldItalic", os.path.join(root, "VeraBI.ttf")))
+        registerFontFamily("Vera", normal="Vera", bold="Vera-Bold",
+                           italic="Vera-Italic", boldItalic="Vera-BoldItalic")
+        _FS_FONT_FAMILY = "Vera"
+    except Exception:
+        _FS_FONT_FAMILY = None
+    return _FS_FONT_FAMILY
+
+
+def _get_family_social_body_style(styles) -> object:
+    """ParagraphStyle for F/S block bodies: Unicode-capable font so bullets render correctly."""
+    from reportlab.lib.styles import ParagraphStyle
+
+    family = _ensure_unicode_font_family()
+    if not family:
+        return styles["BodyText"]
+    name = f"FamilySocialBody_{family}"
+    if name in styles.byName:
+        return styles[name]
+    sty = ParagraphStyle(name=name, parent=styles["BodyText"], fontName=family)
+    styles.add(sty)
+    return sty
+
+
 def build_family_social_flowables(soap: dict, styles) -> list:
     """Heading2 main title; v2 builder uses Heading3 per block. Legacy: single body."""
     soap = soap or {}
@@ -3022,6 +3230,7 @@ def build_family_social_flowables(soap: dict, styles) -> list:
             return []
         out.append(Paragraph("<b>FAMILY / SOCIAL HISTORY</b>", styles["Heading2"]))
         out.append(Spacer(1, 0.08 * inch))
+        fs_body = _get_family_social_body_style(styles)
         for heading, text, rich in nonempty:
             if heading:
                 out.append(Paragraph(f"<b>{xml_escape(heading)}</b>", styles["Heading3"]))
@@ -3032,7 +3241,7 @@ def build_family_social_flowables(soap: dict, styles) -> list:
                 safe_fs = rich
             else:
                 safe_fs = xml_escape(text).replace("\n\n", "<br/><br/>").replace("\n", "<br/>")
-            out.append(Paragraph(safe_fs, styles["BodyText"]))
+            out.append(Paragraph(safe_fs, fs_body))
             out.append(Spacer(1, 0.10 * inch))
         return out
 
@@ -3042,7 +3251,7 @@ def build_family_social_flowables(soap: dict, styles) -> list:
     out.append(Paragraph("<b>FAMILY / SOCIAL HISTORY</b>", styles["Heading2"]))
     out.append(Spacer(1, 0.08 * inch))
     safe_fs = xml_escape(family_social).replace("\n\n", "<br/><br/>").replace("\n", "<br/>")
-    out.append(Paragraph(safe_fs, styles["BodyText"]))
+    out.append(Paragraph(safe_fs, _get_family_social_body_style(styles)))
     out.append(Spacer(1, 0.12 * inch))
     return out
 
