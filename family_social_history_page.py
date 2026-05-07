@@ -617,8 +617,13 @@ class FamilySocialHistoryPage(ttk.Frame):
             core = self._cores_by_id.get(sid)
             if core is None:
                 continue
-            t = core.get_value().strip()
-            if not t:
+            # Prefer annotated runs (carries Bold/Italic/Underline tags) when available.
+            if hasattr(core, "get_live_preview_annotated_runs"):
+                content_runs = core.get_live_preview_annotated_runs()
+            else:
+                t = core.get_value().strip()
+                content_runs = [(t, None)] if t else []
+            if not content_runs:
                 continue
             if not wrote_header:
                 runs.append(("FAMILY / SOCIAL HISTORY\n", "H_BOLD"))
@@ -630,7 +635,8 @@ class FamilySocialHistoryPage(ttk.Frame):
             if h:
                 runs.append((h + "\n", "LP_FS_SUBHEAD"))
                 runs.append(("\n", None))
-            runs.append((t + "\n", None))
+            runs.extend(content_runs)
+            runs.append(("\n", None))
         return runs
 
     def get_builder_state(self) -> dict:
@@ -646,6 +652,7 @@ class FamilySocialHistoryPage(ttk.Frame):
                     "id": sid,
                     "heading": sec.get("heading") or "",
                     "text": core.get_value(),
+                    "rich_text": core.get_rich_value(),
                     "builder": inner,
                 }
             )

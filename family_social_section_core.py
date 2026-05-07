@@ -23,6 +23,10 @@ _BUILDER_SLOT_DEFAULT = object()
 OPTION_OMIT = "(Omit — exclude from sentence)"
 TEMPLATE_BAND_COLORS = ("#9D9D9D", "#C5C5C5")
 
+# Parts prefixed with this character attach to the previous run with no intervening space
+# (used for intra-line header / detail segments in Associated Multiple bullet lines).
+_ATTACH = "\x02"
+
 # Template editor: button bank order — keep aligned with keys returned by `_format_context`.
 PREFIX_PLACEHOLDER_TOKEN_KEYS: tuple[str, ...] = (
     "age",
@@ -75,20 +79,20 @@ def _finalize_sentence(parts: list[str]) -> str:
 
 
 def _finalize_family_social_block(parts: list[str]) -> str:
-    """Join prefix + dropdown fragments; fragments starting with newline (bullet blocks) attach without a leading space."""
-    last_substantial: str | None = None
-    for p in reversed(parts or []):
-        if p is None:
-            continue
-        raw = str(p)
-        if raw.strip():
-            last_substantial = raw
-            break
-    # Bullet-lines dropdown fragments begin with "\\n"; narrative fragments do not. Do not append
-    # a sentence-final period after a trailing bullet list — bullets should not end with "." here.
-    ends_with_bullet_fragment = bool(last_substantial and last_substantial.startswith("\n"))
+    """Join prefix + dropdown fragments in a single pass.
 
-    chunks: list[str] = []
+    Joining rules per part (after filtering None / whitespace-only):
+    • starts with "\\n"   → attach directly, rstrip the part (bullet block)
+    • starts with _ATTACH → strip the marker and attach directly (intra-line join)
+    • otherwise           → strip and prepend a single space (except for the first part)
+
+    No sentence-final period is added when the block contains any bullet ("\\n") part.
+    """
+    has_bullet = any(
+        str(p).startswith("\n") for p in (parts or []) if p is not None and str(p).strip()
+    )
+    out = ""
+    first = True
     for p in parts:
         if p is None:
             continue
@@ -96,21 +100,19 @@ def _finalize_family_social_block(parts: list[str]) -> str:
         if not s.strip():
             continue
         if s.startswith("\n"):
-            chunks.append(s.rstrip())
+            cleaned = s.rstrip()
+            out = cleaned if first else (out + cleaned)
+        elif s.startswith(_ATTACH):
+            cleaned = s[len(_ATTACH):]
+            out = cleaned if first else (out + cleaned)
         else:
-            chunks.append(s.strip())
-    if not chunks:
-        return ""
-    out = chunks[0]
-    for c in chunks[1:]:
-        if c.startswith("\n"):
-            out += c
-        else:
-            out += " " + c
+            cleaned = s.strip()
+            out = cleaned if first else (out + " " + cleaned)
+        first = False
     out = out.strip()
     if not out:
         return ""
-    if ends_with_bullet_fragment:
+    if has_bullet:
         return out
     if out[-1] not in ".!?" and out[-1] != ",":
         out += "."
@@ -125,6 +127,72 @@ def _prefix_before_bullet_list(rp: str) -> str:
     if s.endswith(":"):
         return s
     return s + ":"
+
+
+def _fmt_tag_name(bold: bool, italic: bool, underline: bool) -> str | None:
+    """Return a canonical tk.Text tag name for the given combination, or None if all off."""
+    if not bold and not italic and not underline:
+        return None
+    return "_FMT_" + ("B" if bold else "") + ("I" if italic else "") + ("U" if underline else "")
+
+
+def _dd_fmt_tag(dd: dict | None) -> str | None:
+    """Derive the formatting tag name for a dropdown dict (or None = no formatting)."""
+    if not dd:
+        return None
+    fmt = dd.get("text_format") or {}
+    return _fmt_tag_name(bool(fmt.get("bold")), bool(fmt.get("italic")), bool(fmt.get("underline")))
+
+
+def _finalize_family_social_block_annotated(
+    parts: list[str], dds: list["dict | None"]
+) -> list[tuple[str, "str | None"]]:
+    """
+    Mirror of _finalize_family_social_block but return (text_chunk, tag) pairs.
+    dds[i] is the dropdown dict for parts[i], or None for the prefix.
+    Joining rules match _finalize_family_social_block exactly.
+    """
+    has_bullet = any(
+        str(p).startswith("\n") for p, _ in zip(parts, dds)
+        if p is not None and str(p).strip()
+    )
+    runs: list[tuple[str, "str | None"]] = []
+    first = True
+    for p, d in zip(parts, dds):
+        if p is None:
+            continue
+        s = str(p)
+        if not s.strip():
+            continue
+        tag = _dd_fmt_tag(d)
+        if s.startswith("\n"):
+            cleaned = s.rstrip()
+            runs.append((cleaned if first else cleaned, tag))
+        elif s.startswith(_ATTACH):
+            cleaned = s[len(_ATTACH):]
+            runs.append((cleaned, tag))
+        else:
+            cleaned = s.strip()
+            if first:
+                runs.append((cleaned, tag))
+            else:
+                runs.append((" " + cleaned, tag))
+        first = False
+
+    if not runs:
+        return []
+
+    # Strip any accidental leading space from the very first run.
+    if runs[0][0].startswith(" "):
+        runs[0] = (runs[0][0].lstrip(), runs[0][1])
+
+    if not has_bullet:
+        full = "".join(r[0] for r in runs).strip()
+        if full and full[-1] not in ".!?" and full[-1] != ",":
+            last_t, last_tag = runs[-1]
+            runs[-1] = (last_t + ".", last_tag)
+
+    return [(t, tag) for t, tag in runs if t]
 
 
 def _join_with_oxford_and(items: list[str]) -> str:
@@ -542,6 +610,15 @@ class FamilySocialSectionCore(ttk.Frame):
         self.text = tk.Text(note_inner, width=110, height=12, wrap="word")
         self.text.pack(fill="x", expand=False, padx=10, pady=(0, 8))
         self.text.bind("<KeyRelease>", lambda e: self._on_note_text_changed())
+        # Formatting tags used by _apply_builder_to_note when dropdowns have text_format flags.
+        _tf = ("Segoe UI", 10)
+        self.text.tag_configure("_FMT_B",   font=(*_tf, "bold"))
+        self.text.tag_configure("_FMT_I",   font=(*_tf, "italic"))
+        self.text.tag_configure("_FMT_BI",  font=(*_tf, "bold italic"))
+        self.text.tag_configure("_FMT_U",   underline=True)
+        self.text.tag_configure("_FMT_BU",  font=(*_tf, "bold"),        underline=True)
+        self.text.tag_configure("_FMT_IU",  font=(*_tf, "italic"),      underline=True)
+        self.text.tag_configure("_FMT_BIU", font=(*_tf, "bold italic"), underline=True)
 
     @staticmethod
     def _widget_is_descendant_of(ancestor: tk.Widget | None, w: tk.Widget | None) -> bool:
@@ -688,7 +765,12 @@ class FamilySocialSectionCore(ttk.Frame):
         return None
 
     def _run_with_note_builder_scroll_preserved(self, fn) -> None:
-        """Run `fn` while keeping the sentence-builder canvas vertical scroll fraction stable (reduces jump when widgets resize)."""
+        """Run `fn` while keeping the sentence-builder canvas vertical scroll fraction stable.
+
+        Scroll restoration is deferred via after_idle so Tk can process the <Configure>
+        event that updates the scrollregion *before* yview_moveto is called — prevents
+        the visible jump when assoc columns are destroyed and recreated.
+        """
         nb = getattr(self, "note_builder_canvas", None)
         top: float | None = None
         if nb is not None:
@@ -696,14 +778,17 @@ class FamilySocialSectionCore(ttk.Frame):
                 top = float(nb.yview()[0])
             except Exception:
                 top = None
-        try:
-            fn()
-        finally:
-            if nb is not None and top is not None:
+        fn()
+        if nb is not None and top is not None:
+            _saved_top = top
+
+            def _restore() -> None:
                 try:
-                    nb.yview_moveto(top)
+                    nb.yview_moveto(_saved_top)
                 except Exception:
                     pass
+
+            self.after_idle(_restore)
 
     def _wire_mousewheel(self) -> None:
         if self._mw_bound:
@@ -777,12 +862,17 @@ class FamilySocialSectionCore(ttk.Frame):
         if notify:
             self.on_change_callback()
 
-    def _compose_parts_for_template(self, i: int, tmpl: dict) -> list[str]:
+    def _compose_parts_for_template(
+        self, i: int, tmpl: dict, _dd_out: "list[dict | None] | None" = None
+    ) -> list[str]:
         """
         Build prefix + non-Omit dropdown fragments. If this template has at least one
         dropdown and every dropdown is Omit/empty, return [] so the prefix is not left
         orphaned (e.g. no bare "Family history is." or "hello.").
+        When _dd_out is provided it receives the dd dict (or None for prefix) parallel
+        to each returned part, enabling per-fragment formatting annotation.
         """
+        _dropdown_dds: list[dict | None] = []
         rp = (self._resolve_vars(tmpl.get("prefix") or "") or "").strip()
         dropdown_parts: list[str] = []
         dds = tmpl.get("dropdowns") or []
@@ -810,7 +900,11 @@ class FamilySocialSectionCore(ttk.Frame):
                                 abp[ik] = set(int(x) for x in vv if isinstance(x, int))
                     pitems = meta.get("primary_items") or list(dd.get("items") or [])
                     alist = list(dd.get("associate_items") or [])
-                    bullet_lines: list[str] = []
+                    # Proxy dicts so _dd_fmt_tag reads the correct key for each part.
+                    _pri_proxy: dict = {"text_format": dd.get("text_format") or {}}
+                    _asc_proxy: dict = {"text_format": dd.get("assoc_text_format") or {}}
+                    first_bullet = True
+                    any_bullet = False
                     for pix in po:
                         if pix < 0 or pix >= len(pitems):
                             continue
@@ -824,14 +918,23 @@ class FamilySocialSectionCore(ttk.Frame):
                             if 0 <= ai < len(alist) and self._resolve_vars(str(alist[ai])).strip()
                         ]
                         detail = _join_with_oxford_and(detail_parts)
+                        # Line prefix (structural, no formatting)
+                        line_pfx = "\n\n\t- " if first_bullet else "\n\t- "
+                        dropdown_parts.append(line_pfx)
+                        _dropdown_dds.append(None)
+                        # Header text (primary formatting)
+                        dropdown_parts.append(_ATTACH + hdr)
+                        _dropdown_dds.append(_pri_proxy)
+                        # Detail text (associated formatting), if any
                         if detail:
-                            bullet_lines.append(f"{hdr}: {detail}")
-                        else:
-                            bullet_lines.append(hdr)
-                    if not bullet_lines:
+                            dropdown_parts.append(_ATTACH + ": ")
+                            _dropdown_dds.append(None)
+                            dropdown_parts.append(_ATTACH + detail)
+                            _dropdown_dds.append(_asc_proxy)
+                        first_bullet = False
+                        any_bullet = True
+                    if not any_bullet:
                         continue
-                    block = "\n\n\t- " + "\n\t- ".join(bullet_lines)
-                    dropdown_parts.append(block)
                     continue
 
                 is_multi = bool(dd.get("multi"))
@@ -853,6 +956,7 @@ class FamilySocialSectionCore(ttk.Frame):
                         if chosen:
                             block = "\n\n\t• " + "\n\t• ".join(chosen)
                             dropdown_parts.append(block)
+                            _dropdown_dds.append(dd)
                             appended = True
                     if appended:
                         continue
@@ -860,6 +964,7 @@ class FamilySocialSectionCore(ttk.Frame):
                     if not val_fb or _is_omit_phrase(val_fb):
                         continue
                     dropdown_parts.append(val_fb)
+                    _dropdown_dds.append(dd)
                     continue
 
                 val = self._resolve_vars(var.get() or "").strip()
@@ -869,10 +974,12 @@ class FamilySocialSectionCore(ttk.Frame):
                 if not is_multi and bool(dd.get("multi_bullets")):
                     block = "\n\n\t• " + val.strip()
                     dropdown_parts.append(block)
+                    _dropdown_dds.append(dd)
                     continue
 
                 val = _apply_narrative_tail_to_fragment(val, dd)
                 dropdown_parts.append(val)
+                _dropdown_dds.append(dd)
 
         if i < len(self.note_combo_vars) and len(self.note_combo_vars[i]) > 0 and not dropdown_parts:
             return []
@@ -881,9 +988,15 @@ class FamilySocialSectionCore(ttk.Frame):
         rp_for_parts = _prefix_before_bullet_list(rp) if (rp and has_bullet_fragment) else rp
 
         parts: list[str] = []
+        parts_dds: list[dict | None] = []
         if rp_for_parts:
             parts.append(rp_for_parts)
+            parts_dds.append(None)
         parts.extend(dropdown_parts)
+        parts_dds.extend(_dropdown_dds)
+
+        if _dd_out is not None:
+            _dd_out.extend(parts_dds)
         return parts
 
     def _compose_builder_text(self) -> str:
@@ -901,6 +1014,75 @@ class FamilySocialSectionCore(ttk.Frame):
             if sent:
                 blocks.append(sent)
         return "\n\n".join(blocks).strip()
+
+    def _compose_builder_annotated_runs(self) -> list[tuple[str, "str | None"]]:
+        """
+        Produce (text_chunk, tag_name_or_None) pairs for the full composed output.
+        The plain text of all runs concatenated equals _compose_builder_text().
+        Tags are derived from each dropdown's text_format flags.
+        """
+        all_runs: list[tuple[str, str | None]] = []
+        first_block = True
+        for i, tmpl in enumerate(self.templates):
+            if i >= len(self.note_combo_vars):
+                break
+            tid = int(tmpl["id"])
+            if self._visit_skip_by_tid.get(tid, False):
+                continue
+            dd_out: list[dict | None] = []
+            parts = self._compose_parts_for_template(i, tmpl, _dd_out=dd_out)
+            if not parts:
+                continue
+            while len(dd_out) < len(parts):
+                dd_out.append(None)
+            runs = _finalize_family_social_block_annotated(parts, dd_out[: len(parts)])
+            if not runs:
+                continue
+            if not first_block:
+                all_runs.append(("\n\n", None))
+            all_runs.extend(runs)
+            first_block = False
+        return all_runs
+
+    def get_live_preview_annotated_runs(self) -> list[tuple[str, "str | None"]]:
+        """
+        Return (text_chunk, tag) pairs suitable for the Live Preview text widget.
+        Uses builder-annotated runs when the current note text matches the builder
+        output; falls back to a single plain-text run when the user has manually edited.
+        """
+        runs = self._compose_builder_annotated_runs()
+        plain = "".join(t for t, _ in runs).strip()
+        if plain != self.text.get("1.0", tk.END).strip():
+            val = self.text.get("1.0", tk.END).strip()
+            return [(val, None)] if val else []
+        return runs
+
+    def get_rich_value(self) -> str:
+        """
+        Compose the note with inline ReportLab XML formatting tags (<b>, <i>, <u>).
+        Returns empty string when the current note text has diverged from the builder
+        output (i.e. the user manually edited it), so the PDF falls back to plain text.
+        """
+        from xml.sax.saxutils import escape as _xe
+        runs = self._compose_builder_annotated_runs()
+        plain = "".join(t for t, _ in runs).strip()
+        if plain != self.text.get("1.0", tk.END).strip():
+            return ""
+        parts: list[str] = []
+        for chunk, tag in runs:
+            safe = _xe(chunk).replace("\n\n", "<br/><br/>").replace("\n", "<br/>")
+            if tag:
+                b = "B" in tag
+                it = "I" in tag
+                u = "U" in tag
+                if u:
+                    safe = f"<u>{safe}</u>"
+                if it:
+                    safe = f"<i>{safe}</i>"
+                if b:
+                    safe = f"<b>{safe}</b>"
+            parts.append(safe)
+        return "".join(parts)
 
     def get_builder_state(self) -> dict:
         """Serializable dropdown selections for exam JSON.
@@ -1195,9 +1377,13 @@ class FamilySocialSectionCore(ttk.Frame):
                         var.set(items[0] if items else OPTION_OMIT)
 
     def _apply_builder_to_note(self) -> None:
-        body = self._compose_builder_text()
+        runs = self._compose_builder_annotated_runs()
         self.text.delete("1.0", tk.END)
-        self.text.insert("1.0", body)
+        for chunk, tag in runs:
+            if tag:
+                self.text.insert(tk.END, chunk, (tag,))
+            else:
+                self.text.insert(tk.END, chunk)
         self._update_age_hint()
         self.on_change_callback()
 
@@ -1530,6 +1716,10 @@ class FamilySocialSectionCore(ttk.Frame):
 
         def _on_primary_press(event, _plb=plb, _vis=visible_pri, _ss=selected_set_primary) -> str:
             """Plain click — add to selection only; show hint if item is already selected."""
+            # Returning "break" prevents Tk's default class binding, which normally
+            # transfers keyboard focus to the listbox.  Restore it explicitly so
+            # selected items remain visually highlighted.
+            _plb.focus_set()
             idx = _plb.nearest(event.y)
             if 0 <= idx < _plb.size() and idx < len(_vis):
                 src = _vis[idx]
@@ -1543,6 +1733,7 @@ class FamilySocialSectionCore(ttk.Frame):
 
         def _on_primary_ctrl_press(event, _plb=plb, _vis=visible_pri, _ss=selected_set_primary) -> str:
             """Ctrl+click — confirm then deselect; Ctrl+clicking an unselected item is a no-op."""
+            _plb.focus_set()
             _dismiss_hint()
             idx = _plb.nearest(event.y)
             if 0 <= idx < _plb.size() and idx < len(_vis):
@@ -2151,6 +2342,42 @@ class FamilySocialSectionCore(ttk.Frame):
         ttk.Button(btn_row, text="Update item", command=update_item).pack(side="left", padx=2)
         ttk.Button(btn_row, text="Delete item", command=delete_item).pack(side="left", padx=2)
 
+    def _build_dd_format_row(
+        self,
+        parent: ttk.Frame,
+        dd: dict,
+        fmt_key: str = "text_format",
+        label_text: str = "Output text style:",
+    ) -> None:
+        """Render Bold / Italic / Underline checkboxes for a dropdown in the Canvas editor.
+        fmt_key selects which dict key holds the format flags (e.g. 'assoc_text_format')."""
+        fmt = dd.setdefault(fmt_key, {})
+        fmt.setdefault("bold", False)
+        fmt.setdefault("italic", False)
+        fmt.setdefault("underline", False)
+
+        fr = ttk.Frame(parent)
+        fr.pack(fill="x", padx=6, pady=(0, 6))
+        ttk.Label(fr, text=label_text).pack(side="left", padx=(0, 8))
+
+        bold_var = tk.BooleanVar(value=bool(fmt.get("bold")))
+        ital_var = tk.BooleanVar(value=bool(fmt.get("italic")))
+        unde_var = tk.BooleanVar(value=bool(fmt.get("underline")))
+
+        def _save_fmt(_d=dd, _k=fmt_key, _b=bold_var, _i=ital_var, _u=unde_var) -> None:
+            _d.setdefault(_k, {})
+            _d[_k]["bold"] = _b.get()
+            _d[_k]["italic"] = _i.get()
+            _d[_k]["underline"] = _u.get()
+            self._persist_templates()
+            self._render_note_builder()
+            self._apply_builder_to_note()
+            self.on_change_callback()
+
+        ttk.Checkbutton(fr, text="Bold",      variable=bold_var, command=_save_fmt).pack(side="left", padx=(0, 8))
+        ttk.Checkbutton(fr, text="Italic",    variable=ital_var, command=_save_fmt).pack(side="left", padx=(0, 8))
+        ttk.Checkbutton(fr, text="Underline", variable=unde_var, command=_save_fmt).pack(side="left")
+
     def _build_dropdown_editor_block(self, parent: ttk.Frame, tmpl: dict, di: int, dd: dict) -> None:
         frame = ttk.LabelFrame(parent, text=f"Dropdown {di + 1}")
         frame.pack(fill="x", padx=8, pady=6)
@@ -2216,9 +2443,18 @@ class FamilySocialSectionCore(ttk.Frame):
             ae.bind("<Return>", _save_al)
 
             self._canvas_item_list_editor_shell(frame, "Primary (top) choices", dd["items"])
+            self._build_dd_format_row(
+                frame, dd,
+                fmt_key="text_format",
+                label_text="Primary items text style:",
+            )
             assoc_title = dd.get("associate_label") or "Associated detail"
             self._canvas_item_list_editor_shell(frame, f"Paired choices ({assoc_title})", dd["associate_items"])
-
+            self._build_dd_format_row(
+                frame, dd,
+                fmt_key="assoc_text_format",
+                label_text="Paired items text style:",
+            )
             ttk.Button(
                 frame, text="Remove dropdown", command=lambda t=tmpl, d=di: self._remove_dropdown(t, d)
             ).pack(anchor="e", padx=6, pady=(0, 6))
@@ -2244,6 +2480,7 @@ class FamilySocialSectionCore(ttk.Frame):
 
         ttk.Button(mode_row, text="Switch single / multiple", command=_flip_mode).pack(side="right")
 
+        self._build_dd_format_row(frame, dd)
         ttk.Button(
             frame, text="Remove dropdown", command=lambda t=tmpl, d=di: self._remove_dropdown(t, d)
         ).pack(anchor="e", padx=6)

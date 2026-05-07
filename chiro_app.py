@@ -3606,6 +3606,20 @@ class App(tk.Tk):
             # Family/Social provider-defined sub-headings (click → block); same weight as LP_LABEL_BOLD
             txt.tag_configure("LP_FS_SUBHEAD", font=bold)
 
+            # Dropdown text-format tags (Bold / Italic / Underline combinations) used by
+            # the Family/Social builder's Live Preview annotated runs.
+            ital = base.copy()
+            ital.configure(slant="italic")
+            bold_ital = base.copy()
+            bold_ital.configure(weight="bold", slant="italic")
+            txt.tag_configure("_FMT_B",   font=bold)
+            txt.tag_configure("_FMT_I",   font=ital)
+            txt.tag_configure("_FMT_BI",  font=bold_ital)
+            txt.tag_configure("_FMT_U",   underline=True)
+            txt.tag_configure("_FMT_BU",  font=bold,      underline=True)
+            txt.tag_configure("_FMT_IU",  font=ital,      underline=True)
+            txt.tag_configure("_FMT_BIU", font=bold_ital, underline=True)
+
         # call once after widget is created:
         apply_preview_styles(self.hoi_preview_text)        
         

@@ -3009,23 +3009,29 @@ def build_family_social_flowables(soap: dict, styles) -> list:
     out: list = []
     b = soap.get("family_social_builder")
     if isinstance(b, dict) and int(b.get("v") or 0) == 2:
-        nonempty: list[tuple[str, str]] = []
+        nonempty: list[tuple[str, str, str]] = []
         for bl in b.get("blocks") or []:
             if not isinstance(bl, dict):
                 continue
             text = (bl.get("text") or "").strip()
             if not text:
                 continue
-            nonempty.append(((bl.get("heading") or "").strip(), text))
+            rich = (bl.get("rich_text") or "").strip()
+            nonempty.append(((bl.get("heading") or "").strip(), text, rich))
         if not nonempty:
             return []
         out.append(Paragraph("<b>FAMILY / SOCIAL HISTORY</b>", styles["Heading2"]))
         out.append(Spacer(1, 0.08 * inch))
-        for heading, text in nonempty:
+        for heading, text, rich in nonempty:
             if heading:
                 out.append(Paragraph(f"<b>{xml_escape(heading)}</b>", styles["Heading3"]))
                 out.append(Spacer(1, 0.04 * inch))
-            safe_fs = xml_escape(text).replace("\n\n", "<br/><br/>").replace("\n", "<br/>")
+            # Use pre-formatted rich text (already XML-escaped with <b>/<i>/<u> tags) when
+            # available; fall back to plain text when the user has manually edited the note.
+            if rich:
+                safe_fs = rich
+            else:
+                safe_fs = xml_escape(text).replace("\n\n", "<br/><br/>").replace("\n", "<br/>")
             out.append(Paragraph(safe_fs, styles["BodyText"]))
             out.append(Spacer(1, 0.10 * inch))
         return out
