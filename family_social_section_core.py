@@ -112,7 +112,7 @@ def _finalize_family_social_block(parts: list[str]) -> str:
         return ""
     if ends_with_bullet_fragment:
         return out
-    if out[-1] not in ".!?":
+    if out[-1] not in ".!?" and out[-1] != ",":
         out += "."
     return out
 
@@ -137,6 +137,47 @@ def _join_with_oxford_and(items: list[str]) -> str:
     if len(parts) == 2:
         return f"{parts[0]} and {parts[1]}"
     return ", ".join(parts[:-1]) + ", and " + parts[-1]
+
+
+def _format_output_radio_value(dd: dict) -> str:
+    """Radiobutton group value for Narrative / Bullet lines / Comma / Period."""
+    if bool(dd.get("multi_bullets")):
+        return "bullets"
+    t = dd.get("narrative_tail")
+    if t == ",":
+        return "comma"
+    if t == ".":
+        return "period"
+    return "narrative"
+
+
+def _apply_output_format_radio(dd: dict, value: str) -> None:
+    if value == "bullets":
+        dd["multi_bullets"] = True
+        dd.pop("narrative_tail", None)
+    else:
+        dd["multi_bullets"] = False
+        if value == "comma":
+            dd["narrative_tail"] = ","
+        elif value == "period":
+            dd["narrative_tail"] = "."
+        else:
+            dd.pop("narrative_tail", None)
+
+
+def _apply_narrative_tail_to_fragment(text: str, dd: dict) -> str:
+    """For narrative-style output, optionally end with comma or period on the last phrase."""
+    if bool(dd.get("multi_bullets")):
+        return text
+    t = dd.get("narrative_tail")
+    if t not in (",", "."):
+        return text
+    s = (text or "").rstrip()
+    if not s:
+        return text
+    if t == ",":
+        return s.rstrip(",.") + ","
+    return s.rstrip(".") + "."
 
 
 DEFAULT_TEMPLATES: list[dict] = [
@@ -824,6 +865,13 @@ class FamilySocialSectionCore(ttk.Frame):
                 val = (var.get() or "").strip()
                 if not val or _is_omit_phrase(val):
                     continue
+
+                if not is_multi and bool(dd.get("multi_bullets")):
+                    block = "\n\n\t• " + val.strip()
+                    dropdown_parts.append(block)
+                    continue
+
+                val = _apply_narrative_tail_to_fragment(val, dd)
                 dropdown_parts.append(val)
 
         if i < len(self.note_combo_vars) and len(self.note_combo_vars[i]) > 0 and not dropdown_parts:
@@ -855,7 +903,8 @@ class FamilySocialSectionCore(ttk.Frame):
         return "\n\n".join(blocks).strip()
 
     def get_builder_state(self) -> dict:
-        """Serializable dropdown selections for exam JSON. Multi slots use {"i": indices, "b": multi_bullets}."""
+        """Serializable dropdown selections for exam JSON.
+        Multi/single slots may use {"i": ..., "b": multi_bullets, "t": "," | "." optional}."""
         out: dict = {"v": SECTION_BUILDER_VERSION, "templates": {}}
         for i, tmpl in enumerate(self.templates):
             if i >= len(self.note_combo_vars) or i >= len(self._note_builder_meta):
@@ -908,16 +957,26 @@ class FamilySocialSectionCore(ttk.Frame):
                                     idxs = [int(x) for x in lb.curselection()]
                             except Exception:
                                 pass
-                    dd_states.append({"i": idxs, "b": bool(dd.get("multi_bullets"))})
+                    slot_m: dict = {"i": idxs, "b": bool(dd.get("multi_bullets"))}
+                    tv_m = dd.get("narrative_tail")
+                    if tv_m in (",", "."):
+                        slot_m["t"] = tv_m
+                    dd_states.append(slot_m)
                 else:
                     val = (var.get() or "").strip()
                     if _is_omit_phrase(val):
                         dd_states.append(None)
                     else:
                         try:
-                            dd_states.append(items.index(val))
+                            ix = items.index(val)
                         except ValueError:
                             dd_states.append(None)
+                        else:
+                            st_s: dict = {"i": ix, "b": bool(dd.get("multi_bullets"))}
+                            tv_s = dd.get("narrative_tail")
+                            if tv_s in (",", "."):
+                                st_s["t"] = tv_s
+                            dd_states.append(st_s)
             out["templates"][tid] = {"dropdowns": dd_states}
         visit_skip_out: dict[str, bool] = {}
         for tmpl in self.templates:
@@ -1058,12 +1117,21 @@ class FamilySocialSectionCore(ttk.Frame):
                                 pass
                     if bullets_override is not None:
                         dd["multi_bullets"] = bullets_override
-                        fv = meta.get("fmt_var")
-                        if isinstance(fv, tk.StringVar):
-                            try:
-                                fv.set("bullets" if bullets_override else "narrative")
-                            except Exception:
-                                pass
+                    if raw_slot is not _BUILDER_SLOT_DEFAULT and isinstance(raw_slot, dict):
+                        if dd.get("multi_bullets"):
+                            dd.pop("narrative_tail", None)
+                        elif "t" in raw_slot:
+                            tv = raw_slot.get("t")
+                            if tv in (",", "."):
+                                dd["narrative_tail"] = tv
+                            else:
+                                dd.pop("narrative_tail", None)
+                    fv = meta.get("fmt_var")
+                    if isinstance(fv, tk.StringVar):
+                        try:
+                            fv.set(_format_output_radio_value(dd))
+                        except Exception:
+                            pass
                     sel_set = meta.get("selected_set")
                     if isinstance(sel_set, set):
                         sel_set.clear()
@@ -1090,12 +1158,39 @@ class FamilySocialSectionCore(ttk.Frame):
                     else:
                         var.set("")
                 else:
+                    fv_single = meta.get("fmt_var")
                     if raw_slot is _BUILDER_SLOT_DEFAULT:
                         var.set(items[0] if items else OPTION_OMIT)
                     elif raw_slot is None:
                         var.set(OPTION_OMIT)
+                    elif isinstance(raw_slot, dict):
+                        ri = raw_slot.get("i")
+                        if isinstance(ri, int) and 0 <= ri < len(items):
+                            var.set(items[ri])
+                        else:
+                            var.set(items[0] if items else OPTION_OMIT)
+                        if "b" in raw_slot:
+                            dd["multi_bullets"] = bool(raw_slot["b"])
+                        if dd.get("multi_bullets"):
+                            dd.pop("narrative_tail", None)
+                        elif "t" in raw_slot:
+                            tv = raw_slot.get("t")
+                            if tv in (",", "."):
+                                dd["narrative_tail"] = tv
+                            else:
+                                dd.pop("narrative_tail", None)
+                        if isinstance(fv_single, tk.StringVar):
+                            try:
+                                fv_single.set(_format_output_radio_value(dd))
+                            except Exception:
+                                pass
                     elif isinstance(raw_slot, int) and 0 <= raw_slot < len(items):
                         var.set(items[raw_slot])
+                        if isinstance(fv_single, tk.StringVar):
+                            try:
+                                fv_single.set(_format_output_radio_value(dd))
+                            except Exception:
+                                pass
                     else:
                         var.set(items[0] if items else OPTION_OMIT)
 
@@ -1508,33 +1603,46 @@ class FamilySocialSectionCore(ttk.Frame):
                     meta_row.append(meta_am)
                     continue
                 is_multi = bool(dd.get("multi"))
-                if is_multi:
-                    dd.setdefault("multi_bullets", False)
-                    fmt_row = ttk.Frame(fr)
-                    fmt_row.pack(anchor="w", fill="x", pady=(0, 4))
-                    ttk.Label(fmt_row, text="Output format:").pack(side="left", padx=(0, 8))
-                    _fmt_var = tk.StringVar(value="bullets" if dd.get("multi_bullets") else "narrative")
+                dd.setdefault("multi_bullets", False)
+                fmt_row = ttk.Frame(fr)
+                fmt_row.pack(anchor="w", fill="x", pady=(0, 4))
+                ttk.Label(fmt_row, text="Output format:").pack(side="left", padx=(0, 8))
+                _fmt_var = tk.StringVar(value=_format_output_radio_value(dd))
 
-                    def _on_multi_format(_d=dd, _fv=_fmt_var) -> None:
-                        _d["multi_bullets"] = _fv.get() == "bullets"
-                        self._persist_templates()
-                        self._apply_builder_to_note()
-                        self.on_change_callback()
+                def _on_output_format(_d=dd, _fv=_fmt_var) -> None:
+                    _apply_output_format_radio(_d, _fv.get())
+                    self._persist_templates()
+                    self._apply_builder_to_note()
+                    self.on_change_callback()
 
-                    ttk.Radiobutton(
-                        fmt_row,
-                        text="Narrative",
-                        variable=_fmt_var,
-                        value="narrative",
-                        command=_on_multi_format,
-                    ).pack(side="left", padx=(0, 8))
-                    ttk.Radiobutton(
-                        fmt_row,
-                        text="Bullet lines",
-                        variable=_fmt_var,
-                        value="bullets",
-                        command=_on_multi_format,
-                    ).pack(side="left")
+                ttk.Radiobutton(
+                    fmt_row,
+                    text="Narrative",
+                    variable=_fmt_var,
+                    value="narrative",
+                    command=_on_output_format,
+                ).pack(side="left", padx=(0, 8))
+                ttk.Radiobutton(
+                    fmt_row,
+                    text="Bullet lines",
+                    variable=_fmt_var,
+                    value="bullets",
+                    command=_on_output_format,
+                ).pack(side="left", padx=(0, 8))
+                ttk.Radiobutton(
+                    fmt_row,
+                    text="Comma",
+                    variable=_fmt_var,
+                    value="comma",
+                    command=_on_output_format,
+                ).pack(side="left", padx=(0, 8))
+                ttk.Radiobutton(
+                    fmt_row,
+                    text="Period",
+                    variable=_fmt_var,
+                    value="period",
+                    command=_on_output_format,
+                ).pack(side="left")
 
                 title = dd.get("label") or "Option"
                 ttk.Label(
@@ -1690,7 +1798,7 @@ class FamilySocialSectionCore(ttk.Frame):
                     cb.pack(fill="x")
                     cb.bind("<<ComboboxSelected>>", lambda e: self._on_builder_selection_changed())
                     row_vars.append(var)
-                    meta_row.append({"multi": False, "lb": None, "items": items})
+                    meta_row.append({"multi": False, "lb": None, "items": items, "fmt_var": _fmt_var})
 
             self.note_combo_vars.append(row_vars)
             self._note_builder_meta.append(meta_row)
