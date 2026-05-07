@@ -22,6 +22,7 @@
 
 
 # python chiro_app.py or
+# python shell_app.py
 
 # cd chiro_emr_desktop
 # python chiro_app.py
