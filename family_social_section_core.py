@@ -255,12 +255,17 @@ class FamilySocialSectionCore(ttk.Frame):
         return
 
     # --- persistence (orchestrator writes JSON; core only signals save) ---
-    def _ask_dropdown_mode(self, *, title: str, prompt: str) -> bool | None:
+    def _ask_dropdown_creation_mode(
+        self,
+        *,
+        title: str,
+        prompt: str,
+    ) -> str | None:
         """
-        Ask whether a new dropdown is single- or multi-select.
-        Returns True for multiple, False for single, None if cancelled.
+        Prompt for a new template/dropdown selection mode.
+        Returns "single", "multiple", "associated_multiple", or None if cancelled.
         """
-        result: list[bool | None] = [None]
+        result: list[str | None] = [None]
         dlg = tk.Toplevel(self.winfo_toplevel())
         dlg.title(title)
         try:
@@ -270,12 +275,8 @@ class FamilySocialSectionCore(ttk.Frame):
         dlg.grab_set()
         ttk.Label(dlg, text=prompt, wraplength=460).pack(padx=18, pady=(14, 10))
 
-        def _single() -> None:
-            result[0] = False
-            dlg.destroy()
-
-        def _multi() -> None:
-            result[0] = True
+        def _pick(mode: str) -> None:
+            result[0] = mode
             dlg.destroy()
 
         def _cancel() -> None:
@@ -284,9 +285,19 @@ class FamilySocialSectionCore(ttk.Frame):
 
         bf = ttk.Frame(dlg)
         bf.pack(pady=(0, 14))
-        ttk.Button(bf, text="Single choice", width=16, command=_single).pack(side="left", padx=4)
-        ttk.Button(bf, text="Multiple choice", width=16, command=_multi).pack(side="left", padx=4)
-        ttk.Button(bf, text="Cancel", width=10, command=_cancel).pack(side="left", padx=4)
+        ttk.Button(bf, text="Single choice", width=18, command=lambda: _pick("single")).pack(
+            side="top", pady=3
+        )
+        ttk.Button(bf, text="Multiple choice", width=18, command=lambda: _pick("multiple")).pack(
+            side="top", pady=3
+        )
+        ttk.Button(
+            bf,
+            text="Associated Multiple",
+            width=18,
+            command=lambda: _pick("associated_multiple"),
+        ).pack(side="top", pady=3)
+        ttk.Button(bf, text="Cancel", width=10, command=_cancel).pack(side="top", pady=(8, 0))
         dlg.protocol("WM_DELETE_WINDOW", _cancel)
         dlg.wait_window(dlg)
         return result[0]
@@ -635,6 +646,24 @@ class FamilySocialSectionCore(ttk.Frame):
             return None
         return None
 
+    def _run_with_note_builder_scroll_preserved(self, fn) -> None:
+        """Run `fn` while keeping the sentence-builder canvas vertical scroll fraction stable (reduces jump when widgets resize)."""
+        nb = getattr(self, "note_builder_canvas", None)
+        top: float | None = None
+        if nb is not None:
+            try:
+                top = float(nb.yview()[0])
+            except Exception:
+                top = None
+        try:
+            fn()
+        finally:
+            if nb is not None and top is not None:
+                try:
+                    nb.yview_moveto(top)
+                except Exception:
+                    pass
+
     def _wire_mousewheel(self) -> None:
         if self._mw_bound:
             return
@@ -690,6 +719,23 @@ class FamilySocialSectionCore(ttk.Frame):
             except tk.TclError:
                 pass
 
+    def set_all_template_visit_skip(self, skip: bool, *, notify: bool = True) -> None:
+        """Set every template's 'Skip this block for this visit' flag and refresh this block's note."""
+        for tmpl in self.templates:
+            try:
+                tid = int(tmpl["id"])
+            except (TypeError, ValueError, KeyError):
+                continue
+            self._visit_skip_by_tid[tid] = bool(skip)
+        for _, var in (getattr(self, "_skip_checkbox_vars", None) or {}).items():
+            try:
+                var.set(bool(skip))
+            except tk.TclError:
+                pass
+        self._apply_builder_to_note()
+        if notify:
+            self.on_change_callback()
+
     def _compose_parts_for_template(self, i: int, tmpl: dict) -> list[str]:
         """
         Build prefix + non-Omit dropdown fragments. If this template has at least one
@@ -703,6 +749,50 @@ class FamilySocialSectionCore(ttk.Frame):
         if i < len(self.note_combo_vars):
             for j, var in enumerate(self.note_combo_vars[i]):
                 dd = dds[j] if j < len(dds) else {}
+                meta = meta_row[j] if j < len(meta_row) else {}
+
+                if isinstance(meta, dict) and meta.get("associated_multi"):
+                    po = list(meta.get("primary_order") or [])
+                    if not po:
+                        continue
+                    abp_raw = meta.get("assoc_by_primary") or {}
+                    abp: dict[int, set[int]] = {}
+                    if isinstance(abp_raw, dict):
+                        for kk, vv in abp_raw.items():
+                            try:
+                                ik = int(kk)
+                            except (TypeError, ValueError):
+                                continue
+                            if isinstance(vv, set):
+                                abp[ik] = set(int(x) for x in vv if isinstance(x, int))
+                            elif isinstance(vv, (list, tuple)):
+                                abp[ik] = set(int(x) for x in vv if isinstance(x, int))
+                    pitems = meta.get("primary_items") or list(dd.get("items") or [])
+                    alist = list(dd.get("associate_items") or [])
+                    bullet_lines: list[str] = []
+                    for pix in po:
+                        if pix < 0 or pix >= len(pitems):
+                            continue
+                        hdr = str(pitems[pix]).strip()
+                        if not hdr:
+                            continue
+                        chosen_assoc = sorted(abp.get(pix, set()))
+                        detail_parts = [
+                            str(alist[ai]).strip()
+                            for ai in chosen_assoc
+                            if 0 <= ai < len(alist) and str(alist[ai]).strip()
+                        ]
+                        detail = _join_with_oxford_and(detail_parts)
+                        if detail:
+                            bullet_lines.append(f"{hdr}: {detail}")
+                        else:
+                            bullet_lines.append(hdr)
+                    if not bullet_lines:
+                        continue
+                    block = "\n\n\t- " + "\n\t- ".join(bullet_lines)
+                    dropdown_parts.append(block)
+                    continue
+
                 is_multi = bool(dd.get("multi"))
                 if is_multi and bool(dd.get("multi_bullets")) and j < len(meta_row):
                     meta = meta_row[j]
@@ -781,6 +871,33 @@ class FamilySocialSectionCore(ttk.Frame):
                 meta = meta_row[j]
                 var = row[j]
                 items = list(meta.get("items") or [])
+                if meta.get("associated_multi"):
+                    self._persist_assoc_column_widgets_into_meta(meta)
+                    order = list(meta.get("primary_order") or [])
+                    pss = meta.get("primary_selected_set")
+                    if isinstance(pss, set):
+                        order = [p for p in order if p in pss]
+                    abp = meta.get("assoc_by_primary") or {}
+                    sub_list: list[dict[str, list[int]]] = []
+                    for pix in order:
+                        cell = abp.get(pix)
+                        if isinstance(cell, set):
+                            sub_list.append({"i": sorted(int(x) for x in cell)})
+                        elif isinstance(cell, dict):
+                            ii = cell.get("i")
+                            sub_list.append(
+                                {
+                                    "i": sorted(
+                                        int(x)
+                                        for x in (ii if isinstance(ii, (list, tuple)) else [])
+                                    )
+                                }
+                            )
+                        else:
+                            sub_list.append({"i": []})
+                    dd_states.append({"am": {"po": order, "sub": sub_list}})
+                    continue
+
                 if meta.get("multi"):
                     idxs: list[int] = self._multi_selected_source_indexes(meta) or []
                     if not idxs:
@@ -840,6 +957,84 @@ class FamilySocialSectionCore(ttk.Frame):
                 var = row[j]
                 items = list(meta.get("items") or [])
                 raw_slot = sels[j] if j < len(sels) else _BUILDER_SLOT_DEFAULT
+
+                if meta.get("associated_multi"):
+                    self._persist_assoc_column_widgets_into_meta(meta)
+                    pri_items = meta.get("primary_items") or list(dd.get("items") or [])
+                    parsed_am: dict | None = None
+                    if isinstance(raw_slot, dict) and isinstance(raw_slot.get("am"), dict):
+                        parsed_am = raw_slot["am"]
+                    po_list: list[int] = []
+                    sub_entries: list[set[int]] = []
+                    if isinstance(parsed_am, dict):
+                        raw_po = parsed_am.get("po")
+                        if isinstance(raw_po, list):
+                            for x in raw_po:
+                                try:
+                                    xi = int(x)
+                                except (TypeError, ValueError):
+                                    continue
+                                if 0 <= xi < len(pri_items):
+                                    po_list.append(xi)
+                        raw_sub = parsed_am.get("sub")
+                        if isinstance(raw_sub, list):
+                            for cell in raw_sub:
+                                ixset: set[int] = set()
+                                if isinstance(cell, dict):
+                                    rr = cell.get("i")
+                                    if isinstance(rr, list):
+                                        for y in rr:
+                                            try:
+                                                iy = int(y)
+                                            except (TypeError, ValueError):
+                                                continue
+                                            ixset.add(iy)
+                                elif isinstance(cell, list):
+                                    for y in cell:
+                                        try:
+                                            ixset.add(int(y))
+                                        except (TypeError, ValueError):
+                                            pass
+                                sub_entries.append(ixset)
+                    pss_raw = meta.get("primary_selected_set")
+                    if isinstance(pss_raw, set):
+                        pss_raw.clear()
+                        pss_raw.update(po_list)
+
+                    od = meta["primary_order"]
+                    if isinstance(od, list):
+                        od.clear()
+                        od.extend(po_list)
+
+                    abp_dst = meta.get("assoc_by_primary")
+                    if isinstance(abp_dst, dict):
+                        abp_dst.clear()
+                        for qi, pix in enumerate(po_list):
+                            chosen = set(sub_entries[qi]) if qi < len(sub_entries) else set()
+                            abp_dst[pix] = set(chosen)
+
+                    meta["highlight_primary_idx"] = po_list[-1] if po_list else None
+
+                    rep = meta.get("_repaint_primary")
+                    if callable(rep):
+                        try:
+                            rep()
+                        except Exception:
+                            pass
+                    reb = meta.get("_rebuilder")
+                    if callable(reb):
+                        try:
+                            reb()
+                        except Exception:
+                            pass
+
+                    dv = meta.get("dummy_var")
+                    if isinstance(dv, tk.StringVar):
+                        try:
+                            dv.set("")
+                        except Exception:
+                            pass
+                    continue
 
                 if meta.get("multi"):
                     lb = meta.get("lb")
@@ -911,6 +1106,353 @@ class FamilySocialSectionCore(ttk.Frame):
         self._update_age_hint()
         self.on_change_callback()
 
+    def _persist_assoc_column_widgets_into_meta(self, meta: dict) -> None:
+        """Copy each associate listbox selection set into assoc_by_primary before destroying widgets."""
+        wmap = meta.get("assoc_column_widgets") or {}
+        dst = meta.setdefault("assoc_by_primary", {})
+        if not isinstance(dst, dict):
+            return
+        for pidx, wdg in wmap.items():
+            try:
+                k = int(pidx)
+            except (TypeError, ValueError):
+                continue
+            ss = wdg.get("selected_set")
+            if isinstance(ss, set):
+                dst[k] = set(ss)
+
+    def _render_associated_multi_row(self, card: ttk.Frame, dd: dict) -> tuple[tk.StringVar, dict]:
+        """
+        Build primary multi-select plus one illuminated paired list box per ordered primary pick.
+        """
+        dd.setdefault("associate_label", "Associated detail")
+        dd.setdefault("associate_items", ["Option A", "Option B"])
+        primary_items: list[str] = list(dd.get("items") or [])
+        assoc_items_tm: list[str] = list(dd.get("associate_items") or [])
+        var = tk.StringVar(value="")
+        assoc_host = ttk.Frame(card)
+
+        meta: dict = {
+            "associated_multi": True,
+            "multi": False,
+            "dummy_var": var,
+            "primary_items": primary_items,
+            "associate_items": assoc_items_tm,
+            "assoc_by_primary": {},
+            "primary_order": [],
+            "highlight_primary_idx": None,
+            "assoc_host": assoc_host,
+            "assoc_column_widgets": {},
+        }
+
+        dd_ref = dd
+
+        top_fr = ttk.Frame(card)
+        top_fr.pack(fill="x")
+
+        pt = (dd_ref.get("label") or "Option") + " — select one or more (each choice adds its paired detail list below):"
+        ttk.Label(top_fr, text=pt).pack(anchor="w")
+
+        search_var = tk.StringVar(value="")
+        selected_set_primary: set[int] = set()
+        meta["primary_selected_set"] = selected_set_primary
+        visible_pri: list[int] = list(range(len(primary_items)))
+
+        sf = ttk.Frame(top_fr)
+        sf.pack(fill="x", pady=(4, 2))
+        ttk.Label(sf, text="Search:").pack(side="left")
+        ttk.Entry(sf, textvariable=search_var).pack(side="left", fill="x", expand=True, padx=(4, 4))
+
+        lb_wrap = ttk.Frame(top_fr)
+        lb_wrap.pack(fill="x")
+        plb_h = min(max(len(primary_items), 3), 10)
+        plb = tk.Listbox(lb_wrap, selectmode=tk.EXTENDED, height=plb_h, activestyle="dotbox", exportselection=False)
+        for it in primary_items:
+            plb.insert(tk.END, it)
+        plb.pack(side="left", fill="x", expand=True)
+        plsb = ttk.Scrollbar(lb_wrap, orient="vertical", command=plb.yview)
+        plb.configure(yscrollcommand=plsb.set)
+        plsb.pack(side="right", fill="y")
+        meta["primary_lb"] = plb
+
+        def _flush_assoc() -> None:
+            self._persist_assoc_column_widgets_into_meta(meta)
+
+        def _refresh_primary_filter() -> None:
+            idxs = self._filter_items_by_prefix(primary_items, search_var.get())
+            visible_pri[:] = idxs
+            plb.delete(0, tk.END)
+            for src_i in idxs:
+                plb.insert(tk.END, primary_items[src_i])
+            for vis_i, src_i in enumerate(idxs):
+                if src_i in selected_set_primary:
+                    plb.selection_set(vis_i)
+
+        meta["_repaint_primary"] = _refresh_primary_filter
+
+        search_var.trace_add(
+            "write",
+            lambda *_a: _refresh_primary_filter(),
+        )
+
+        _primary_sync_token = [0]
+        _primary_retry_after_id = [None]
+
+        def _cancel_primary_retry() -> None:
+            aid = _primary_retry_after_id[0]
+            if aid is not None:
+                try:
+                    self.after_cancel(aid)
+                except Exception:
+                    pass
+                _primary_retry_after_id[0] = None
+
+        def _schedule_primary_sync() -> None:
+            """Defer sync until Tk finalizes listbox selection; coalesce bursts and cancel stale retries."""
+            _cancel_primary_retry()
+            _primary_sync_token[0] += 1
+            tok = _primary_sync_token[0]
+
+            def _run() -> None:
+                if tok != _primary_sync_token[0]:
+                    return
+                _sync_primary_from_lb(0)
+
+            self.after_idle(_run)
+
+        def _sync_primary_from_lb(retry_phase: int = 0) -> None:
+            before = frozenset(selected_set_primary)
+            visible_as_set = set(visible_pri)
+            had_visible_selected = bool(before & visible_as_set)
+
+            sel_vis = set(plb.curselection())
+
+            # Windows may report an empty selection for one event cycle during Ctrl-toggle; defer once.
+            if (
+                retry_phase == 0
+                and not sel_vis
+                and had_visible_selected
+                and len(visible_pri) > 0
+            ):
+                sched_tok = _primary_sync_token[0]
+
+                def _retry() -> None:
+                    _primary_retry_after_id[0] = None
+                    if sched_tok != _primary_sync_token[0]:
+                        return
+                    _sync_primary_from_lb(1)
+
+                _cancel_primary_retry()
+                _primary_retry_after_id[0] = self.after(45, _retry)
+                return
+
+            for vis_i, src_i in enumerate(visible_pri):
+                if vis_i in sel_vis:
+                    selected_set_primary.add(src_i)
+                else:
+                    selected_set_primary.discard(src_i)
+            after = selected_set_primary
+            order: list[int] = meta["primary_order"]
+            before_f = frozenset(before)
+            after_f = frozenset(after)
+            added_list = sorted(int(x) for x in after_f - before_f)
+            removed_list = sorted(int(x) for x in before_f - after_f)
+            for rm in removed_list:
+                while rm in order:
+                    order.remove(rm)
+                meta["assoc_by_primary"].pop(rm, None)
+            if len(added_list) == 1:
+                ad = added_list[0]
+                if ad not in order:
+                    order.append(ad)
+                meta["highlight_primary_idx"] = ad
+            else:
+                for ad in added_list:
+                    if ad not in order:
+                        order.append(ad)
+                if added_list:
+                    meta["highlight_primary_idx"] = added_list[-1]
+            order[:] = [p for p in order if p in selected_set_primary]
+            meta["dummy_var"].set("")
+            self._run_with_note_builder_scroll_preserved(_rebuild_assoc_columns)
+            self._on_builder_selection_changed()
+
+        def _rebuild_assoc_columns() -> None:
+            _flush_assoc()
+            for ch in assoc_host.winfo_children():
+                ch.destroy()
+            meta["assoc_column_widgets"].clear()
+
+            assoc_label_txt = dd_ref.get("associate_label") or "Associated detail"
+            order_li: list[int] = list(meta["primary_order"])
+            aitems_live: list[str] = dd_ref.setdefault("associate_items", list(assoc_items_tm))
+
+            for pidx in order_li:
+                if pidx not in selected_set_primary or not (0 <= pidx < len(primary_items)):
+                    continue
+                ptitle = primary_items[pidx]
+                hilite = meta.get("highlight_primary_idx") == pidx
+                bd = "#f39c12" if hilite else "#c8c8c8"
+
+                outer_col = tk.Frame(assoc_host, highlightthickness=2, highlightbackground=bd)
+                outer_col.pack(fill="x", pady=(8, 0))
+
+                lf = ttk.LabelFrame(
+                    outer_col,
+                    text=f"Paired selections for «{ptitle}»: {assoc_label_txt} — select one or more:",
+                )
+                lf.pack(fill="x")
+
+                work_set = meta["assoc_by_primary"].setdefault(pidx, set())
+
+                sub_search = tk.StringVar(value="")
+                vis_ast: list[int] = list(range(len(aitems_live)))
+
+                row1 = ttk.Frame(lf)
+                row1.pack(fill="x", padx=4, pady=(4, 2))
+                ttk.Label(row1, text="Search:").pack(side="left")
+                ttk.Entry(row1, textvariable=sub_search).pack(side="left", fill="x", expand=True, padx=(4, 4))
+
+                awrap = ttk.Frame(lf)
+                awrap.pack(fill="x", padx=4)
+                alb_h = min(max(len(aitems_live), 3), 8)
+                alb = tk.Listbox(awrap, selectmode=tk.EXTENDED, height=alb_h, activestyle="dotbox", exportselection=False)
+
+                def _ref_ast(
+                    _alb: tk.Listbox = alb,
+                    _opts: list[str] = aitems_live,
+                    _vt: list[int] = vis_ast,
+                    _sv: tk.StringVar = sub_search,
+                    _wk: set[int] = work_set,
+                ) -> None:
+                    q_idxs = self._filter_items_by_prefix(_opts, _sv.get())
+                    _vt[:] = q_idxs
+                    _alb.delete(0, tk.END)
+                    for si in q_idxs:
+                        _alb.insert(tk.END, _opts[si])
+                    for vi2, sr in enumerate(q_idxs):
+                        if sr in _wk:
+                            _alb.selection_set(vi2)
+
+                sub_search.trace_add("write", lambda *_b, __r=_ref_ast: __r())
+
+                alb.pack(side="left", fill="x", expand=True)
+                alsb = ttk.Scrollbar(awrap, orient="vertical", command=alb.yview)
+                alb.configure(yscrollcommand=alsb.set)
+                alsb.pack(side="right", fill="y")
+
+                def _sync_assoc(
+                    _alb: tk.Listbox = alb,
+                    _vt: list[int] = vis_ast,
+                    _wk: set[int] = work_set,
+                ) -> None:
+                    curv = set(_alb.curselection())
+                    for vi2, sr in enumerate(_vt):
+                        if vi2 in curv:
+                            _wk.add(sr)
+                        else:
+                            _wk.discard(sr)
+                    self._on_builder_selection_changed()
+
+                alb.bind("<<ListboxSelect>>", lambda _e, __s=_sync_assoc: __s())
+                self._bind_listbox_mousewheel_local(alb)
+
+                def _add_assoc_item(
+                    _opts: list[str] = aitems_live,
+                    _sv: tk.StringVar = sub_search,
+                    __r=_ref_ast,
+                    __syn=_sync_assoc,
+                    _wk: set[int] = work_set,
+                ) -> None:
+                    txt = (_sv.get() or "").strip()
+                    if not txt:
+                        return
+                    low = {str(x).strip().lower() for x in _opts}
+                    if txt.lower() in low:
+                        _sv.set("")
+                        __r()
+                        return
+                    dd_ref.setdefault("associate_items", _opts).append(txt)
+                    self._persist_templates()
+                    meta["associate_items"] = list(dd_ref["associate_items"])
+                    _opts.append(txt)
+                    _wk.add(len(_opts) - 1)
+                    _sv.set("")
+                    __r()
+                    __syn()
+
+                def _clear_col(_alb: tk.Listbox = alb, _wk: set[int] = work_set) -> None:
+                    _wk.clear()
+                    _alb.selection_clear(0, tk.END)
+                    self._on_builder_selection_changed()
+
+                btnrow = ttk.Frame(lf)
+                btnrow.pack(fill="x", padx=4, pady=(0, 4))
+                ttk.Button(btnrow, text="+ Add to List", command=_add_assoc_item).pack(side="left")
+                ttk.Button(btnrow, text="Clear column", command=_clear_col).pack(side="left", padx=(8, 0))
+
+                meta["assoc_column_widgets"][pidx] = {"selected_set": work_set}
+
+                _ref_ast()
+
+        meta["_rebuild_associated_cols"] = _rebuild_assoc_columns
+
+        def _primary_changed(_e=None) -> None:
+            _schedule_primary_sync()
+
+        # Use release/final-state events instead of raw <<ListboxSelect>> to avoid
+        # transient selection states during Ctrl-toggle.
+        plb.bind("<ButtonRelease-1>", _primary_changed)
+        plb.bind("<KeyRelease-Up>", _primary_changed)
+        plb.bind("<KeyRelease-Down>", _primary_changed)
+        plb.bind("<KeyRelease-space>", _primary_changed)
+        plb.bind("<KeyRelease-Return>", _primary_changed)
+        self._bind_listbox_mousewheel_local(plb)
+
+        def _add_primary_item() -> None:
+            _cancel_primary_retry()
+            txt = (search_var.get() or "").strip()
+            if not txt:
+                return
+            low = {str(x).strip().lower() for x in primary_items}
+            if txt.lower() in low:
+                search_var.set("")
+                _refresh_primary_filter()
+                return
+            dd_ref.setdefault("items", primary_items).append(txt)
+            self._persist_templates()
+            primary_items.append(txt)
+            li = len(primary_items) - 1
+            selected_set_primary.add(li)
+            meta["primary_order"].append(li)
+            meta["highlight_primary_idx"] = li
+            search_var.set("")
+            _refresh_primary_filter()
+            if visible_pri:
+                plb.selection_set(len(visible_pri) - 1)
+            _sync_primary_from_lb(0)
+
+        ttk.Button(sf, text="+ Add to List", command=_add_primary_item).pack(side="left")
+
+        def _clear_primary() -> None:
+            _cancel_primary_retry()
+            selected_set_primary.clear()
+            plb.selection_clear(0, tk.END)
+            meta["primary_order"].clear()
+            meta["assoc_by_primary"].clear()
+            meta["highlight_primary_idx"] = None
+            _flush_assoc()
+            var.set("")
+            self._run_with_note_builder_scroll_preserved(_rebuild_assoc_columns)
+            self._on_builder_selection_changed()
+
+        ttk.Button(top_fr, text="Clear primary selections", command=_clear_primary).pack(anchor="w", pady=(2, 0))
+        _refresh_primary_filter()
+        assoc_host.pack(fill="x")
+        meta["_rebuilder"] = _rebuild_assoc_columns
+        meta["dummy_var"] = var
+        return var, meta
+
     # --- builder render ---
     def _render_note_builder(self) -> None:
         snapshot: dict | None = None
@@ -958,9 +1500,14 @@ class FamilySocialSectionCore(ttk.Frame):
             meta_row: list[dict] = []
             for dd in tmpl.get("dropdowns") or []:
                 items = list(dd.get("items") or [])
-                is_multi = bool(dd.get("multi"))
                 fr = ttk.Frame(card)
                 fr.pack(fill="x", padx=8, pady=3)
+                if bool(dd.get("associated_multi")):
+                    var_am, meta_am = self._render_associated_multi_row(fr, dd)
+                    row_vars.append(var_am)
+                    meta_row.append(meta_am)
+                    continue
+                is_multi = bool(dd.get("multi"))
                 if is_multi:
                     dd.setdefault("multi_bullets", False)
                     fmt_row = ttk.Frame(fr)
@@ -1312,6 +1859,121 @@ class FamilySocialSectionCore(ttk.Frame):
             outer, text="＋ Add dropdown to this template", command=lambda t=tmpl: self._add_dropdown(t)
         ).pack(fill="x", padx=8, pady=(4, 8))
 
+    def _canvas_item_list_editor_shell(self, parent: ttk.Widget, band_title: str, items: list[str]) -> None:
+        """Compact list + search editor used twice for Associated Multiple on the template canvas."""
+        band = ttk.LabelFrame(parent, text=band_title)
+        band.pack(fill="x", padx=6, pady=(0, 10))
+
+        search_var = tk.StringVar(value="")
+        visible_to_source: list[int] = list(range(len(items)))
+
+        def _persist_all() -> None:
+            self._persist_templates()
+            self._render_note_builder()
+            self._render_canvas_editor()
+            self._apply_builder_to_note()
+            self.on_change_callback()
+
+        sf = ttk.Frame(band)
+        sf.pack(fill="x", padx=6, pady=(0, 2))
+        ttk.Label(sf, text="Search:").pack(side="left")
+        ttk.Entry(sf, textvariable=search_var).pack(side="left", fill="x", expand=True, padx=(4, 4))
+
+        lf = ttk.Frame(band)
+        lf.pack(fill="x", padx=6, pady=4)
+        lb = tk.Listbox(lf, height=min(max(len(items), 3), 12), activestyle="dotbox")
+        for it in items:
+            lb.insert(tk.END, it)
+        lb.pack(side="left", fill="both", expand=True)
+        lsb = ttk.Scrollbar(lf, orient="vertical", command=lb.yview)
+        lb.configure(yscrollcommand=lsb.set)
+        lsb.pack(side="right", fill="y")
+
+        new_var = tk.StringVar()
+
+        def _refresh_filter() -> None:
+            q = search_var.get()
+            new_idxs = self._filter_items_by_prefix(items, q)
+            visible_to_source[:] = new_idxs
+            lb.delete(0, tk.END)
+            for src_idx in new_idxs:
+                lb.insert(tk.END, items[src_idx])
+
+        search_var.trace_add("write", lambda *_a: _refresh_filter())
+
+        def _src_idx_for_listbox_row(row: int) -> int | None:
+            if 0 <= row < len(visible_to_source):
+                return visible_to_source[row]
+            return None
+
+        def add_item() -> None:
+            txt = (new_var.get() or "").strip()
+            if not txt:
+                return
+            items.append(txt)
+            new_var.set("")
+            _persist_all()
+            _refresh_filter()
+
+        def update_item() -> None:
+            sel = lb.curselection()
+            if not sel:
+                return
+            src_idx = _src_idx_for_listbox_row(sel[0])
+            if src_idx is None:
+                return
+            txt = (new_var.get() or "").strip()
+            if not txt:
+                return
+            items[src_idx] = txt
+            lb.delete(sel[0])
+            lb.insert(sel[0], txt)
+            _persist_all()
+
+        def delete_item() -> None:
+            sel = lb.curselection()
+            if not sel:
+                return
+            src_idx = _src_idx_for_listbox_row(sel[0])
+            if src_idx is None:
+                return
+            items.pop(src_idx)
+            _persist_all()
+            _refresh_filter()
+
+        def add_to_list_from_search() -> None:
+            txt = (search_var.get() or "").strip()
+            if not txt:
+                return
+            existing_lower = {str(x).strip().lower() for x in items}
+            if txt.lower() in existing_lower:
+                search_var.set("")
+                return
+            items.append(txt)
+            _persist_all()
+            search_var.set("")
+
+        def on_sel(_e=None) -> None:
+            sel = lb.curselection()
+            if sel:
+                src_idx = _src_idx_for_listbox_row(sel[0])
+                if src_idx is not None:
+                    new_var.set(items[src_idx])
+
+        lb.bind("<<ListboxSelect>>", on_sel)
+        self._bind_listbox_mousewheel_local(lb)
+
+        ttk.Button(sf, text="+ Add to List", command=add_to_list_from_search).pack(side="left")
+
+        ent_row = ttk.Frame(band)
+        ent_row.pack(fill="x", padx=6, pady=(0, 4))
+        ttk.Entry(ent_row, textvariable=new_var).pack(side="left", fill="x", expand=True)
+        btn_row = ttk.Frame(band)
+        btn_row.pack(fill="x", padx=6, pady=(0, 6))
+        ttk.Button(btn_row, text="Add item", command=add_item).pack(side="left", padx=2)
+        ttk.Button(btn_row, text="Update item", command=update_item).pack(side="left", padx=2)
+        ttk.Button(btn_row, text="Delete item", command=delete_item).pack(side="left", padx=2)
+
     def _build_dropdown_editor_block(self, parent: ttk.Frame, tmpl: dict, di: int, dd: dict) -> None:
         frame = ttk.LabelFrame(parent, text=f"Dropdown {di + 1}")
         frame.pack(fill="x", padx=8, pady=6)
@@ -1332,6 +1994,58 @@ class FamilySocialSectionCore(ttk.Frame):
 
         le.bind("<FocusOut>", _save_lbl)
         le.bind("<Return>", _save_lbl)
+
+        if bool(dd.get("associated_multi")):
+            frame.configure(text=f"Dropdown {di + 1} — Associated Multiple")
+            dd["multi"] = False
+            dd.setdefault("associate_label", "Associated detail")
+            dd.setdefault("associate_items", [])
+            dd.setdefault("items", [])
+
+            type_row = ttk.Frame(frame)
+            type_row.pack(fill="x", padx=6, pady=(0, 4))
+            ttk.Label(type_row, text="Type: Associated Multiple (indented dash lines below the prefix).").pack(side="left")
+
+            def _convert_am_to_plain() -> None:
+                if not messagebox.askyesno(
+                    "Convert dropdown",
+                    "Remove Associated Multiple and convert this dropdown to a plain multi-select?\n\n"
+                    "Paired headline/detail structure cannot be preserved automatically.",
+                ):
+                    return
+                dd["associated_multi"] = False
+                dd["multi"] = True
+                dd.pop("associate_label", None)
+                dd.pop("associate_items", None)
+                self._save_and_reload()
+
+            ttk.Button(type_row, text="Convert to plain multiple…", command=_convert_am_to_plain).pack(side="right")
+
+            al_pair = ttk.Frame(frame)
+            al_pair.pack(fill="x", padx=6, pady=(4, 2))
+            ttk.Label(al_pair, text='Paired list label (“body part …”):').pack(side="left")
+            al_var = tk.StringVar(value=str(dd.get("associate_label") or ""))
+
+            def _save_al(_e=None, d=dd, v=al_var) -> None:
+                d["associate_label"] = v.get()
+                self._persist_templates()
+                self._render_note_builder()
+                self._apply_builder_to_note()
+                self.on_change_callback()
+
+            ae = ttk.Entry(al_pair, textvariable=al_var, width=48)
+            ae.pack(side="left", padx=6)
+            ae.bind("<FocusOut>", _save_al)
+            ae.bind("<Return>", _save_al)
+
+            self._canvas_item_list_editor_shell(frame, "Primary (top) choices", dd["items"])
+            assoc_title = dd.get("associate_label") or "Associated detail"
+            self._canvas_item_list_editor_shell(frame, f"Paired choices ({assoc_title})", dd["associate_items"])
+
+            ttk.Button(
+                frame, text="Remove dropdown", command=lambda t=tmpl, d=di: self._remove_dropdown(t, d)
+            ).pack(anchor="e", padx=6, pady=(0, 6))
+            return
 
         is_multi = bool(dd.get("multi"))
         mode_row = ttk.Frame(frame)
@@ -1487,29 +2201,44 @@ class FamilySocialSectionCore(ttk.Frame):
         ttk.Button(btn_row, text="Delete item", command=delete_item).pack(side="left", padx=2)
 
     def _add_template(self) -> None:
-        mode = self._ask_dropdown_mode(
+        choice = self._ask_dropdown_creation_mode(
             title="New template — dropdown type",
             prompt=(
-                "Should the first dropdown for this template allow only one choice (single), "
-                "or several at once (multiple)?\n\n"
-                "Multiple selections are combined with commas and “and” before the last item "
-                "(for example: Ibuprofen, Tylenol, and Aspirin)."
+                "Choose how selections work for this template’s first dropdown.\n\n"
+                "• Single / Multiple behave as usual.\n"
+                "• Associated Multiple: the top dropdown is multi-select; each chosen item gains "
+                "its own illuminated second list so you pair details (shown as indented dash "
+                "lines below the prefix in the note, Live Preview, and PDF)."
             ),
         )
-        if mode is None:
+        if choice is None:
             return
         new_id = max((t["id"] for t in self.templates), default=0) + 1
+        if choice == "associated_multiple":
+            first_dd = {
+                "label": "Primary options",
+                "items": ["MRI", "X-Ray", "CT scan"],
+                "associated_multi": True,
+                "associate_label": "Body region / detail",
+                "associate_items": [
+                    "Cervical spine",
+                    "Thoracic spine",
+                    "Lumbar spine",
+                    "Head",
+                    "Shoulder",
+                ],
+            }
+        else:
+            first_dd = {
+                "label": "Option",
+                "items": ["First phrase", "Second phrase"],
+                "multi": choice == "multiple",
+            }
         self.templates.append(
             {
                 "id": new_id,
                 "prefix": f"Template {new_id} prefix ",
-                "dropdowns": [
-                    {
-                        "label": "Option",
-                        "items": ["First phrase", "Second phrase"],
-                        "multi": bool(mode),
-                    }
-                ],
+                "dropdowns": [first_dd],
             }
         )
         self._save_and_reload()
@@ -1543,20 +2272,35 @@ class FamilySocialSectionCore(ttk.Frame):
             self._save_and_reload()
 
     def _add_dropdown(self, tmpl: dict) -> None:
-        mode = self._ask_dropdown_mode(
+        choice = self._ask_dropdown_creation_mode(
             title="New dropdown — selection type",
             prompt=(
-                "Should this new dropdown allow only one choice (single), "
-                "or several at once (multiple)?\n\n"
-                "Multiple selections are combined with commas and “and” before the last item."
+                "Choose selection behavior for this new dropdown.\n\n"
+                "Associated Multiple pairs each top-level choice with its own illuminated "
+                "second list and prints indented dash lines in notes and PDFs."
             ),
         )
-        if mode is None:
+        if choice is None:
             return
-        tmpl.setdefault("dropdowns", []).append(
-            {"label": "New dropdown", "items": ["A", "B"], "multi": bool(mode)}
-        )
+        if choice == "associated_multiple":
+            new_dd = {
+                "label": "Primary options",
+                "items": ["MRI", "X-Ray", "CT scan"],
+                "associated_multi": True,
+                "associate_label": "Body region / detail",
+                "associate_items": [
+                    "Cervical spine",
+                    "Thoracic spine",
+                    "Lumbar spine",
+                    "Head",
+                    "Shoulder",
+                ],
+            }
+        else:
+            new_dd = {"label": "New dropdown", "items": ["A", "B"], "multi": choice == "multiple"}
+        tmpl.setdefault("dropdowns", []).append(new_dd)
         self._save_and_reload()
+
 
     def _remove_dropdown(self, tmpl: dict, di: int) -> None:
         dds = tmpl.get("dropdowns") or []

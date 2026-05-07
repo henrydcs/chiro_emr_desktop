@@ -40,6 +40,12 @@ def _normalize_template_dd(dd: dict) -> None:
         return
     dd.setdefault("multi", False)
     dd.setdefault("multi_bullets", False)
+    dd.setdefault("associated_multi", False)
+    if dd.get("associated_multi"):
+        dd["multi"] = False
+        dd.setdefault("associate_label", "Associated detail")
+        if not isinstance(dd.get("associate_items"), list) or not dd.get("associate_items"):
+            dd["associate_items"] = ["Option A", "Option B"]
 
 
 def _normalize_template_list(templates: list) -> list[dict]:
@@ -144,12 +150,24 @@ class FamilySocialHistoryPage(ttk.Frame):
         header.pack(fill="x", padx=10, pady=(8, 4))
         ttk.Label(header, text=title).pack(side="left", anchor="w")
         self._skip_section_var = tk.BooleanVar(value=False)
+        self._skip_all_templates_var = tk.BooleanVar(value=False)
+        skip_col = ttk.Frame(header)
+        skip_col.pack(side="left", padx=(16, 0), anchor="nw")
         ttk.Checkbutton(
-            header,
+            skip_col,
             text="Skip entire section for this visit (omit from Live Preview & PDF)",
             variable=self._skip_section_var,
             command=self._on_skip_section_toggled,
-        ).pack(side="left", padx=(16, 0))
+        ).pack(anchor="w")
+        ttk.Checkbutton(
+            skip_col,
+            text=(
+                "Check all 'Skip this block for this visit' boxes in every sub-section "
+                "(uncheck templates — or this box — to include them in the note/PDF)"
+            ),
+            variable=self._skip_all_templates_var,
+            command=self._on_skip_all_templates_toggled,
+        ).pack(anchor="w", pady=(6, 0))
 
         top = ttk.Frame(outer)
         top.pack(fill="x", padx=10, pady=(0, 6))
@@ -216,6 +234,19 @@ class FamilySocialHistoryPage(ttk.Frame):
         self.nb.bind("<<NotebookTabChanged>>", self._on_nb_tab_changed)
 
     def _on_skip_section_toggled(self) -> None:
+        app = self._app
+        if app is not None and hasattr(app, "request_live_preview_refresh"):
+            try:
+                app.request_live_preview_refresh()
+            except Exception:
+                pass
+        self.on_change_callback()
+
+    def _on_skip_all_templates_toggled(self) -> None:
+        want_skip = bool(self._skip_all_templates_var.get())
+        for core in self._cores_by_id.values():
+            if hasattr(core, "set_all_template_visit_skip"):
+                core.set_all_template_visit_skip(want_skip, notify=False)
         app = self._app
         if app is not None and hasattr(app, "request_live_preview_refresh"):
             try:
@@ -656,6 +687,7 @@ class FamilySocialHistoryPage(ttk.Frame):
 
     def reset(self) -> None:
         self._skip_section_var.set(False)
+        self._skip_all_templates_var.set(False)
         for c in self._cores_by_id.values():
             c.reset()
 
