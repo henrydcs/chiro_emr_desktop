@@ -3209,6 +3209,216 @@ def _get_family_social_body_style(styles) -> object:
     return sty
 
 
+_FS_BULLET_HANG_LINE = re.compile(
+    r"^(\t*(?:[\-–•●○■□]+\s*)?[^:]+:\s*)(.*)$"
+)
+
+_FS_HANG_STYLE_SEQ = [0]
+
+
+def _fs_pdf_prefix_width_pt(prefix_plain: str, font_name: str, font_size: float) -> float:
+    """Width in points for tab + bullet + label + ': ' (continuation lines align after this)."""
+    try:
+        from reportlab.pdfbase import pdfmetrics
+    except Exception:
+        return float(len(prefix_plain.replace("\t", "        ")) * 0.52 * (font_size or 10))
+    tabbed = prefix_plain.replace("\t", "        ")
+    try:
+        w = float(pdfmetrics.stringWidth(tabbed, font_name, font_size or 10))
+    except Exception:
+        w = float(len(tabbed) * 0.52 * (font_size or 10))
+    return w * 1.06 + 2.4
+
+
+def _fs_pdf_tab_indent_pt(font_name: str, font_size: float) -> float:
+    """Width in points of one '\\t' rendered as 8 spaces (matches the prefix-width calc)."""
+    try:
+        from reportlab.pdfbase import pdfmetrics
+
+        return float(pdfmetrics.stringWidth("        ", font_name, font_size or 10))
+    except Exception:
+        return 8 * 0.52 * (font_size or 10)
+
+
+def _fs_pdf_bullet_hang_style(
+    base_style: object,
+    hang_pt: float,
+    styles: object,
+    tab_indent_pt: float = 0.0,
+) -> object:
+    """leftIndent + firstLineIndent = hanging wrap under the body start (after label).
+
+    `tab_indent_pt` shifts the WHOLE bullet block to the right by one tab so the
+    bullet character itself sits indented (matching the Live Preview / textbox).
+    `hang_pt` is the full prefix width INCLUDING that tab, so we offset
+    `firstLineIndent` by `tab_indent_pt` to land the first character at
+    `base_left + tab_indent_pt` while wrapped lines still align after the label.
+    """
+    from reportlab.lib.styles import ParagraphStyle
+
+    base_left = getattr(base_style, "leftIndent", 0) or 0
+    _FS_HANG_STYLE_SEQ[0] += 1
+    nm = f"FSHang_{int(hang_pt * 100)}_{int(tab_indent_pt * 100)}_{_FS_HANG_STYLE_SEQ[0]}"
+    if nm in styles.byName:
+        return styles[nm]
+    st = ParagraphStyle(
+        name=nm,
+        parent=base_style,
+        leftIndent=base_left + hang_pt,
+        firstLineIndent=-(hang_pt - tab_indent_pt),
+    )
+    styles.add(st)
+    return st
+
+
+def _fs_block_has_pdf_bullets(plain: str) -> bool:
+    """True if plain text has tab/bullet + 'Label:' sentence-builder lines."""
+    for raw in (plain or "").splitlines():
+        line = raw.rstrip("\r")
+        if _FS_BULLET_HANG_LINE.match(line):
+            return True
+    return False
+
+
+def _fs_pdf_flowables_from_note_plain(text: str, base_style: object, styles: object) -> list:
+    """
+    One Paragraph per narrative chunk; each builder bullet line becomes its own hanging Paragraph
+    so wrapped lines align with the body text (e.g. after 'MRI: ').
+    """
+    out: list = []
+    buf: list[str] = []
+    font_name = getattr(base_style, "fontName", "Helvetica") or "Helvetica"
+    font_size = getattr(base_style, "fontSize", 10) or 10
+
+    def flush_buf() -> None:
+        if not buf:
+            return
+        cleaned = [x for x in buf if x is not None]
+        if not any((s or "").strip() for s in cleaned):
+            buf.clear()
+            return
+        chunk = "<br/>".join(xml_escape(x) for x in cleaned)
+        out.append(Paragraph(chunk, base_style))
+        buf.clear()
+
+    prev_was_tab_bullet = False
+    for raw in (text or "").splitlines():
+        line = raw.rstrip("\r")
+        if not line.strip():
+            buf.append("")
+            prev_was_tab_bullet = False
+            continue
+        m = _FS_BULLET_HANG_LINE.match(line)
+        if m:
+            flush_buf()
+            is_tab_bullet = line.startswith("\t")
+            # Insert a blank-line gap when transitioning from a non-tab
+            # "header"/prefix line (e.g. "Template 3 prefix:") into the first
+            # tab-indented bullet line, so the PDF matches the Live Preview
+            # and the bottom textbox spacing.
+            if is_tab_bullet and not prev_was_tab_bullet and out:
+                out.append(Spacer(1, 0.12 * inch))
+            prefix, body = m.group(1), m.group(2)
+            display = prefix.replace("\t", "", 1) + body
+            hang = _fs_pdf_prefix_width_pt(prefix, font_name, font_size)
+            tab_pt = (
+                _fs_pdf_tab_indent_pt(font_name, font_size) if is_tab_bullet else 0.0
+            )
+            hst = _fs_pdf_bullet_hang_style(base_style, hang, styles, tab_pt)
+            safe = xml_escape(display).replace("\n", "<br/>")
+            out.append(Paragraph(safe, hst))
+            prev_was_tab_bullet = is_tab_bullet
+        else:
+            buf.append(line)
+            prev_was_tab_bullet = False
+    flush_buf()
+    return out
+
+
+# Strip <b>/<i>/<u> (and similar) tags from a rich line so the plain-text
+# bullet regex can still detect bullet structure while keeping the
+# original rich line intact for actual rendering.
+_FS_RICH_TAG_STRIP = re.compile(r"<[^>]+>")
+_FS_RICH_BR_SPLIT = re.compile(r"<br\s*/?>")
+
+
+def _fs_pdf_flowables_from_note_rich(
+    rich: str, base_style: object, styles: object
+) -> list:
+    """Per-line PDF flowables from a builder rich_text string.
+
+    Mirrors `_fs_pdf_flowables_from_note_plain` but consumes the rich string
+    produced by `FamilySocialSectionCore.get_rich_value()` so that
+    bold/italic/underline (`<b>`, `<i>`, `<u>`) tags survive into the PDF.
+
+    Tags in rich_text are guaranteed not to span `<br/>` boundaries because
+    `get_rich_value()` wraps each annotated chunk individually and bullet
+    line prefixes (which contain the newlines) are emitted as untagged
+    chunks. Splitting on `<br/>` therefore yields per-visual-line segments
+    whose markup is already balanced.
+    """
+    out: list = []
+    if not (rich or "").strip():
+        return out
+
+    font_name = getattr(base_style, "fontName", "Helvetica") or "Helvetica"
+    font_size = getattr(base_style, "fontSize", 10) or 10
+
+    rich_lines = _FS_RICH_BR_SPLIT.split(rich)
+    buf: list[str] = []
+
+    def flush_buf() -> None:
+        if not buf:
+            return
+        # Keep internal blank lines but trim trailing blanks to avoid an
+        # empty trailing paragraph after a bullet block.
+        cleaned = list(buf)
+        while cleaned and not cleaned[-1].strip():
+            cleaned.pop()
+        if not any(s.strip() for s in cleaned):
+            buf.clear()
+            return
+        chunk = "<br/>".join(cleaned)
+        out.append(Paragraph(chunk, base_style))
+        buf.clear()
+
+    prev_was_tab_bullet = False
+    for rich_line in rich_lines:
+        # Detect bullet structure on the plain-text projection so XML markup
+        # cannot interfere with the regex.
+        plain_line = _FS_RICH_TAG_STRIP.sub("", rich_line)
+        if not plain_line.strip():
+            buf.append("")
+            prev_was_tab_bullet = False
+            continue
+        m = _FS_BULLET_HANG_LINE.match(plain_line)
+        if m:
+            flush_buf()
+            is_tab_bullet = rich_line.startswith("\t") or plain_line.startswith("\t")
+            # Insert a blank-line gap when transitioning from a non-tab
+            # "header"/prefix line (e.g. "Template 3 prefix:") into the first
+            # tab-indented bullet line, so the PDF matches the Live Preview
+            # and the bottom textbox spacing.
+            if is_tab_bullet and not prev_was_tab_bullet and out:
+                out.append(Spacer(1, 0.12 * inch))
+            prefix_plain = m.group(1)
+            # Display: drop the leading tab to match the plain-text version's
+            # one-tab strip (the hang style supplies the indent visually).
+            display_rich = rich_line[1:] if rich_line.startswith("\t") else rich_line
+            hang = _fs_pdf_prefix_width_pt(prefix_plain, font_name, font_size)
+            tab_pt = (
+                _fs_pdf_tab_indent_pt(font_name, font_size) if is_tab_bullet else 0.0
+            )
+            hst = _fs_pdf_bullet_hang_style(base_style, hang, styles, tab_pt)
+            out.append(Paragraph(display_rich, hst))
+            prev_was_tab_bullet = is_tab_bullet
+        else:
+            buf.append(rich_line)
+            prev_was_tab_bullet = False
+    flush_buf()
+    return out
+
+
 def build_family_social_flowables(soap: dict, styles) -> list:
     """Heading2 main title; v2 builder uses Heading3 per block. Legacy: single body."""
     soap = soap or {}
@@ -3235,13 +3445,15 @@ def build_family_social_flowables(soap: dict, styles) -> list:
             if heading:
                 out.append(Paragraph(f"<b>{xml_escape(heading)}</b>", styles["Heading3"]))
                 out.append(Spacer(1, 0.04 * inch))
-            # Use pre-formatted rich text (already XML-escaped with <b>/<i>/<u> tags) when
-            # available; fall back to plain text when the user has manually edited the note.
             if rich:
-                safe_fs = rich
+                if _fs_block_has_pdf_bullets(text):
+                    for fl in _fs_pdf_flowables_from_note_rich(rich, fs_body, styles):
+                        out.append(fl)
+                else:
+                    out.append(Paragraph(rich, fs_body))
             else:
-                safe_fs = xml_escape(text).replace("\n\n", "<br/><br/>").replace("\n", "<br/>")
-            out.append(Paragraph(safe_fs, fs_body))
+                for fl in _fs_pdf_flowables_from_note_plain(text, fs_body, styles):
+                    out.append(fl)
             out.append(Spacer(1, 0.10 * inch))
         return out
 
@@ -3250,9 +3462,72 @@ def build_family_social_flowables(soap: dict, styles) -> list:
         return []
     out.append(Paragraph("<b>FAMILY / SOCIAL HISTORY</b>", styles["Heading2"]))
     out.append(Spacer(1, 0.08 * inch))
-    safe_fs = xml_escape(family_social).replace("\n\n", "<br/><br/>").replace("\n", "<br/>")
-    out.append(Paragraph(safe_fs, _get_family_social_body_style(styles)))
+    fs_body_legacy = _get_family_social_body_style(styles)
+    if _fs_block_has_pdf_bullets(family_social):
+        for fl in _fs_pdf_flowables_from_note_plain(family_social, fs_body_legacy, styles):
+            out.append(fl)
+    else:
+        safe_fs = xml_escape(family_social).replace("\n\n", "<br/><br/>").replace("\n", "<br/>")
+        out.append(Paragraph(safe_fs, fs_body_legacy))
     out.append(Spacer(1, 0.12 * inch))
+    return out
+
+
+def build_subjectives_canvas_flowables(subj: dict, styles) -> list:
+    """
+    Render Subjectives-on-Canvas content inside the SUBJECTIVES section.
+    Supports v2 builder blocks with rich_text; falls back to plain canvas text.
+    """
+    subj = subj or {}
+    canvas = subj.get("canvas")
+    if not isinstance(canvas, dict):
+        return []
+    if bool(canvas.get("section_skipped")):
+        return []
+
+    out: list = []
+    body_style = _get_family_social_body_style(styles)
+    builder = canvas.get("builder_state")
+
+    if isinstance(builder, dict) and int(builder.get("v") or 0) == 2:
+        nonempty: list[tuple[str, str, str]] = []
+        for bl in builder.get("blocks") or []:
+            if not isinstance(bl, dict):
+                continue
+            text = (bl.get("text") or "").strip()
+            if not text:
+                continue
+            heading = (bl.get("heading") or "").strip()
+            rich = (bl.get("rich_text") or "").strip()
+            nonempty.append((heading, text, rich))
+
+        if nonempty:
+            for heading, text, rich in nonempty:
+                if heading:
+                    out.append(Paragraph(f"<b>{xml_escape(heading)}</b>", styles["Heading3"]))
+                    out.append(Spacer(1, 0.04 * inch))
+                if rich:
+                    if _fs_block_has_pdf_bullets(text):
+                        for fl in _fs_pdf_flowables_from_note_rich(rich, body_style, styles):
+                            out.append(fl)
+                    else:
+                        out.append(Paragraph(rich, body_style))
+                else:
+                    for fl in _fs_pdf_flowables_from_note_plain(text, body_style, styles):
+                        out.append(fl)
+                out.append(Spacer(1, 0.10 * inch))
+            return out
+
+    plain = (canvas.get("text") or "").strip()
+    if not plain:
+        return []
+    if _fs_block_has_pdf_bullets(plain):
+        for fl in _fs_pdf_flowables_from_note_plain(plain, body_style, styles):
+            out.append(fl)
+    else:
+        safe_plain = xml_escape(plain).replace("\n\n", "<br/><br/>").replace("\n", "<br/>")
+        out.append(Paragraph(safe_plain, body_style))
+    out.append(Spacer(1, 0.10 * inch))
     return out
 
 
@@ -3751,6 +4026,13 @@ def build_combined_pdf(path: str, payloads: list):
             story.append(Spacer(1, 0.10 * inch))
             combined = "\n\n".join(user_narratives)
             story.append(Paragraph(semibold_markup(combined, []), styles["SubjectiveBody"]))
+            printed_any_subjectives = True
+
+        subj_canvas_flow = build_subjectives_canvas_flowables(subj, styles)
+        if subj_canvas_flow:
+            if printed_any_subjectives:
+                story.append(Spacer(1, 0.10 * inch))
+            story.extend(subj_canvas_flow)
             printed_any_subjectives = True
 
         # ✅ Only print dash if NOTHING exists (no therapy + no narratives + no user narrative)

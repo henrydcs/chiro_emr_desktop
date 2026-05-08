@@ -43,7 +43,7 @@ import sys
 import subprocess
 import tkinter as tk
 from tkinter import ttk, messagebox, filedialog, simpledialog
-from datetime import datetime
+from datetime import datetime, timezone
 from diagnosis_page import DiagnosisPage
 from doc_vault_page import DocVaultPage
 from global_vault_page import GlobalVaultPage
@@ -380,6 +380,9 @@ class App(tk.Tk):
         # (e.g., "Subjectives") to Text indices like "12.0"
         self._preview_heading_indices: dict[str, str] = {}
 
+        self._preview_bullet_wrap_tag_uid = 0
+        self._preview_bullet_wrap_by_key: dict[tuple[int, int], str] = {}
+
         self.exam_date_var.trace_add("write", lambda *_: self._set_current_doc_label())
         
         self.master_save = MasterSaveController(self)
@@ -590,7 +593,46 @@ class App(tk.Tk):
             "ASSESSMENT": "Diagnosis",
             "PLAN OF CARE": "Plan",
         }
-       
+
+    @staticmethod
+    def _unpack_live_preview_run(run) -> tuple[str, str | None, int | None]:
+        """Accept (chunk, tag) or (chunk, tag, wrap_px) from any section."""
+        try:
+            if isinstance(run, (tuple, list)) and len(run) >= 3:
+                ch, tg, wp = run[0], run[1], run[2]
+                wp_i: int | None
+                if wp is not None:
+                    try:
+                        wp_i = int(wp)
+                    except (TypeError, ValueError):
+                        wp_i = None
+                else:
+                    wp_i = None
+                return (ch or "", tg, wp_i)
+            if isinstance(run, (tuple, list)) and len(run) >= 2:
+                return (run[0] or "", run[1], None)
+        except Exception:
+            pass
+        return ("", None, None)
+
+    def _live_preview_bullet_wrap_tag(self, txt: tk.Text, px: int) -> str:
+        if px <= 0:
+            return ""
+        try:
+            k = (id(txt), int(px))
+        except Exception:
+            return ""
+        tnm = self._preview_bullet_wrap_by_key.get(k)
+        if tnm is None:
+            self._preview_bullet_wrap_tag_uid += 1
+            tnm = f"LW_BWRAP_{self._preview_bullet_wrap_tag_uid}_{int(px)}"
+            try:
+                txt.tag_configure(tnm, lmargin1=0, lmargin2=int(px))
+            except tk.TclError:
+                return ""
+            self._preview_bullet_wrap_by_key[k] = tnm
+        return tnm
+
     def request_live_preview_refresh(self):
         # Debounce: cancel pending refresh and schedule a new one
         if getattr(self, "_live_preview_job", None) is not None:
@@ -771,7 +813,10 @@ class App(tk.Tk):
                 runs = []
 
             # ✅ If content didn’t change, do NOTHING (prevents jitter)
-            new_key = tuple((chunk or "", tag or "") for chunk, tag in runs)
+            new_key = tuple(
+                (ch or "", tg or "", str(wp) if wp else "")
+                for ch, tg, wp in (self._unpack_live_preview_run(r) for r in runs)
+            )
             if getattr(self, "_last_preview_key", None) == new_key:
                 return
             self._last_preview_key = new_key
@@ -786,11 +831,26 @@ class App(tk.Tk):
                 txt.configure(state="normal")
                 txt.delete("1.0", "end")
 
-                for chunk, tag in runs:
+                for raw in runs:
+                    chunk, tag, wrap_px = self._unpack_live_preview_run(raw)
                     if not chunk:
                         continue
+                    tag_list: list[str] = []
+                    if wrap_px is not None and wrap_px > 0:
+                        # Note builder measures with its own Tk font — preview proportional font
+                        # is wider for bold/emphasis segments; widen hanging indent slightly so
+                        # wrapped lines visually align under the detail body text.
+                        try:
+                            wadj = max(1, int(int(wrap_px) * 1.08 + 12))
+                        except (TypeError, ValueError):
+                            wadj = int(wrap_px)
+                        wtn = self._live_preview_bullet_wrap_tag(txt, wadj)
+                        if wtn:
+                            tag_list.append(wtn)
                     if tag:
-                        txt.insert("end", chunk, tag)
+                        tag_list.append(tag)
+                    if tag_list:
+                        txt.insert("end", chunk, tuple(tag_list) if len(tag_list) > 1 else tag_list[0])
                     else:
                         txt.insert("end", chunk)
 
@@ -3626,16 +3686,21 @@ class App(tk.Tk):
         self.hoi_page = HOIPage(self.content, self.schedule_autosave)
         self.after(50, self.request_live_preview_refresh)
 
-        def _subjectives_on_change():
+        def _subjectives_on_change(*, regen_moi: bool = True):
             self.schedule_autosave()
-            try:
-                if hasattr(self, "hoi_page") and self.hoi_page is not None:
-                    self.hoi_page._regen_moi_now()
-            except Exception:
-                pass
+            if regen_moi:
+                try:
+                    if hasattr(self, "hoi_page") and self.hoi_page is not None:
+                        self.hoi_page._regen_moi_now()
+                except Exception:
+                    pass
         self.subjectives_page = SubjectivesPage(self.content, _subjectives_on_change, app=self)
         self.family_social_page = FamilySocialHistoryPage(
-            self.content, "Family/Social History", self.schedule_autosave, app=self
+            self.content,
+            "Family/Social History",
+            self.schedule_autosave,
+            app=self,
+            clear_assoc_on_primary_clear=True,
         )
         self.objectives_page = ObjectivesPage(self.content, self.schedule_autosave)
         self.diagnosis_page = DiagnosisPage(
@@ -3899,7 +3964,17 @@ class App(tk.Tk):
         # Subjectives
         if sel.get("subjectives"):
             try:
-                self.subjectives_page.reset()
+                # Whole-section reset: also wipe the Subjectives on Canvas area.
+                self.subjectives_page.reset(include_canvas=True)
+            except TypeError:
+                # Older signature without keyword
+                try:
+                    self.subjectives_page.reset()
+                except Exception:
+                    try:
+                        self.subjectives_page.from_dict({"blocks": []})
+                    except Exception:
+                        pass
             except Exception:
                 try:
                 # fallback
@@ -4609,7 +4684,7 @@ class App(tk.Tk):
                 except Exception:
                     existing = {}
 
-            now_iso = datetime.utcnow().isoformat(timespec="seconds") + "Z"
+            now_iso = datetime.now(timezone.utc).replace(tzinfo=None).isoformat(timespec="seconds") + "Z"
 
             updated = dict(existing)
             updated["patient_id"] = pid
@@ -6043,7 +6118,16 @@ class App(tk.Tk):
 
         # Subjectives
         try:
-            self.subjectives_page.reset()
+            # Whole-exam reset: also wipe the Subjectives on Canvas area.
+            self.subjectives_page.reset(include_canvas=True)
+        except TypeError:
+            try:
+                self.subjectives_page.reset()
+            except Exception:
+                try:
+                    self.subjectives_page.from_dict({})
+                except Exception:
+                    pass
         except Exception:
             try:
                 self.subjectives_page.from_dict({})

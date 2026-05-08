@@ -3,7 +3,12 @@ import tkinter as tk
 from tkinter import ttk, messagebox
 from ui_blocks import DescriptorBlock
 from config import REGION_LABELS
+from family_social_history_page import FamilySocialHistoryPage
 import re
+
+# Independent template file for the "Subjectives on Canvas" area so its
+# dropdowns / templates do not collide with Family/Social History.
+SUBJECTIVES_CANVAS_TEMPLATES_FILENAME = "subjectives_canvas_doc_templates.json"
 
 THERAPY_BODY_PARTS = [
     "Neck", "Upper Back", "Mid-Back", "Low Back", "Pelvic Area",
@@ -69,6 +74,19 @@ class SubjectivesPage(ttk.Frame):
             self.app.plan_page.open_therapy_modalities_from_therapy_only()
         except Exception as e:
             messagebox.showerror("Therapy Modalities", f"Could not open Therapy Modalities.\n\n{e}")
+
+    def _on_canvas_change(self):
+        """
+        Subjectives-on-Canvas edits should autosave/refresh preview, but they should
+        not force MOI regeneration (that can steal focus from associated-primary listboxes).
+        """
+        cb = self.on_change_callback
+        if not callable(cb):
+            return
+        try:
+            cb(regen_moi=False)
+        except TypeError:
+            cb()
 
     # Subjective Body Regions
     def clear_all_body_regions(self):
@@ -222,6 +240,7 @@ class SubjectivesPage(ttk.Frame):
         Combined Subjectives narrative:
         1) Therapy paragraph FIRST (if any)
         2) Then block narratives (existing logic unchanged)
+        3) Then "Subjectives on Canvas" content (independent area, additive only)
         """
         parts = []
 
@@ -233,6 +252,19 @@ class SubjectivesPage(ttk.Frame):
             txt = (b.get_narrative() or "").strip()
             if txt:
                 parts.append(txt)
+
+        # Subjectives on Canvas — additive; existing block/therapy logic unchanged.
+        try:
+            canvas_page = getattr(self, "canvas_page", None)
+            if canvas_page is not None:
+                canvas_text = (canvas_page.get_value() or "").strip()
+                if canvas_text and not (
+                    hasattr(canvas_page, "get_section_skipped")
+                    and canvas_page.get_section_skipped()
+                ):
+                    parts.append(canvas_text)
+        except Exception:
+            pass
 
         return "\n\n".join(parts).strip()
 
@@ -364,7 +396,19 @@ class SubjectivesPage(ttk.Frame):
         has_block_content = any((b.get_auto_generated_text() or "").strip() for b in self.blocks)
         has_block_narrative = any((b.get_narrative() or "").strip() for b in self.blocks)
 
-        has_any_subjectives = bool(therapy or has_block_content or has_block_narrative)
+        # Independent "Subjectives on Canvas" area — separate state from blocks
+        # and therapy. Treated as additive content for the SUBJECTIVES section.
+        canvas_runs: list[tuple[str, str | None]] = []
+        try:
+            canvas_page = getattr(self, "canvas_page", None)
+            if canvas_page is not None and hasattr(canvas_page, "get_live_preview_runs"):
+                canvas_runs = canvas_page.get_live_preview_runs() or []
+        except Exception:
+            canvas_runs = []
+
+        has_any_subjectives = bool(
+            therapy or has_block_content or has_block_narrative or canvas_runs
+        )
         if has_any_subjectives:
             runs.append(("SUBJECTIVES\n", "H_BOLD"))
             runs.append(("\n", None))
@@ -403,6 +447,13 @@ class SubjectivesPage(ttk.Frame):
             runs.append(("\n", None))
             runs.append(("\n\n".join(orphan_narratives) + "\n\n", None))
 
+        # Append the Subjectives on Canvas content (independent area, additive).
+        if canvas_runs:
+            # Light spacer if previous content exists (header alone is fine on its own).
+            if len(runs) > 2:
+                runs.append(("\n", None))
+            runs.extend(canvas_runs)
+
         return runs
 
     
@@ -422,6 +473,10 @@ class SubjectivesPage(ttk.Frame):
     def _go_back_to_subjectives(self):
         """Switch back to regular Subjectives view."""
         self._subjectives_frame.tkraise()
+
+    def _go_subjectives_canvas(self):
+        """Switch to the Subjectives on Canvas view (independent area)."""
+        self._subjectives_canvas_frame.tkraise()
     
     # ---------- UI ----------
     def _build_ui(self):
@@ -435,6 +490,8 @@ class SubjectivesPage(ttk.Frame):
         self._subjectives_frame.grid(row=0, column=0, sticky="nsew")
         self._therapy_only_home_frame = ttk.Frame(self._stack)
         self._therapy_only_home_frame.grid(row=0, column=0, sticky="nsew")
+        self._subjectives_canvas_frame = ttk.Frame(self._stack)
+        self._subjectives_canvas_frame.grid(row=0, column=0, sticky="nsew")
 
         # --- All content below goes inside _subjectives_frame ---
         _host = self._subjectives_frame
@@ -446,6 +503,7 @@ class SubjectivesPage(ttk.Frame):
         ttk.Button(top, text="Add Block", command=self._add_block).pack(side="left")
         ttk.Button(top, text="Reset All Subjectives", command=self._confirm_reset).pack(side="left", padx=(8, 0))
         ttk.Button(top, text="New Therapy Only Home", command=self._go_therapy_only_home).pack(side="left", padx=(8, 0))
+        ttk.Button(top, text="Subjectives on Canvas", command=self._go_subjectives_canvas).pack(side="left", padx=(8, 0))
 
         # Row of block navigation buttons
         self.nav = ttk.Frame(_host)
@@ -503,6 +561,11 @@ class SubjectivesPage(ttk.Frame):
             text="Back to Subjectives",
             command=self._go_back_to_subjectives,
         ).pack(side="left")
+        ttk.Button(
+            therapy_home_top,
+            text="Subjectives on Canvas",
+            command=self._go_subjectives_canvas,
+        ).pack(side="left", padx=(8, 0))
 
         # --- Therapy Only block (mirrors _therapy_frame, uses same therapy_vars) ---
         self._therapy_only_home_frame_inner = ttk.LabelFrame(
@@ -537,6 +600,60 @@ class SubjectivesPage(ttk.Frame):
 
         for c in range(cols_home):
             self._therapy_only_home_frame_inner.grid_columnconfigure(c, weight=1)
+
+        # --- Subjectives on Canvas area ---
+        # Independent area that reuses the Family/Social History UI (multi-block
+        # notebook + Template editor canvas + sub-section manager) but with its
+        # own templates file and its own state. Reset All Subjectives does NOT
+        # touch this area; it has its own Reset (inherited from the inner page).
+        canvas_top = ttk.Frame(self._subjectives_canvas_frame)
+        canvas_top.pack(fill="x", padx=10, pady=(10, 6))
+        ttk.Button(
+            canvas_top,
+            text="Back to Block Subjectives",
+            command=self._go_back_to_subjectives,
+        ).pack(side="left")
+        ttk.Button(
+            canvas_top,
+            text="New Therapy Only Home",
+            command=self._go_therapy_only_home,
+        ).pack(side="left", padx=(8, 0))
+        ttk.Button(
+            canvas_top,
+            text="Reset Subjectives Canvas",
+            command=self._confirm_reset_canvas,
+        ).pack(side="left", padx=(8, 0))
+
+        # Embedded multi-block builder + template canvas (its own templates file
+        # so dropdowns/templates stay independent from Family/Social History).
+        # section_header=None -> output runs do NOT emit a separate section
+        # header; they are appended inside the SUBJECTIVES section heading.
+        self.canvas_page = FamilySocialHistoryPage(
+            self._subjectives_canvas_frame,
+            "Subjectives on Canvas",
+            self._on_canvas_change,
+            app=self.app,
+            templates_filename=SUBJECTIVES_CANVAS_TEMPLATES_FILENAME,
+            section_header=None,
+            clear_assoc_on_primary_clear=True,
+        )
+        self.canvas_page.pack(fill="both", expand=True, padx=10, pady=(0, 10))
+
+    def _confirm_reset_canvas(self):
+        ok = messagebox.askyesno(
+            "Reset Subjectives on Canvas",
+            "This will clear ONLY the Subjectives on Canvas area for this exam.\n\n"
+            "It will NOT touch your Block Subjectives or Therapy Only selections, "
+            "and it will not delete any saved files.\n\n"
+            "Continue?"
+        )
+        if not ok:
+            return
+        try:
+            self.canvas_page.reset()
+        except Exception:
+            pass
+        self._on_canvas_change()
 
     # ---------- Block label helpers ----------
     def _region_short(self, region_code: str) -> str:
@@ -638,7 +755,15 @@ class SubjectivesPage(ttk.Frame):
         self.on_change_callback()
 
     # -------- Public API --------
-    def reset(self):
+    def reset(self, *, include_canvas: bool = False):
+        """
+        Reset Block Subjectives + Therapy Only.
+
+        By design, the in-page "Reset All Subjectives" button does NOT touch the
+        Subjectives on Canvas area (each area is its own identity). When the
+        whole exam is being wiped (e.g. "Reset Exam" / new patient), callers can
+        pass include_canvas=True to also clear the canvas state.
+        """
         # destroy all blocks + buttons
         for b in self.blocks:
             b.frame.destroy()
@@ -663,6 +788,15 @@ class SubjectivesPage(ttk.Frame):
         self._therapy_main = None   # THIS is what fixes your ordering reset
 
         self._add_block()
+
+        if include_canvas:
+            try:
+                canvas_page = getattr(self, "canvas_page", None)
+                if canvas_page is not None:
+                    canvas_page.reset()
+            except Exception:
+                pass
+
         self.on_change_callback()
 
     def focus_region_label(self, region_label: str) -> None:
@@ -727,16 +861,41 @@ class SubjectivesPage(ttk.Frame):
         for b in self.blocks:
             if b.is_active() and b.get_narrative().strip():
                 return True
+
+        try:
+            canvas_page = getattr(self, "canvas_page", None)
+            if canvas_page is not None and canvas_page.has_content():
+                return True
+        except Exception:
+            pass
+
         return False
 
 
     def to_dict(self) -> dict:
-        return {
+        out = {
             "blocks": [b.to_dict() for b in self.blocks],
             "therapy_only": {k: v.get() for k, v in self.therapy_vars.items()},
             "therapy_main": self._therapy_main,
             "therapy_order": list(self._therapy_order),
         }
+
+        try:
+            canvas_page = getattr(self, "canvas_page", None)
+            if canvas_page is not None:
+                out["canvas"] = {
+                    "text": canvas_page.get_value(),
+                    "builder_state": canvas_page.get_builder_state(),
+                    "section_skipped": (
+                        canvas_page.get_section_skipped()
+                        if hasattr(canvas_page, "get_section_skipped")
+                        else False
+                    ),
+                }
+        except Exception:
+            pass
+
+        return out
         
 
     def from_dict(self, data: dict):
@@ -804,6 +963,31 @@ class SubjectivesPage(ttk.Frame):
         finally:
             self._therapy_loading = False       
         
+        # Subjectives on Canvas — independent state inside the same exam JSON.
+        try:
+            canvas_page = getattr(self, "canvas_page", None)
+            if canvas_page is not None:
+                canvas_state = (data or {}).get("canvas") or {}
+                if isinstance(canvas_state, dict):
+                    canvas_text = canvas_state.get("text") or ""
+                    canvas_builder = canvas_state.get("builder_state")
+                    canvas_page.set_value(
+                        canvas_text,
+                        builder_state=(
+                            canvas_builder if isinstance(canvas_builder, dict) else None
+                        ),
+                    )
+                    if hasattr(canvas_page, "set_section_skipped"):
+                        canvas_page.set_section_skipped(
+                            bool(canvas_state.get("section_skipped"))
+                        )
+                else:
+                    canvas_page.set_value("")
+                    if hasattr(canvas_page, "set_section_skipped"):
+                        canvas_page.set_section_skipped(False)
+        except Exception:
+            pass
+
         self._refresh_nav_buttons()
         self._sync_therapy_visibility()   # ✅ force correct show/hide on load
         self.on_change_callback()

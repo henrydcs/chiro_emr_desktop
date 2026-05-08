@@ -88,8 +88,8 @@ def _coerce_sections_loaded(raw_sections: list) -> list[dict]:
     return out if out else _default_sections()
 
 
-def _load_sections_from_disk() -> list[dict]:
-    path = str(get_data_dir() / TEMPLATES_FILENAME)
+def _load_sections_from_disk(filename: str | None = None) -> list[dict]:
+    path = str(get_data_dir() / (filename or TEMPLATES_FILENAME))
     if not os.path.exists(path):
         return _default_sections()
     try:
@@ -141,11 +141,28 @@ class FamilySocialHistoryPage(ttk.Frame):
     Template JSON: { "file_version": 2, "sections": [ { id, heading, templates }, ... ] }
     """
 
-    def __init__(self, parent, title: str, on_change_callback, app: tk.Misc | None = None):
+    def __init__(
+        self,
+        parent,
+        title: str,
+        on_change_callback,
+        app: tk.Misc | None = None,
+        *,
+        templates_filename: str | None = None,
+        section_header: str | None = "FAMILY / SOCIAL HISTORY",
+        clear_assoc_on_primary_clear: bool = False,
+    ):
         super().__init__(parent)
         self.on_change_callback = on_change_callback
         self._app = app
-        self.sections: list[dict] = _load_sections_from_disk()
+        # Per-instance persistence file (lets the same UI be reused for separate areas
+        # with completely independent template sets — e.g. Subjectives Canvas).
+        self._templates_filename: str = (templates_filename or TEMPLATES_FILENAME)
+        # Section header text emitted by get_live_preview_runs (None = omit header,
+        # used when this page is embedded inside another section like Subjectives).
+        self._section_header: str | None = section_header
+        self._clear_assoc_on_primary_clear = bool(clear_assoc_on_primary_clear)
+        self.sections: list[dict] = _load_sections_from_disk(self._templates_filename)
         self._token_copy_feedback_var = tk.StringVar(value="")
 
         outer = ttk.Frame(self)
@@ -307,6 +324,7 @@ class FamilySocialHistoryPage(ttk.Frame):
             section=sec,
             persist_all_callback=self._persist_templates_to_disk,
             token_feedback_var=self._token_copy_feedback_var,
+            clear_assoc_on_primary_clear=self._clear_assoc_on_primary_clear,
         )
         core.pack(fill="both", expand=True)
         self._cores_by_id[sid] = core
@@ -539,7 +557,7 @@ class FamilySocialHistoryPage(ttk.Frame):
         core.mount_canvas_editor(self.tab_canvas)
 
     def _persist_templates_to_disk(self) -> None:
-        path = str(get_data_dir() / TEMPLATES_FILENAME)
+        path = str(get_data_dir() / self._templates_filename)
         payload = {
             "file_version": _FILE_VERSION,
             "sections": [
@@ -611,36 +629,37 @@ class FamilySocialHistoryPage(ttk.Frame):
                 parts.append(t)
         return "\n\n".join(parts).strip()
 
-    def get_live_preview_runs(self) -> list[tuple[str, str | None]]:
+    def get_live_preview_runs(self) -> list[tuple[str, str | None, int | None]]:
         if self._skip_section_var.get():
             return []
-        runs: list[tuple[str, str | None]] = []
+        runs: list[tuple[str, str | None, int | None]] = []
         wrote_header = False
         for sec in self.sections:
             sid = sec["id"]
             core = self._cores_by_id.get(sid)
             if core is None:
                 continue
-            # Prefer annotated runs (carries Bold/Italic/Underline tags) when available.
+            # Prefer annotated runs (Bold/Italic/Underline + bullet continuation indents).
             if hasattr(core, "get_live_preview_annotated_runs"):
                 content_runs = core.get_live_preview_annotated_runs()
             else:
                 t = core.get_value().strip()
-                content_runs = [(t, None)] if t else []
+                content_runs = [(t, None, None)] if t else []
             if not content_runs:
                 continue
             if not wrote_header:
-                runs.append(("FAMILY / SOCIAL HISTORY\n", "H_BOLD"))
-                runs.append(("\n", None))
+                if self._section_header:
+                    runs.append((self._section_header + "\n", "H_BOLD", None))
+                    runs.append(("\n", None, None))
                 wrote_header = True
             else:
-                runs.append(("\n\n", None))
+                runs.append(("\n\n", None, None))
             h = (sec.get("heading") or "").strip()
             if h:
-                runs.append((h + "\n", "LP_FS_SUBHEAD"))
-                runs.append(("\n", None))
+                runs.append((h + "\n", "LP_FS_SUBHEAD", None))
+                runs.append(("\n", None, None))
             runs.extend(content_runs)
-            runs.append(("\n", None))
+            runs.append(("\n", None, None))
         return runs
 
     def get_builder_state(self) -> dict:

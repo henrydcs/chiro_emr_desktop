@@ -4,10 +4,12 @@ from __future__ import annotations
 import copy
 import json
 import os
+import re
 from datetime import datetime
 from tkinter import ttk, messagebox
 
 import tkinter as tk
+import tkinter.font as tkfont
 
 from paths import get_data_dir
 from utils import today_mmddyyyy
@@ -73,6 +75,30 @@ def _bullet_line_prefix(dd: dict, first_line: bool) -> str:
     if first_line:
         return "\n\n\t" + suf
     return "\n\t" + suf
+
+
+def _wrap_long_bullet_tokens(dd: dict, text: str, *, max_token_len: int = 42) -> str:
+    """
+    Hard-wrap very long unbroken tokens inside bullet content.
+
+    Tk Text with wrap="word" does not wrap a single long token; this inserts
+    continuation line breaks that keep wrapped chunks aligned with the bullet text.
+    """
+    s = str(text or "")
+    if not s:
+        return s
+    if max_token_len < 8:
+        max_token_len = 8
+    cont = "\n\t" + (" " * len(_bullet_tab_suffix(dd)))
+    token_re = re.compile(r"\S+")
+
+    def _split_token(tok: str) -> str:
+        if len(tok) <= max_token_len:
+            return tok
+        parts = [tok[i:i + max_token_len] for i in range(0, len(tok), max_token_len)]
+        return parts[0] + "".join(cont + p for p in parts[1:])
+
+    return token_re.sub(lambda m: _split_token(m.group(0)), s)
 
 # Template editor: button bank order — keep aligned with keys returned by `_format_context`.
 PREFIX_PLACEHOLDER_TOKEN_KEYS: tuple[str, ...] = (
@@ -198,10 +224,15 @@ def _dd_fmt_tag(dd: dict | None) -> str | None:
 
 
 def _finalize_family_social_block_annotated(
-    parts: list[str] | None, dds: list["dict | None"]
-) -> list[tuple[str, "str | None"]]:
+    parts: list[str] | None,
+    dds: list["dict | None"],
+    *,
+    bullet_wrap_by_part_idx: dict[int, int] | None = None,
+) -> list[tuple[str, "str | None", "int | None"]]:
     """
-    Mirror of _finalize_family_social_block but return (text_chunk, tag) pairs.
+    Mirror of _finalize_family_social_block but return (text_chunk, tag, bullet_wrap_px).
+    bullet_wrap_px (when set) requests Tk hanging continuation indent for wrapped lines.
+
     dds[i] is the dropdown dict for parts[i], or None for the prefix.
     Joining rules match _finalize_family_social_block exactly.
     """
@@ -210,27 +241,31 @@ def _finalize_family_social_block_annotated(
     has_bullet = any(
         p is not None and str(p).startswith("\n") for p in pl
     )
-    runs: list[tuple[str, "str | None"]] = []
+    runs: list[tuple[str, "str | None", "int | None"]] = []
     first = True
-    for p, d in zip(pl, dl):
+    bullet_flow_px: int | None = None
+    for pi, (p, d) in enumerate(zip(pl, dl)):
+        if bullet_wrap_by_part_idx is not None and pi in bullet_wrap_by_part_idx:
+            bullet_flow_px = int(bullet_wrap_by_part_idx[pi])
         if p is None:
             continue
         s = str(p)
         if not s.strip() and not s.startswith("\n"):
             continue
         tag = _dd_fmt_tag(d)
+        wrap_px = bullet_flow_px
         if s.startswith("\n"):
             cleaned = _rstrip_trailing_newlines_only(s)
-            runs.append((cleaned if first else cleaned, tag))
+            runs.append((cleaned if first else cleaned, tag, wrap_px))
         elif s.startswith(_ATTACH):
             cleaned = s[len(_ATTACH):]
-            runs.append((cleaned, tag))
+            runs.append((cleaned, tag, wrap_px))
         else:
             cleaned = s.strip()
             if first:
-                runs.append((cleaned, tag))
+                runs.append((cleaned, tag, wrap_px))
             else:
-                runs.append((" " + cleaned, tag))
+                runs.append((" " + cleaned, tag, wrap_px))
         first = False
 
     if not runs:
@@ -238,15 +273,15 @@ def _finalize_family_social_block_annotated(
 
     # Strip any accidental leading space from the very first run.
     if runs[0][0].startswith(" "):
-        runs[0] = (runs[0][0].lstrip(), runs[0][1])
+        runs[0] = (runs[0][0].lstrip(), runs[0][1], runs[0][2])
 
     if not has_bullet:
         full = "".join(r[0] for r in runs).strip()
         if full and full[-1] not in ".!?" and full[-1] != ",":
-            last_t, last_tag = runs[-1]
-            runs[-1] = (last_t + ".", last_tag)
+            last_t, last_tag, last_px = runs[-1]
+            runs[-1] = (last_t + ".", last_tag, last_px)
 
-    return [(t, tag) for t, tag in runs if t]
+    return [(t, tag, px) for t, tag, px in runs if t]
 
 
 def _join_with_oxford_and(items: list[str]) -> str:
@@ -370,6 +405,7 @@ class FamilySocialSectionCore(ttk.Frame):
         section: dict,
         persist_all_callback,
         token_feedback_var: tk.StringVar | None = None,
+        clear_assoc_on_primary_clear: bool = False,
     ):
         super().__init__(parent)
         self.on_change_callback = on_change_callback
@@ -381,11 +417,14 @@ class FamilySocialSectionCore(ttk.Frame):
         self._note_builder_meta: list[list[dict]] = []
         self._visit_skip_by_tid: dict[int, bool] = {}
         self._skip_checkbox_vars: dict[int, tk.BooleanVar] = {}
+        self._clear_assoc_on_primary_clear = bool(clear_assoc_on_primary_clear)
         if token_feedback_var is not None:
             self._token_copy_feedback_var = token_feedback_var
         else:
             self._token_copy_feedback_var = tk.StringVar(value="")
         self._clear_token_copy_msg_after_id = None
+        # Tk Text tag cache: indent px → tag name for wrapped bullet continuation (lmargin2).
+        self._bullet_wrap_tag_by_px: dict[int, str] = {}
 
         self._build_note_tab(self)
         self._mw_bound = False
@@ -818,31 +857,92 @@ class FamilySocialSectionCore(ttk.Frame):
             return None
         return None
 
-    def _run_with_note_builder_scroll_preserved(self, fn) -> None:
-        """Run `fn` while keeping the sentence-builder canvas vertical scroll fraction stable.
+    @staticmethod
+    def _capture_canvas_top_pixel(canvas) -> float | None:
+        """Return the absolute pixel offset of the top of the canvas viewport,
+        or None if the canvas is not measurable. Using absolute pixels (not the
+        yview fraction) is required because rebuilding assoc columns changes
+        the canvas's scrollregion height — the same fraction would land on a
+        different absolute pixel after the rebuild.
+        """
+        if canvas is None:
+            return None
+        try:
+            if not canvas.winfo_exists():
+                return None
+            bbox = canvas.bbox("all")
+            if not bbox:
+                return None
+            # canvasy(0) is the true document-space y coordinate at the top edge
+            # of the viewport. This is more stable than deriving from yview()
+            # fractions when nested canvases have non-zero scrollregion origins.
+            return float(canvas.canvasy(0))
+        except Exception:
+            return None
 
-        Scroll restoration is deferred via after_idle so Tk can process the <Configure>
-        event that updates the scrollregion *before* yview_moveto is called — prevents
-        the visible jump when assoc columns are destroyed and recreated.
+    @staticmethod
+    def _restore_canvas_top_pixel(canvas, top_pixel: float | None) -> None:
+        if canvas is None or top_pixel is None:
+            return
+        try:
+            if not canvas.winfo_exists():
+                return
+            bbox = canvas.bbox("all")
+            if not bbox:
+                return
+            y0 = float(bbox[1])
+            total_h = float(bbox[3] - bbox[1])
+            if total_h <= 0:
+                return
+            # yview fractions are relative to the scrollregion origin, not
+            # absolute document coordinates; account for non-zero bbox top.
+            new_frac = max(0.0, min(1.0, (top_pixel - y0) / total_h))
+            canvas.yview_moveto(new_frac)
+        except Exception:
+            pass
+
+    def _run_with_note_builder_scroll_preserved(self, fn) -> None:
+        """Run `fn` while keeping BOTH the inner sentence-builder canvas AND the
+        outer note-tab canvas viewport stable in *absolute pixels*.
+
+        Restoration is deferred via after_idle so Tk can process the <Configure>
+        event that updates each scrollregion *before* yview_moveto is called.
+
+        Why pixels and not fractions: when assoc columns are destroyed and
+        recreated, each canvas's bbox("all") (and therefore its scrollregion
+        height) changes. yview()[0] is a fraction of that height, so restoring
+        the same fraction shifts the visible content. We capture the absolute
+        top-pixel of the viewport, then re-derive the new fraction against the
+        new scrollregion in the after_idle callback.
+
+        The outer note-tab canvas matters most when this page is embedded in
+        another area (e.g. Subjectives on Canvas) where header content above
+        the page forces the outer canvas to actually be scrolled.
         """
         nb = getattr(self, "note_builder_canvas", None)
-        top: float | None = None
-        if nb is not None:
-            try:
-                top = float(nb.yview()[0])
-            except Exception:
-                top = None
+        nt = getattr(self, "note_tab_canvas", None)
+
+        nb_pix = self._capture_canvas_top_pixel(nb)
+        nt_pix = self._capture_canvas_top_pixel(nt)
+
         fn()
-        if nb is not None and top is not None:
-            _saved_top = top
+
+        if nb_pix is not None or nt_pix is not None:
+            _nb = nb
+            _nt = nt
+            _nb_saved = nb_pix
+            _nt_saved = nt_pix
 
             def _restore() -> None:
-                try:
-                    nb.yview_moveto(_saved_top)
-                except Exception:
-                    pass
+                self._restore_canvas_top_pixel(_nb, _nb_saved)
+                self._restore_canvas_top_pixel(_nt, _nt_saved)
 
+            # Two deferred passes: the first lets Tk recompute scrollregion after
+            # the rebuild; the second covers a follow-up <Configure> burst that
+            # can fire one tick later when nested LabelFrames re-layout. Without
+            # the second pass, the outer canvas can still drift on slow systems.
             self.after_idle(_restore)
+            self.after_idle(lambda: self.after(0, _restore))
 
     def _wire_mousewheel(self) -> None:
         if self._mw_bound:
@@ -916,8 +1016,88 @@ class FamilySocialSectionCore(ttk.Frame):
         if notify:
             self.on_change_callback()
 
+    def _tab_width_px_approx(self) -> int:
+        try:
+            fn = tkfont.Font(font=self.text.cget("font"))
+            sw = int(fn.measure(" "))
+            tw = int(fn.measure("\t"))
+            fallback = max(sw * 8, 36)
+            return max(tw, fallback) if tw > 0 else fallback
+        except Exception:
+            return 48
+
+    def _measure_note_font_px(self, text: str, *, bold: bool = False, italic: bool = False) -> int:
+        if not text:
+            return 0
+        try:
+            fn = tkfont.Font(font=self.text.cget("font"))
+            if bold:
+                try:
+                    fn.configure(weight="bold")
+                except tk.TclError:
+                    pass
+            if italic:
+                try:
+                    fn.configure(slant="italic")
+                except tk.TclError:
+                    pass
+            return int(fn.measure(text))
+        except Exception:
+            return int(len(text) * 6)
+
+    def _assoc_bullet_wrap_indent_px(self, dd: dict, hdr: str, has_detail: bool) -> int:
+        """Pixel offset where associated detail body starts (continuation lines align here)."""
+        suf = _bullet_tab_suffix(dd)
+        tab = self._tab_width_px_approx()
+        fmt = dd.get("text_format") or {}
+        hdr_m = self._measure_note_font_px(
+            hdr, bold=bool(fmt.get("bold")), italic=bool(fmt.get("italic"))
+        )
+        sep_m = self._measure_note_font_px(": ", bold=False, italic=False) if has_detail else 0
+        suf_m = self._measure_note_font_px(suf, bold=False, italic=False)
+        bold_fudge = max(14, hdr_m // 6)
+        return tab + suf_m + hdr_m + sep_m + bold_fudge
+
+    def _simple_tab_bullet_wrap_indent_px(self, dd: dict) -> int:
+        """Multi / single bullet lines: align wraps under text after tab + bullet glyph."""
+        suf = _bullet_tab_suffix(dd)
+        suf_m = self._measure_note_font_px(suf, bold=False, italic=False)
+        return self._tab_width_px_approx() + suf_m + max(10, suf_m // 4)
+
+    def _bullet_wrap_tag_name(self, px: int) -> str:
+        if px <= 0:
+            return ""
+        tnm = self._bullet_wrap_tag_by_px.get(px)
+        if tnm is not None:
+            return tnm
+        tnm = f"bull_wrap_{len(self._bullet_wrap_tag_by_px)}_{px}"
+        try:
+            self.text.tag_configure(tnm, lmargin1=0, lmargin2=int(px))
+        except tk.TclError:
+            pass
+        self._bullet_wrap_tag_by_px[px] = tnm
+        return tnm
+
+    def _insert_builder_runs(self, runs: list[tuple[str, str | None, int | None]]) -> None:
+        for chunk, tag, wrap_px in runs:
+            tnames = []
+            if wrap_px is not None and wrap_px > 0:
+                wtag = self._bullet_wrap_tag_name(int(wrap_px))
+                if wtag:
+                    tnames.append(wtag)
+            if tag:
+                tnames.append(tag)
+            if tnames:
+                self.text.insert(tk.END, chunk, tuple(tnames))
+            else:
+                self.text.insert(tk.END, chunk)
+
     def _compose_parts_for_template(
-        self, i: int, tmpl: dict, _dd_out: "list[dict | None] | None" = None
+        self,
+        i: int,
+        tmpl: dict,
+        _dd_out: "list[dict | None] | None" = None,
+        _bullet_px_by_part_idx: dict[int, int] | None = None,
     ) -> list[str]:
         """
         Build prefix + non-Omit dropdown fragments. If this template has at least one
@@ -929,6 +1109,8 @@ class FamilySocialSectionCore(ttk.Frame):
         _dropdown_dds: list[dict | None] = []
         rp = (self._resolve_vars(tmpl.get("prefix") or "") or "").strip()
         dropdown_parts: list[str] = []
+        # Before merging with rp, dropdown index -> continuation-indent px for that bullet paragraph.
+        bullet_px_by_dropdown_idx: dict[int, int] = {}
         dds = tmpl.get("dropdowns") or []
         meta_row = self._note_builder_meta[i] if i < len(self._note_builder_meta) else []
         if i < len(self.note_combo_vars):
@@ -965,15 +1147,19 @@ class FamilySocialSectionCore(ttk.Frame):
                         hdr = self._resolve_vars(str(pitems[pix])).strip()
                         if not hdr:
                             continue
+                        hdr = _wrap_long_bullet_tokens(dd, hdr)
                         chosen_assoc = sorted(abp.get(pix, set()))
                         detail_parts = [
-                            self._resolve_vars(str(alist[ai])).strip()
+                            _wrap_long_bullet_tokens(dd, self._resolve_vars(str(alist[ai])).strip())
                             for ai in chosen_assoc
                             if 0 <= ai < len(alist) and self._resolve_vars(str(alist[ai])).strip()
                         ]
                         detail = _join_with_oxford_and(detail_parts)
                         # Line prefix (structural, no formatting)
                         line_pfx = _bullet_line_prefix(dd, first_bullet)
+                        if _bullet_px_by_part_idx is not None:
+                            bi = len(dropdown_parts)
+                            bullet_px_by_dropdown_idx[bi] = self._assoc_bullet_wrap_indent_px(dd, hdr, bool(detail))
                         dropdown_parts.append(line_pfx)
                         _dropdown_dds.append(None)
                         # Header text (primary formatting)
@@ -1005,12 +1191,19 @@ class FamilySocialSectionCore(ttk.Frame):
                         except Exception:
                             chosen_idxs = None
                     if chosen_idxs:
-                        chosen = [self._resolve_vars(str(its[k])).strip() for k in chosen_idxs if 0 <= k < len(its)]
+                        chosen = [
+                            _wrap_long_bullet_tokens(dd, self._resolve_vars(str(its[k])).strip())
+                            for k in chosen_idxs
+                            if 0 <= k < len(its)
+                        ]
                         chosen = [x for x in chosen if x]
                         if chosen:
                             bp0 = _bullet_line_prefix(dd, True)
                             bpn = _bullet_line_prefix(dd, False)
                             block = bp0 + chosen[0] + "".join(bpn + c for c in chosen[1:])
+                            if _bullet_px_by_part_idx is not None:
+                                bi = len(dropdown_parts)
+                                bullet_px_by_dropdown_idx[bi] = self._simple_tab_bullet_wrap_indent_px(dd)
                             dropdown_parts.append(block)
                             _dropdown_dds.append(dd)
                             appended = True
@@ -1028,7 +1221,10 @@ class FamilySocialSectionCore(ttk.Frame):
                     continue
 
                 if not is_multi and bool(dd.get("multi_bullets")):
-                    block = _bullet_line_prefix(dd, True) + val.strip()
+                    block = _bullet_line_prefix(dd, True) + _wrap_long_bullet_tokens(dd, val.strip())
+                    if _bullet_px_by_part_idx is not None:
+                        bi = len(dropdown_parts)
+                        bullet_px_by_dropdown_idx[bi] = self._simple_tab_bullet_wrap_indent_px(dd)
                     dropdown_parts.append(block)
                     _dropdown_dds.append(dd)
                     continue
@@ -1045,9 +1241,14 @@ class FamilySocialSectionCore(ttk.Frame):
 
         parts: list[str] = []
         parts_dds: list[dict | None] = []
+        rp_offset = 0
         if rp_for_parts:
             parts.append(rp_for_parts)
             parts_dds.append(None)
+            rp_offset = 1
+        for bi, px in bullet_px_by_dropdown_idx.items():
+            if _bullet_px_by_part_idx is not None:
+                _bullet_px_by_part_idx[rp_offset + bi] = px
         parts.extend(dropdown_parts)
         parts_dds.extend(_dropdown_dds)
 
@@ -1071,13 +1272,13 @@ class FamilySocialSectionCore(ttk.Frame):
                 blocks.append(sent)
         return "\n\n".join(blocks).strip()
 
-    def _compose_builder_annotated_runs(self) -> list[tuple[str, "str | None"]]:
+    def _compose_builder_annotated_runs(self) -> list[tuple[str, "str | None", "int | None"]]:
         """
-        Produce (text_chunk, tag_name_or_None) pairs for the full composed output.
+        Produce (text_chunk, tag_name_or_None, bullet_wrap_px_or_None) tuples for the full composed output.
         The plain text of all runs concatenated equals _compose_builder_text().
         Tags are derived from each dropdown's text_format flags.
         """
-        all_runs: list[tuple[str, str | None]] = []
+        all_runs: list[tuple[str, str | None, int | None]] = []
         first_block = True
         for i, tmpl in enumerate(self.templates):
             if i >= len(self.note_combo_vars):
@@ -1086,31 +1287,41 @@ class FamilySocialSectionCore(ttk.Frame):
             if self._visit_skip_by_tid.get(tid, False):
                 continue
             dd_out: list[dict | None] = []
-            parts = self._compose_parts_for_template(i, tmpl, _dd_out=dd_out)
+            bullet_px: dict[int, int] = {}
+            parts = self._compose_parts_for_template(
+                i,
+                tmpl,
+                _dd_out=dd_out,
+                _bullet_px_by_part_idx=bullet_px,
+            )
             if not parts:
                 continue
             while len(dd_out) < len(parts):
                 dd_out.append(None)
-            runs = _finalize_family_social_block_annotated(parts, dd_out[: len(parts)])
+            runs = _finalize_family_social_block_annotated(
+                parts,
+                dd_out[: len(parts)],
+                bullet_wrap_by_part_idx=bullet_px or None,
+            )
             if not runs:
                 continue
             if not first_block:
-                all_runs.append(("\n\n", None))
+                all_runs.append(("\n\n", None, None))
             all_runs.extend(runs)
             first_block = False
         return all_runs
 
-    def get_live_preview_annotated_runs(self) -> list[tuple[str, "str | None"]]:
+    def get_live_preview_annotated_runs(self) -> list[tuple[str, "str | None", "int | None"]]:
         """
-        Return (text_chunk, tag) pairs suitable for the Live Preview text widget.
+        Return (text_chunk, tag, bullet_wrap_px) tuples suitable for the Live Preview text widget.
         Uses builder-annotated runs when the current note text matches the builder
         output; falls back to a single plain-text run when the user has manually edited.
         """
         runs = self._compose_builder_annotated_runs()
-        plain = "".join(t for t, _ in runs).strip()
+        plain = "".join(t for t, _, _ in runs).strip()
         if plain != self.text.get("1.0", tk.END).strip():
             val = self.text.get("1.0", tk.END).strip()
-            return [(val, None)] if val else []
+            return [(val, None, None)] if val else []
         return runs
 
     def get_rich_value(self) -> str:
@@ -1121,11 +1332,11 @@ class FamilySocialSectionCore(ttk.Frame):
         """
         from xml.sax.saxutils import escape as _xe
         runs = self._compose_builder_annotated_runs()
-        plain = "".join(t for t, _ in runs).strip()
+        plain = "".join(t for t, _, _ in runs).strip()
         if plain != self.text.get("1.0", tk.END).strip():
             return ""
         parts: list[str] = []
-        for chunk, tag in runs:
+        for chunk, tag, _px in runs:
             safe = _xe(chunk).replace("\n\n", "<br/><br/>").replace("\n", "<br/>")
             if tag:
                 b = "B" in tag
@@ -1435,16 +1646,24 @@ class FamilySocialSectionCore(ttk.Frame):
     def _apply_builder_to_note(self) -> None:
         runs = self._compose_builder_annotated_runs()
         self.text.delete("1.0", tk.END)
-        for chunk, tag in runs:
-            if tag:
-                self.text.insert(tk.END, chunk, (tag,))
-            else:
-                self.text.insert(tk.END, chunk)
+        self._insert_builder_runs(runs)
         self._update_age_hint()
         self.on_change_callback()
 
     def _persist_assoc_column_widgets_into_meta(self, meta: dict) -> None:
-        """Copy each associate listbox selection set into assoc_by_primary before destroying widgets."""
+        """Sync each associate listbox selection set into assoc_by_primary.
+
+        Stores the SAME set object (not a copy) so that subsequent listbox
+        clicks — which mutate the widget's `selected_set` in place — remain
+        visible through `assoc_by_primary[pidx]`.
+
+        Earlier this copied with `set(ss)`, which detached the widget's set
+        from `assoc_by_primary` after every autosave (because autosave calls
+        `get_builder_state()` → this method). After detachment, listbox
+        clicks updated the orphaned widget set while composition kept reading
+        the stale `assoc_by_primary` copy, so newly chosen detail items never
+        appeared in the note / live preview / PDF.
+        """
         wmap = meta.get("assoc_column_widgets") or {}
         dst = meta.setdefault("assoc_by_primary", {})
         if not isinstance(dst, dict):
@@ -1456,7 +1675,7 @@ class FamilySocialSectionCore(ttk.Frame):
                 continue
             ss = wdg.get("selected_set")
             if isinstance(ss, set):
-                dst[k] = set(ss)
+                dst[k] = ss
 
     def _render_associated_multi_row(self, card: ttk.Frame, dd: dict) -> tuple[tk.StringVar, dict]:
         """
@@ -1522,14 +1741,23 @@ class FamilySocialSectionCore(ttk.Frame):
             self._persist_assoc_column_widgets_into_meta(meta)
 
         def _refresh_primary_filter() -> None:
-            idxs = self._filter_items_by_prefix(primary_items, search_var.get())
-            visible_pri[:] = idxs
-            plb.delete(0, tk.END)
-            for src_i in idxs:
-                plb.insert(tk.END, primary_items[src_i])
-            for vis_i, src_i in enumerate(idxs):
-                if src_i in selected_set_primary:
-                    plb.selection_set(vis_i)
+            # Trace can outlive `plb` when the note-builder is re-rendered.
+            try:
+                if not plb.winfo_exists():
+                    return
+            except tk.TclError:
+                return
+            try:
+                idxs = self._filter_items_by_prefix(primary_items, search_var.get())
+                visible_pri[:] = idxs
+                plb.delete(0, tk.END)
+                for src_i in idxs:
+                    plb.insert(tk.END, primary_items[src_i])
+                for vis_i, src_i in enumerate(idxs):
+                    if src_i in selected_set_primary:
+                        plb.selection_set(vis_i)
+            except tk.TclError:
+                return
 
         meta["_repaint_primary"] = _refresh_primary_filter
 
@@ -1617,8 +1845,10 @@ class FamilySocialSectionCore(ttk.Frame):
                     meta["highlight_primary_idx"] = added_list[-1]
             order[:] = [p for p in order if p in selected_set_primary]
             meta["dummy_var"].set("")
-            self._run_with_note_builder_scroll_preserved(_rebuild_assoc_columns)
-            self._on_builder_selection_changed()
+            def _rebuild_and_notify() -> None:
+                _rebuild_assoc_columns()
+                self._on_builder_selection_changed()
+            self._run_with_note_builder_scroll_preserved(_rebuild_and_notify)
 
         def _rebuild_assoc_columns() -> None:
             _flush_assoc()
@@ -1668,14 +1898,24 @@ class FamilySocialSectionCore(ttk.Frame):
                     _sv: tk.StringVar = sub_search,
                     _wk: set[int] = work_set,
                 ) -> None:
-                    q_idxs = self._filter_items_by_prefix(_opts, _sv.get())
-                    _vt[:] = q_idxs
-                    _alb.delete(0, tk.END)
-                    for si in q_idxs:
-                        _alb.insert(tk.END, _opts[si])
-                    for vi2, sr in enumerate(q_idxs):
-                        if sr in _wk:
-                            _alb.selection_set(vi2)
+                    # sub_search trace can outlive _alb when assoc columns are
+                    # rebuilt (e.g. on a primary selection change).
+                    try:
+                        if not _alb.winfo_exists():
+                            return
+                    except tk.TclError:
+                        return
+                    try:
+                        q_idxs = self._filter_items_by_prefix(_opts, _sv.get())
+                        _vt[:] = q_idxs
+                        _alb.delete(0, tk.END)
+                        for si in q_idxs:
+                            _alb.insert(tk.END, _opts[si])
+                        for vi2, sr in enumerate(q_idxs):
+                            if sr in _wk:
+                                _alb.selection_set(vi2)
+                    except tk.TclError:
+                        return
 
                 sub_search.trace_add("write", lambda *_b, __r=_ref_ast: __r())
 
@@ -1852,10 +2092,21 @@ class FamilySocialSectionCore(ttk.Frame):
             meta["primary_order"].clear()
             meta["assoc_by_primary"].clear()
             meta["highlight_primary_idx"] = None
-            _flush_assoc()
+            if self._clear_assoc_on_primary_clear:
+                # Subjectives-on-Canvas behavior: this action should fully reset paired
+                # detail selections too (equivalent to pressing "Clear column" on each).
+                for wdg in (meta.get("assoc_column_widgets") or {}).values():
+                    ss = wdg.get("selected_set")
+                    if isinstance(ss, set):
+                        ss.clear()
+                meta["assoc_column_widgets"].clear()
+            else:
+                _flush_assoc()
             var.set("")
-            self._run_with_note_builder_scroll_preserved(_rebuild_assoc_columns)
-            self._on_builder_selection_changed()
+            def _rebuild_and_notify() -> None:
+                _rebuild_assoc_columns()
+                self._on_builder_selection_changed()
+            self._run_with_note_builder_scroll_preserved(_rebuild_and_notify)
 
         ttk.Button(top_fr, text="Clear primary selections", command=_clear_primary).pack(anchor="w", pady=(2, 0))
         _refresh_primary_filter()
@@ -2316,12 +2567,23 @@ class FamilySocialSectionCore(ttk.Frame):
         new_var = tk.StringVar()
 
         def _refresh_filter() -> None:
-            q = search_var.get()
-            new_idxs = self._filter_items_by_prefix(items, q)
-            visible_to_source[:] = new_idxs
-            lb.delete(0, tk.END)
-            for src_idx in new_idxs:
-                lb.insert(tk.END, items[src_idx])
+            # The trace below outlives `lb` whenever this canvas-editor section is
+            # re-rendered (e.g. _persist_all -> _render_canvas_editor). A late
+            # write to `search_var` from the destroyed UI must not raise.
+            try:
+                if not lb.winfo_exists():
+                    return
+            except tk.TclError:
+                return
+            try:
+                q = search_var.get()
+                new_idxs = self._filter_items_by_prefix(items, q)
+                visible_to_source[:] = new_idxs
+                lb.delete(0, tk.END)
+                for src_idx in new_idxs:
+                    lb.insert(tk.END, items[src_idx])
+            except tk.TclError:
+                return
 
         search_var.trace_add("write", lambda *_a: _refresh_filter())
 
@@ -2840,7 +3102,7 @@ class FamilySocialSectionCore(ttk.Frame):
             return
         if not runs:
             return
-        plain = "".join(t for t, _ in runs)
+        plain = "".join(t for t, _, _ in runs)
         try:
             current = self.text.get("1.0", tk.END)
         except tk.TclError:
@@ -2849,11 +3111,7 @@ class FamilySocialSectionCore(ttk.Frame):
             return  # user manually edited the textbox; don't overwrite
         try:
             self.text.delete("1.0", tk.END)
-            for chunk, tag in runs:
-                if tag:
-                    self.text.insert(tk.END, chunk, (tag,))
-                else:
-                    self.text.insert(tk.END, chunk)
+            self._insert_builder_runs(runs)
         except tk.TclError:
             pass
 
