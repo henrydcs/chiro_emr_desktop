@@ -1677,6 +1677,121 @@ class FamilySocialSectionCore(ttk.Frame):
             if isinstance(ss, set):
                 dst[k] = ss
 
+    # --- "Scroll to top" hint button (flashes on hover when scroll != 0) -------
+    # Workaround for the layout-shift bug that nudges the canvas viewport when a
+    # primary listbox is clicked while the canvas is scrolled below the top.
+    # Hover behavior is FLASH-ONLY — never auto-scrolls — so it cannot trigger
+    # the cascading <Enter> feedback loop that froze Tk in an earlier attempt.
+    _SCROLL_BTN_FLASH_INTERVAL_MS = 380
+    _SCROLL_BTN_COLOR_A = "#FFC107"  # amber
+    _SCROLL_BTN_COLOR_B = "#FFE082"  # light amber
+    _SCROLL_BTN_AT_TOP_EPSILON = 0.001
+
+    def _find_enclosing_scroll_canvas(self, w: tk.Misc) -> tk.Canvas | None:
+        """Walk up the master chain until we hit one of this page's known scrollable canvases.
+
+        Returns the inner builder canvas if encountered first (it's the one that
+        actually shifts when assoc columns rebuild). Falls back to the outer
+        note-tab canvas if only that one is in the chain.
+        """
+        known: list[tk.Misc] = []
+        nb = getattr(self, "note_builder_canvas", None)
+        nt = getattr(self, "note_tab_canvas", None)
+        if nb is not None:
+            known.append(nb)
+        if nt is not None:
+            known.append(nt)
+        if not known:
+            return None
+        cur: tk.Misc | None = w
+        # Bound the walk to avoid runaway loops on malformed widget trees.
+        for _ in range(64):
+            if cur is None:
+                return None
+            if cur in known:
+                return cur  # type: ignore[return-value]
+            cur = getattr(cur, "master", None)
+        return None
+
+    def _scroll_btn_canvas_at_top(self, canvas: tk.Canvas | None) -> bool:
+        if canvas is None:
+            return True
+        try:
+            if not canvas.winfo_exists():
+                return True
+            return float(canvas.yview()[0]) <= self._SCROLL_BTN_AT_TOP_EPSILON
+        except Exception:
+            return True
+
+    def _scroll_btn_stop_flash(self, btn: tk.Button) -> None:
+        try:
+            aid = getattr(btn, "_flash_after_id", None)
+        except Exception:
+            aid = None
+        if aid is not None:
+            try:
+                btn.after_cancel(aid)
+            except Exception:
+                pass
+            try:
+                btn._flash_after_id = None  # type: ignore[attr-defined]
+            except Exception:
+                pass
+        try:
+            if btn.winfo_exists():
+                btn.configure(bg=getattr(btn, "_default_bg", "SystemButtonFace"))
+        except Exception:
+            pass
+
+    def _scroll_btn_flash_step(
+        self,
+        btn: tk.Button,
+        canvas: tk.Canvas | None,
+        on: bool,
+    ) -> None:
+        try:
+            if not btn.winfo_exists():
+                return
+        except Exception:
+            return
+        # Stop flashing the moment the canvas reaches the top.
+        if self._scroll_btn_canvas_at_top(canvas):
+            self._scroll_btn_stop_flash(btn)
+            return
+        try:
+            btn.configure(
+                bg=(self._SCROLL_BTN_COLOR_A if on else self._SCROLL_BTN_COLOR_B)
+            )
+        except Exception:
+            return
+        try:
+            aid = btn.after(
+                self._SCROLL_BTN_FLASH_INTERVAL_MS,
+                lambda: self._scroll_btn_flash_step(btn, canvas, not on),
+            )
+            btn._flash_after_id = aid  # type: ignore[attr-defined]
+        except Exception:
+            pass
+
+    def _scroll_btn_start_flash(self, btn: tk.Button, canvas: tk.Canvas | None) -> None:
+        # Already flashing -> don't stack another schedule.
+        if getattr(btn, "_flash_after_id", None) is not None:
+            return
+        # Only flash when there's actually somewhere to scroll up to.
+        if self._scroll_btn_canvas_at_top(canvas):
+            return
+        self._scroll_btn_flash_step(btn, canvas, True)
+
+    def _scroll_btn_clicked(self, btn: tk.Button, canvas: tk.Canvas | None) -> None:
+        self._scroll_btn_stop_flash(btn)
+        if canvas is None:
+            return
+        try:
+            if canvas.winfo_exists():
+                canvas.yview_moveto(0.0)
+        except Exception:
+            pass
+
     def _render_associated_multi_row(self, card: ttk.Frame, dd: dict) -> tuple[tk.StringVar, dict]:
         """
         Build primary multi-select plus one illuminated paired list box per ordered primary pick.
@@ -1714,6 +1829,11 @@ class FamilySocialSectionCore(ttk.Frame):
             font=("Segoe UI", 8),
             foreground="gray",
         ).pack(anchor="w")
+
+        # Resolve the enclosing scroll canvas now so we don't walk the widget
+        # tree on every hover tick. Used below by the "Scroll to top" hint
+        # button (created next to "Clear primary selections" further down).
+        target_canvas = self._find_enclosing_scroll_canvas(top_fr)
 
         search_var = tk.StringVar(value="")
         selected_set_primary: set[int] = set()
@@ -2108,7 +2228,56 @@ class FamilySocialSectionCore(ttk.Frame):
                 self._on_builder_selection_changed()
             self._run_with_note_builder_scroll_preserved(_rebuild_and_notify)
 
-        ttk.Button(top_fr, text="Clear primary selections", command=_clear_primary).pack(anchor="w", pady=(2, 0))
+        # Bottom button row: "Clear primary selections" + flashing "Scroll to top" hint.
+        # The hint button is ALWAYS packed (no layout change on hover) and flashes
+        # only while the cursor is over `top_fr` AND the enclosing scroll canvas
+        # is below the top. Hover handlers never auto-scroll, so they cannot
+        # trigger the cascading <Enter> feedback loop that froze Tk in an
+        # earlier attempt — only an explicit click moves the canvas.
+        btn_row = ttk.Frame(top_fr)
+        btn_row.pack(anchor="w", pady=(2, 0))
+        ttk.Button(btn_row, text="Clear primary selections", command=_clear_primary).pack(side="left")
+
+        if target_canvas is not None:
+            scroll_btn = tk.Button(
+                btn_row,
+                text="\u2934 Scroll to top",
+                font=("Segoe UI", 8, "bold"),
+                padx=6,
+                pady=1,
+                bd=1,
+                relief="solid",
+                cursor="hand2",
+            )
+            try:
+                scroll_btn._default_bg = scroll_btn.cget("bg")  # type: ignore[attr-defined]
+            except Exception:
+                scroll_btn._default_bg = "SystemButtonFace"  # type: ignore[attr-defined]
+            scroll_btn._flash_after_id = None  # type: ignore[attr-defined]
+            scroll_btn.configure(
+                command=lambda b=scroll_btn, c=target_canvas: self._scroll_btn_clicked(b, c)
+            )
+            scroll_btn.pack(side="left", padx=(8, 0))
+
+            # Bind on `top_fr` (not the button) so hovering anywhere over the
+            # primary section — title, search box, listbox, clear button, etc.
+            # — triggers the hint, not just the button itself.
+            #
+            # Tk fires <Leave> on a parent with detail=NotifyInferior when the
+            # cursor moves from the parent's own area INTO one of its children
+            # (still inside the parent's bounds). We ignore those so the flash
+            # doesn't stutter on/off as the cursor moves across sub-widgets.
+            def _on_top_fr_enter(_e, b=scroll_btn, c=target_canvas) -> None:
+                self._scroll_btn_start_flash(b, c)
+
+            def _on_top_fr_leave(e, b=scroll_btn) -> None:
+                detail = getattr(e, "detail", None)
+                if isinstance(detail, str) and "Inferior" in detail:
+                    return
+                self._scroll_btn_stop_flash(b)
+
+            top_fr.bind("<Enter>", _on_top_fr_enter, add="+")
+            top_fr.bind("<Leave>", _on_top_fr_leave, add="+")
         _refresh_primary_filter()
         assoc_host.pack(fill="x")
         meta["_rebuilder"] = _rebuild_assoc_columns
