@@ -3389,11 +3389,6 @@ def _fs_pdf_flowables_from_note_plain(text: str, base_style: object, styles: obj
             pending_bullet_hst = _fs_pdf_bullet_hang_style(base_style, hang, styles, tab_pt)
             pending_bullet_lines = [_pdf_preserve_whitespace(xml_escape(display)).replace("\n", "<br/>")]
             prev_was_tab_bullet = True
-        elif prev_was_tab_bullet and pending_bullet_lines:
-            # Continuation line — user typed text on a new line directly after
-            # a bullet (no blank separator).  Merge into the same Paragraph so
-            # it inherits leftIndent, matching the Live Preview's lmargin2 indent.
-            pending_bullet_lines.append(_pdf_preserve_whitespace(xml_escape(line)))
         else:
             flush_pending_bullet()
             buf.append(line)
@@ -3510,11 +3505,6 @@ def _fs_pdf_flowables_from_note_rich(
             pending_bullet_hst = _fs_pdf_bullet_hang_style(base_style, hang, styles, tab_pt)
             pending_bullet_lines = [_pdf_preserve_whitespace_in_rich(display_rich)]
             prev_was_tab_bullet = True
-        elif prev_was_tab_bullet and pending_bullet_lines:
-            # Continuation line — user typed text on a new line directly after
-            # a bullet (no blank separator).  Merge into the same Paragraph so
-            # it inherits leftIndent, matching the Live Preview's lmargin2 indent.
-            pending_bullet_lines.append(_pdf_preserve_whitespace_in_rich(rich_line))
         else:
             flush_pending_bullet()
             buf.append(rich_line)
