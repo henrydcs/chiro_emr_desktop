@@ -700,9 +700,43 @@ class FamilySocialSectionCore(ttk.Frame):
         ttk.Label(note_inner, text="Note text (editable — saved to chart, Live Preview, and PDF):").pack(
             anchor="w", padx=10, pady=(4, 2)
         )
+
+        # --- Formatting toolbar (Bold / Italic / Underline) ---
+        fmt_bar = tk.Frame(note_inner, bd=0)
+        fmt_bar.pack(anchor="w", padx=10, pady=(0, 2))
+        _tf_btn = ("Segoe UI", 9)
+        tk.Label(fmt_bar, text="Format selection:", font=_tf_btn).pack(side="left", padx=(0, 6))
+        self._fmt_bold_btn = tk.Button(
+            fmt_bar, text="B", font=("Segoe UI", 9, "bold"),
+            width=2, padx=3, pady=1, relief="raised", cursor="hand2",
+            command=lambda: self._toggle_format("B"),
+        )
+        self._fmt_bold_btn.pack(side="left", padx=(0, 2))
+        self._fmt_italic_btn = tk.Button(
+            fmt_bar, text="I", font=("Segoe UI", 9, "italic"),
+            width=2, padx=3, pady=1, relief="raised", cursor="hand2",
+            command=lambda: self._toggle_format("I"),
+        )
+        self._fmt_italic_btn.pack(side="left", padx=(0, 2))
+        self._fmt_underline_btn = tk.Button(
+            fmt_bar, text="U", font=("Segoe UI", 9, "underline"),
+            width=2, padx=3, pady=1, relief="raised", cursor="hand2",
+            command=lambda: self._toggle_format("U"),
+        )
+        self._fmt_underline_btn.pack(side="left", padx=(0, 6))
+        tk.Label(
+            fmt_bar,
+            text="(select text first, then click B / I / U to toggle formatting)",
+            font=("Segoe UI", 8), foreground="#666666",
+        ).pack(side="left")
+
         self.text = tk.Text(note_inner, width=110, height=12, wrap="word")
         self.text.pack(fill="x", expand=False, padx=10, pady=(0, 8))
         self.text.bind("<KeyRelease>", lambda e: self._on_note_text_changed())
+        # Save selection when focus leaves the text widget so the format buttons
+        # can still access it (clicking a button shifts focus away from the widget).
+        self.text.bind("<FocusOut>", self._on_text_focus_out)
+        self._fmt_saved_sel: tuple[str | None, str | None] = (None, None)
         # Formatting tags used by _apply_builder_to_note when dropdowns have text_format flags.
         _tf = ("Segoe UI", 10)
         self.text.tag_configure("_FMT_B",   font=(*_tf, "bold"))
@@ -957,6 +991,135 @@ class FamilySocialSectionCore(ttk.Frame):
             pass
 
     def _on_note_text_changed(self) -> None:
+        self.on_change_callback()
+
+    def _on_text_focus_out(self, event=None) -> None:
+        """Save the current text-widget selection so the B/I/U buttons can
+        still access it after they steal keyboard focus."""
+        try:
+            self._fmt_saved_sel = (
+                self.text.index("sel.first"),
+                self.text.index("sel.last"),
+            )
+        except tk.TclError:
+            self._fmt_saved_sel = (None, None)
+
+    def _toggle_format(self, attr: str) -> None:
+        """Toggle bold ('B'), italic ('I'), or underline ('U') on the current
+        text-widget selection.
+
+        Works as a smart toggle: if every character in the selection already
+        carries the attribute, it is removed; otherwise it is added.  Other
+        formatting attributes on the same characters are preserved.  After
+        applying, the selection is restored and the Live-Preview / PDF are
+        updated via on_change_callback().
+        """
+        import bisect
+
+        # ── 1. Resolve the selection ──────────────────────────────────────
+        try:
+            sel_first = self.text.index("sel.first")
+            sel_last  = self.text.index("sel.last")
+        except tk.TclError:
+            # Focus shifted to button — use the indices saved on FocusOut.
+            sf, sl = getattr(self, "_fmt_saved_sel", (None, None))
+            if not sf:
+                return
+            sel_first, sel_last = sf, sl
+
+        if self.text.compare(sel_first, ">=", sel_last):
+            return
+
+        # ── 2. Build a linear-offset helper for this widget content ───────
+        full_text = self.text.get("1.0", "end-1c")
+        n = len(full_text)
+        lines = full_text.split("\n")
+        line_starts: list[int] = [0]
+        for ln in lines[:-1]:
+            line_starts.append(line_starts[-1] + len(ln) + 1)
+
+        def _to_off(idx: str) -> int:
+            try:
+                ln_s, col_s = idx.split(".", 1)
+                ln = int(ln_s) - 1
+                col = int(col_s)
+                if ln < 0:
+                    return 0
+                if ln >= len(line_starts):
+                    return n
+                return min(line_starts[ln] + col, n)
+            except Exception:
+                return 0
+
+        def _to_idx(off: int) -> str:
+            ln = bisect.bisect_right(line_starts, off) - 1
+            if ln < 0:
+                ln = 0
+            return f"{ln + 1}.{off - line_starts[ln]}"
+
+        s = _to_off(sel_first)
+        e = _to_off(sel_last)
+        if s >= e:
+            return
+        sel_len = e - s
+
+        # ── 3. Read per-character (B, I, U) state from existing tags ──────
+        b_at = [False] * sel_len
+        i_at = [False] * sel_len
+        u_at = [False] * sel_len
+
+        _FMT_MAP: dict[str, tuple[bool, bool, bool]] = {
+            "_FMT_B":   (True,  False, False),
+            "_FMT_I":   (False, True,  False),
+            "_FMT_BI":  (True,  True,  False),
+            "_FMT_U":   (False, False, True),
+            "_FMT_BU":  (True,  False, True),
+            "_FMT_IU":  (False, True,  True),
+            "_FMT_BIU": (True,  True,  True),
+        }
+        for tag, (tb, ti, tu) in _FMT_MAP.items():
+            try:
+                ranges = self.text.tag_ranges(tag)
+            except tk.TclError:
+                continue
+            for r in range(0, len(ranges), 2):
+                rs = max(_to_off(str(ranges[r])), s)
+                re_ = min(_to_off(str(ranges[r + 1])), e)
+                for k in range(rs - s, re_ - s):
+                    if 0 <= k < sel_len:
+                        b_at[k] = tb
+                        i_at[k] = ti
+                        u_at[k] = tu
+
+        # ── 4. Determine toggle direction (off if all have it, else on) ───
+        if attr == "B":
+            new_val = not all(b_at)
+            b_at = [new_val] * sel_len
+        elif attr == "I":
+            new_val = not all(i_at)
+            i_at = [new_val] * sel_len
+        else:  # "U"
+            new_val = not all(u_at)
+            u_at = [new_val] * sel_len
+
+        # ── 5. Remove all _FMT_* tags from the selection, then re-apply ──
+        for tag in _FMT_MAP:
+            self.text.tag_remove(tag, sel_first, sel_last)
+
+        pos = 0
+        while pos < sel_len:
+            cb, ci, cu = b_at[pos], i_at[pos], u_at[pos]
+            j = pos + 1
+            while j < sel_len and b_at[j] == cb and i_at[j] == ci and u_at[j] == cu:
+                j += 1
+            fmt_key = ("B" if cb else "") + ("I" if ci else "") + ("U" if cu else "")
+            if fmt_key:
+                self.text.tag_add(f"_FMT_{fmt_key}", _to_idx(s + pos), _to_idx(s + j))
+            pos = j
+
+        # ── 6. Restore selection highlight, return focus, notify app ──────
+        self.text.tag_add("sel", sel_first, sel_last)
+        self.text.focus_set()
         self.on_change_callback()
 
     def _on_builder_selection_changed(self) -> None:
