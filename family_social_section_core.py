@@ -737,6 +737,7 @@ class FamilySocialSectionCore(ttk.Frame):
         # can still access it (clicking a button shifts focus away from the widget).
         self.text.bind("<FocusOut>", self._on_text_focus_out)
         self._fmt_saved_sel: tuple[str | None, str | None] = (None, None)
+        self._user_has_formatted: bool = False   # True when B/I/U applied without text edit
         # Formatting tags used by _apply_builder_to_note when dropdowns have text_format flags.
         _tf = ("Segoe UI", 10)
         self.text.tag_configure("_FMT_B",   font=(*_tf, "bold"))
@@ -1120,6 +1121,7 @@ class FamilySocialSectionCore(ttk.Frame):
         # ── 6. Restore selection highlight, return focus, notify app ──────
         self.text.tag_add("sel", sel_first, sel_last)
         self.text.focus_set()
+        self._user_has_formatted = True   # signal: tags changed without text edit
         self.on_change_callback()
 
     def _on_builder_selection_changed(self) -> None:
@@ -1561,7 +1563,7 @@ class FamilySocialSectionCore(ttk.Frame):
         """
         runs = self._compose_builder_annotated_runs()
         plain = "".join(t for t, _, _ in runs).strip()
-        if plain != self.text.get("1.0", tk.END).strip():
+        if plain != self.text.get("1.0", tk.END).strip() or self._user_has_formatted:
             widget_runs = self._runs_from_text_widget()
             return widget_runs if widget_runs else []
         return runs
@@ -1576,8 +1578,9 @@ class FamilySocialSectionCore(ttk.Frame):
         from xml.sax.saxutils import escape as _xe
         runs = self._compose_builder_annotated_runs()
         plain = "".join(t for t, _, _ in runs).strip()
-        if plain != self.text.get("1.0", tk.END).strip():
-            # Builder output diverged — read formatting directly from the text widget.
+        if plain != self.text.get("1.0", tk.END).strip() or self._user_has_formatted:
+            # Builder output diverged, or user applied manual formatting — read
+            # formatting directly from the text widget.
             widget_runs = self._runs_from_text_widget()
             if not widget_runs:
                 return ""
@@ -1908,6 +1911,7 @@ class FamilySocialSectionCore(ttk.Frame):
         runs = self._compose_builder_annotated_runs()
         self.text.delete("1.0", tk.END)
         self._insert_builder_runs(runs)
+        self._user_has_formatted = False   # builder rewrote the text; reset flag
         self._update_age_hint()
         self.on_change_callback()
 
