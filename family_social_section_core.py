@@ -1311,30 +1311,128 @@ class FamilySocialSectionCore(ttk.Frame):
             first_block = False
         return all_runs
 
+    def _runs_from_text_widget(self) -> list[tuple[str, "str | None", "int | None"]]:
+        """Read the bottom text widget content as (chunk, fmt_tag, wrap_px) runs.
+
+        Used as a fallback when the note diverges from the builder output so
+        that bold/italic/underline formatting and bullet continuation indents
+        that are still present in the Tk Text widget survive into the Live
+        Preview and the PDF.
+        """
+        try:
+            full_text = self.text.get("1.0", "end-1c")
+        except tk.TclError:
+            return []
+        n = len(full_text)
+        if n == 0:
+            return []
+
+        # Convert Tk "line.col" index to a 0-based linear char offset.
+        lines_split = full_text.split("\n")
+        line_starts = [0]
+        for ln in lines_split[:-1]:
+            line_starts.append(line_starts[-1] + len(ln) + 1)
+
+        def _tk_to_offset(tk_idx: str) -> int:
+            try:
+                ln_s, col_s = str(tk_idx).split(".", 1)
+                ln = int(ln_s) - 1  # 1-based → 0-based
+                col = int(col_s)
+                if ln < 0:
+                    return 0
+                if ln >= len(line_starts):
+                    return n
+                return min(line_starts[ln] + col, n)
+            except Exception:
+                return 0
+
+        # Per-character arrays: which format tag applies, and what wrap px.
+        fmt_at: list[str | None] = [None] * n
+        wrap_at: list[int] = [0] * n
+
+        _fmt_tags = [
+            "_FMT_B", "_FMT_I", "_FMT_BI",
+            "_FMT_U", "_FMT_BU", "_FMT_IU", "_FMT_BIU",
+        ]
+        for tag in _fmt_tags:
+            try:
+                ranges = self.text.tag_ranges(tag)
+            except tk.TclError:
+                continue
+            for i in range(0, len(ranges), 2):
+                s = _tk_to_offset(str(ranges[i]))
+                e = _tk_to_offset(str(ranges[i + 1]))
+                for k in range(s, min(e, n)):
+                    fmt_at[k] = tag
+
+        for px, tag in list(self._bullet_wrap_tag_by_px.items()):
+            try:
+                ranges = self.text.tag_ranges(tag)
+            except tk.TclError:
+                continue
+            for i in range(0, len(ranges), 2):
+                s = _tk_to_offset(str(ranges[i]))
+                e = _tk_to_offset(str(ranges[i + 1]))
+                for k in range(s, min(e, n)):
+                    wrap_at[k] = px
+
+        # Group consecutive characters with the same (fmt_tag, wrap_px) into runs.
+        runs: list[tuple[str, str | None, int | None]] = []
+        i = 0
+        while i < n:
+            cur_fmt = fmt_at[i]
+            cur_wrap = wrap_at[i]
+            j = i + 1
+            while j < n and fmt_at[j] == cur_fmt and wrap_at[j] == cur_wrap:
+                j += 1
+            runs.append((full_text[i:j], cur_fmt, cur_wrap if cur_wrap > 0 else None))
+            i = j
+        return runs
+
     def get_live_preview_annotated_runs(self) -> list[tuple[str, "str | None", "int | None"]]:
         """
         Return (text_chunk, tag, bullet_wrap_px) tuples suitable for the Live Preview text widget.
         Uses builder-annotated runs when the current note text matches the builder
-        output; falls back to a single plain-text run when the user has manually edited.
+        output; falls back to reading formatting directly from the text widget tags
+        when the user has manually edited.
         """
         runs = self._compose_builder_annotated_runs()
         plain = "".join(t for t, _, _ in runs).strip()
         if plain != self.text.get("1.0", tk.END).strip():
-            val = self.text.get("1.0", tk.END).strip()
-            return [(val, None, None)] if val else []
+            widget_runs = self._runs_from_text_widget()
+            return widget_runs if widget_runs else []
         return runs
 
     def get_rich_value(self) -> str:
         """
         Compose the note with inline ReportLab XML formatting tags (<b>, <i>, <u>).
-        Returns empty string when the current note text has diverged from the builder
-        output (i.e. the user manually edited it), so the PDF falls back to plain text.
+        When the current note text has diverged from the builder output (user manually
+        edited it), reads formatting directly from the text widget tags so bold/italic/
+        underline annotations survive into the PDF.
         """
         from xml.sax.saxutils import escape as _xe
         runs = self._compose_builder_annotated_runs()
         plain = "".join(t for t, _, _ in runs).strip()
         if plain != self.text.get("1.0", tk.END).strip():
-            return ""
+            # Builder output diverged — read formatting directly from the text widget.
+            widget_runs = self._runs_from_text_widget()
+            if not widget_runs:
+                return ""
+            parts: list[str] = []
+            for chunk, tag, _px in widget_runs:
+                safe = _xe(chunk).replace("\n\n", "<br/><br/>").replace("\n", "<br/>")
+                if tag:
+                    b = "B" in tag
+                    it = "I" in tag
+                    u = "U" in tag
+                    if u:
+                        safe = f"<u>{safe}</u>"
+                    if it:
+                        safe = f"<i>{safe}</i>"
+                    if b:
+                        safe = f"<b>{safe}</b>"
+                parts.append(safe)
+            return "".join(parts)
         parts: list[str] = []
         for chunk, tag, _px in runs:
             safe = _xe(chunk).replace("\n\n", "<br/><br/>").replace("\n", "<br/>")
@@ -3250,21 +3348,92 @@ class FamilySocialSectionCore(ttk.Frame):
     def get_value(self) -> str:
         return self.text.get("1.0", tk.END).strip()
 
-    def set_value(self, value: str, *, builder_state: dict | None = None) -> None:
+    def set_value(self, value: str, *, builder_state: dict | None = None, rich_text: str | None = None) -> None:
         self.text.delete("1.0", tk.END)
         self.text.insert("1.0", value or "")
         if self.note_combo_vars and self._note_builder_meta:
             self._apply_builder_state(builder_state if isinstance(builder_state, dict) else None)
+        # Store the saved rich_text so _reapply_builder_text_formatting can restore
+        # bold/italic/underline tags when the note was manually edited (builder output diverges).
+        self._loaded_rich_text: str = rich_text or ""
         # Deferred re-syncs ensure UI matches saved state even after later widget rebuilds
         # (e.g. associated-multiple columns) settle.
         self.after_idle(self._sync_skip_checkbuttons)
         self.after_idle(self._reapply_builder_text_formatting)
 
+    def _apply_rich_text_to_widget(self, rich_text: str) -> None:
+        """Parse a saved rich_text XML string and re-apply its bold/italic/underline
+        formatting tags to the Tk Text widget.
+
+        Skips silently if the plain-text projection of rich_text does not match
+        the widget's current content (prevents stale rich_text from corrupting text).
+        """
+        import re as _re
+        from xml.sax.saxutils import unescape as _xu
+
+        if not rich_text:
+            return
+
+        # Tokenize into XML tag tokens and text-node tokens.
+        _TOKEN = _re.compile(r'(<br\s*/?>|</?\s*[biu]\s*>)', _re.IGNORECASE)
+        tokens = _TOKEN.split(rich_text)
+
+        # Build runs: (text, bold, italic, underline)
+        runs: list[tuple[str, bool, bool, bool]] = []
+        bold = italic = underline = False
+        for tok in tokens:
+            if not tok:
+                continue
+            low = tok.strip().lower()
+            if _re.match(r'<br\s*/?>', tok, _re.IGNORECASE):
+                runs.append(("\n", bold, italic, underline))
+            elif low == "<b>":
+                bold = True
+            elif low == "</b>":
+                bold = False
+            elif low == "<i>":
+                italic = True
+            elif low == "</i>":
+                italic = False
+            elif low == "<u>":
+                underline = True
+            elif low == "</u>":
+                underline = False
+            else:
+                text = _xu(tok)
+                if text:
+                    runs.append((text, bold, italic, underline))
+
+        if not runs:
+            return
+
+        # Verify the plain-text reconstruction matches the widget content.
+        plain_from_rich = "".join(t for t, *_ in runs)
+        try:
+            current = self.text.get("1.0", "end-1c")
+        except tk.TclError:
+            return
+        if plain_from_rich.strip() != current.strip():
+            return  # Rich text is for different content — skip.
+
+        # Re-insert text with formatting tags applied.
+        try:
+            self.text.delete("1.0", tk.END)
+            for text, b, i, u in runs:
+                fmt_key = ("B" if b else "") + ("I" if i else "") + ("U" if u else "")
+                tag = f"_FMT_{fmt_key}" if fmt_key else None
+                if tag:
+                    self.text.insert(tk.END, text, tag)
+                else:
+                    self.text.insert(tk.END, text)
+        except tk.TclError:
+            pass
+
     def _reapply_builder_text_formatting(self) -> None:
         """Re-render the note textbox with format tags (bold/italic/underline + bullet styles)
-        when the loaded plain text matches what the builder would produce. This makes
-        formatting visible after a fresh app load without losing manual edits — if the user
-        edited the note by hand, plain != builder output and we leave the textbox alone."""
+        when the loaded plain text matches what the builder would produce. When the note was
+        manually edited (builder output diverges), falls back to the saved rich_text so
+        formatting survives app restarts."""
         try:
             runs = self._compose_builder_annotated_runs()
         except Exception:
@@ -3277,7 +3446,12 @@ class FamilySocialSectionCore(ttk.Frame):
         except tk.TclError:
             return
         if plain.strip() != current.strip():
-            return  # user manually edited the textbox; don't overwrite
+            # Builder output diverges (user manually edited).  Restore formatting
+            # from the rich_text that was saved to JSON at last save time.
+            saved_rich = getattr(self, "_loaded_rich_text", "")
+            if saved_rich:
+                self._apply_rich_text_to_widget(saved_rich)
+            return
         try:
             self.text.delete("1.0", tk.END)
             self._insert_builder_runs(runs)

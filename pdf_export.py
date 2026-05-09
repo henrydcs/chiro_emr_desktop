@@ -3213,6 +3213,12 @@ _FS_BULLET_HANG_LINE = re.compile(
     r"^(\t*(?:[\-–•●○■□]+\s*)?[^:]+:\s*)(.*)$"
 )
 
+# Matches tab-indented bullet lines that have NO colon (e.g. "\t• X-Ray").
+# Used when a primary selection has no associated option chosen.
+_FS_TAB_BULLET_NO_COLON_LINE = re.compile(
+    r"^(\t+[\-–•●○■□]+\s*)(.+)$"
+)
+
 _FS_HANG_STYLE_SEQ = [0]
 
 
@@ -3228,6 +3234,28 @@ def _fs_pdf_prefix_width_pt(prefix_plain: str, font_name: str, font_size: float)
     except Exception:
         w = float(len(tabbed) * 0.52 * (font_size or 10))
     return w * 1.06 + 2.4
+
+
+# Regex to split a rich XML string into tag tokens vs. text-node tokens.
+_FS_XML_TOKEN = re.compile(r"(<[^>]+>)")
+
+
+def _pdf_preserve_whitespace(plain: str) -> str:
+    """Convert tabs and multi-space runs to non-breaking spaces so ReportLab
+    preserves the visual spacing instead of collapsing it to a single space."""
+    plain = plain.replace("\t", "&nbsp;&nbsp;&nbsp;&nbsp;")
+    plain = re.sub(r" {2,}", lambda m: "&nbsp;" * len(m.group(0)), plain)
+    return plain
+
+
+def _pdf_preserve_whitespace_in_rich(rich: str) -> str:
+    """Apply `_pdf_preserve_whitespace` to text nodes only inside a rich XML
+    string, leaving tag tokens (e.g. <b>, </i>) untouched."""
+    parts = _FS_XML_TOKEN.split(rich)
+    return "".join(
+        part if part.startswith("<") else _pdf_preserve_whitespace(part)
+        for part in parts
+    )
 
 
 def _fs_pdf_tab_indent_pt(font_name: str, font_size: float) -> float:
@@ -3272,10 +3300,12 @@ def _fs_pdf_bullet_hang_style(
 
 
 def _fs_block_has_pdf_bullets(plain: str) -> bool:
-    """True if plain text has tab/bullet + 'Label:' sentence-builder lines."""
+    """True if plain text has tab/bullet sentence-builder lines (with or without a label colon)."""
     for raw in (plain or "").splitlines():
         line = raw.rstrip("\r")
         if _FS_BULLET_HANG_LINE.match(line):
+            return True
+        if _FS_TAB_BULLET_NO_COLON_LINE.match(line):
             return True
     return False
 
@@ -3297,19 +3327,37 @@ def _fs_pdf_flowables_from_note_plain(text: str, base_style: object, styles: obj
         if not any((s or "").strip() for s in cleaned):
             buf.clear()
             return
-        chunk = "<br/>".join(xml_escape(x) for x in cleaned)
+        chunk = "<br/>".join(_pdf_preserve_whitespace(xml_escape(x)) for x in cleaned)
         out.append(Paragraph(chunk, base_style))
         buf.clear()
 
     prev_was_tab_bullet = False
+    # pending_bullet: accumulates the current bullet paragraph's display lines so
+    # that user-typed continuation lines (no \t prefix, typed right after a bullet
+    # without a blank-line separator) are joined into the same Paragraph and
+    # inherit the leftIndent style — matching the Live Preview's lmargin2 behaviour.
+    pending_bullet_lines: list[str] = []
+    pending_bullet_hst: object = base_style
+
+    def flush_pending_bullet() -> None:
+        nonlocal pending_bullet_lines, pending_bullet_hst
+        if not pending_bullet_lines:
+            return
+        combined = "<br/>".join(pending_bullet_lines)
+        out.append(Paragraph(combined, pending_bullet_hst))
+        pending_bullet_lines = []
+
     for raw in (text or "").splitlines():
         line = raw.rstrip("\r")
         if not line.strip():
+            flush_pending_bullet()
             buf.append("")
             prev_was_tab_bullet = False
             continue
         m = _FS_BULLET_HANG_LINE.match(line)
+        m_nc = None if m else _FS_TAB_BULLET_NO_COLON_LINE.match(line)
         if m:
+            flush_pending_bullet()
             flush_buf()
             is_tab_bullet = line.startswith("\t")
             # Insert a blank-line gap when transitioning from a non-tab
@@ -3324,13 +3372,33 @@ def _fs_pdf_flowables_from_note_plain(text: str, base_style: object, styles: obj
             tab_pt = (
                 _fs_pdf_tab_indent_pt(font_name, font_size) if is_tab_bullet else 0.0
             )
-            hst = _fs_pdf_bullet_hang_style(base_style, hang, styles, tab_pt)
-            safe = xml_escape(display).replace("\n", "<br/>")
-            out.append(Paragraph(safe, hst))
+            pending_bullet_hst = _fs_pdf_bullet_hang_style(base_style, hang, styles, tab_pt)
+            pending_bullet_lines = [_pdf_preserve_whitespace(xml_escape(display)).replace("\n", "<br/>")]
             prev_was_tab_bullet = is_tab_bullet
+        elif m_nc:
+            # Tab-indented bullet with no associated option (no "Label:" colon).
+            flush_pending_bullet()
+            flush_buf()
+            if not prev_was_tab_bullet and out:
+                out.append(Spacer(1, 0.12 * inch))
+            prefix = m_nc.group(1)
+            body = m_nc.group(2)
+            display = prefix.replace("\t", "", 1) + body
+            hang = _fs_pdf_prefix_width_pt(prefix, font_name, font_size)
+            tab_pt = _fs_pdf_tab_indent_pt(font_name, font_size)
+            pending_bullet_hst = _fs_pdf_bullet_hang_style(base_style, hang, styles, tab_pt)
+            pending_bullet_lines = [_pdf_preserve_whitespace(xml_escape(display)).replace("\n", "<br/>")]
+            prev_was_tab_bullet = True
+        elif prev_was_tab_bullet and pending_bullet_lines:
+            # Continuation line — user typed text on a new line directly after
+            # a bullet (no blank separator).  Merge into the same Paragraph so
+            # it inherits leftIndent, matching the Live Preview's lmargin2 indent.
+            pending_bullet_lines.append(_pdf_preserve_whitespace(xml_escape(line)))
         else:
+            flush_pending_bullet()
             buf.append(line)
             prev_was_tab_bullet = False
+    flush_pending_bullet()
     flush_buf()
     return out
 
@@ -3378,21 +3446,38 @@ def _fs_pdf_flowables_from_note_rich(
         if not any(s.strip() for s in cleaned):
             buf.clear()
             return
-        chunk = "<br/>".join(cleaned)
+        chunk = "<br/>".join(_pdf_preserve_whitespace_in_rich(x) for x in cleaned)
         out.append(Paragraph(chunk, base_style))
         buf.clear()
 
     prev_was_tab_bullet = False
+    # pending_bullet: accumulates the current bullet paragraph's display lines so
+    # that user-typed continuation lines (no \t prefix, typed right after a bullet
+    # without a blank-line separator) are joined into the same Paragraph.
+    pending_bullet_lines: list[str] = []
+    pending_bullet_hst: object = base_style
+
+    def flush_pending_bullet() -> None:
+        nonlocal pending_bullet_lines, pending_bullet_hst
+        if not pending_bullet_lines:
+            return
+        combined = "<br/>".join(pending_bullet_lines)
+        out.append(Paragraph(combined, pending_bullet_hst))
+        pending_bullet_lines = []
+
     for rich_line in rich_lines:
         # Detect bullet structure on the plain-text projection so XML markup
         # cannot interfere with the regex.
         plain_line = _FS_RICH_TAG_STRIP.sub("", rich_line)
         if not plain_line.strip():
+            flush_pending_bullet()
             buf.append("")
             prev_was_tab_bullet = False
             continue
         m = _FS_BULLET_HANG_LINE.match(plain_line)
+        m_nc = None if m else _FS_TAB_BULLET_NO_COLON_LINE.match(plain_line)
         if m:
+            flush_pending_bullet()
             flush_buf()
             is_tab_bullet = rich_line.startswith("\t") or plain_line.startswith("\t")
             # Insert a blank-line gap when transitioning from a non-tab
@@ -3409,12 +3494,32 @@ def _fs_pdf_flowables_from_note_rich(
             tab_pt = (
                 _fs_pdf_tab_indent_pt(font_name, font_size) if is_tab_bullet else 0.0
             )
-            hst = _fs_pdf_bullet_hang_style(base_style, hang, styles, tab_pt)
-            out.append(Paragraph(display_rich, hst))
+            pending_bullet_hst = _fs_pdf_bullet_hang_style(base_style, hang, styles, tab_pt)
+            pending_bullet_lines = [_pdf_preserve_whitespace_in_rich(display_rich)]
             prev_was_tab_bullet = is_tab_bullet
+        elif m_nc:
+            # Tab-indented bullet with no associated option (no "Label:" colon).
+            flush_pending_bullet()
+            flush_buf()
+            if not prev_was_tab_bullet and out:
+                out.append(Spacer(1, 0.12 * inch))
+            prefix_plain = m_nc.group(1)
+            display_rich = rich_line[1:] if rich_line.startswith("\t") else rich_line
+            hang = _fs_pdf_prefix_width_pt(prefix_plain, font_name, font_size)
+            tab_pt = _fs_pdf_tab_indent_pt(font_name, font_size)
+            pending_bullet_hst = _fs_pdf_bullet_hang_style(base_style, hang, styles, tab_pt)
+            pending_bullet_lines = [_pdf_preserve_whitespace_in_rich(display_rich)]
+            prev_was_tab_bullet = True
+        elif prev_was_tab_bullet and pending_bullet_lines:
+            # Continuation line — user typed text on a new line directly after
+            # a bullet (no blank separator).  Merge into the same Paragraph so
+            # it inherits leftIndent, matching the Live Preview's lmargin2 indent.
+            pending_bullet_lines.append(_pdf_preserve_whitespace_in_rich(rich_line))
         else:
+            flush_pending_bullet()
             buf.append(rich_line)
             prev_was_tab_bullet = False
+    flush_pending_bullet()
     flush_buf()
     return out
 
@@ -3450,7 +3555,7 @@ def build_family_social_flowables(soap: dict, styles) -> list:
                     for fl in _fs_pdf_flowables_from_note_rich(rich, fs_body, styles):
                         out.append(fl)
                 else:
-                    out.append(Paragraph(rich, fs_body))
+                    out.append(Paragraph(_pdf_preserve_whitespace_in_rich(rich), fs_body))
             else:
                 for fl in _fs_pdf_flowables_from_note_plain(text, fs_body, styles):
                     out.append(fl)
@@ -3467,7 +3572,7 @@ def build_family_social_flowables(soap: dict, styles) -> list:
         for fl in _fs_pdf_flowables_from_note_plain(family_social, fs_body_legacy, styles):
             out.append(fl)
     else:
-        safe_fs = xml_escape(family_social).replace("\n\n", "<br/><br/>").replace("\n", "<br/>")
+        safe_fs = _pdf_preserve_whitespace(xml_escape(family_social)).replace("\n\n", "<br/><br/>").replace("\n", "<br/>")
         out.append(Paragraph(safe_fs, fs_body_legacy))
     out.append(Spacer(1, 0.12 * inch))
     return out
@@ -3511,7 +3616,7 @@ def build_subjectives_canvas_flowables(subj: dict, styles) -> list:
                         for fl in _fs_pdf_flowables_from_note_rich(rich, body_style, styles):
                             out.append(fl)
                     else:
-                        out.append(Paragraph(rich, body_style))
+                        out.append(Paragraph(_pdf_preserve_whitespace_in_rich(rich), body_style))
                 else:
                     for fl in _fs_pdf_flowables_from_note_plain(text, body_style, styles):
                         out.append(fl)
@@ -3525,7 +3630,7 @@ def build_subjectives_canvas_flowables(subj: dict, styles) -> list:
         for fl in _fs_pdf_flowables_from_note_plain(plain, body_style, styles):
             out.append(fl)
     else:
-        safe_plain = xml_escape(plain).replace("\n\n", "<br/><br/>").replace("\n", "<br/>")
+        safe_plain = _pdf_preserve_whitespace(xml_escape(plain)).replace("\n\n", "<br/><br/>").replace("\n", "<br/>")
         out.append(Paragraph(safe_plain, body_style))
     out.append(Spacer(1, 0.10 * inch))
     return out

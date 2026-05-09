@@ -698,7 +698,8 @@ class FamilySocialHistoryPage(ttk.Frame):
                 txt = blk.get("text") if "text" in blk else ""
                 if txt is None:
                     txt = ""
-                c.set_value(str(txt), builder_state=inner)
+                rich = blk.get("rich_text") or ""
+                c.set_value(str(txt), builder_state=inner, rich_text=rich)
             return
 
         # Legacy v1: one shared builder blob + combined note text
