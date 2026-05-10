@@ -673,9 +673,27 @@ class FamilySocialSectionCore(ttk.Frame):
             text="Revert note to builder (discard manual edits in textbox)",
             command=self._apply_builder_to_note,
         ).pack(side="left")
+        ttk.Button(
+            ctl,
+            text="Textbox Edit Area",
+            command=lambda: self._note_editor_text_layer.tkraise(),
+        ).pack(side="left", padx=(8, 0))
+        ttk.Button(
+            ctl,
+            text="Sentence builder",
+            command=lambda: self._note_editor_builder_layer.tkraise(),
+        ).pack(side="left", padx=(8, 0))
 
-        builder_outer = ttk.LabelFrame(note_inner, text="Sentence builder")
-        builder_outer.pack(fill="x", expand=False, padx=10, pady=(0, 6))
+        self._note_editor_stack = ttk.Frame(note_inner)
+        self._note_editor_stack.pack(fill="x", expand=False, padx=10, pady=(0, 6))
+        self._note_editor_builder_layer = ttk.Frame(self._note_editor_stack)
+        self._note_editor_text_layer = ttk.Frame(self._note_editor_stack)
+        self._note_editor_builder_layer.grid(row=0, column=0, sticky="nsew")
+        self._note_editor_text_layer.grid(row=0, column=0, sticky="nsew")
+        self._note_editor_stack.grid_columnconfigure(0, weight=1)
+
+        builder_outer = ttk.LabelFrame(self._note_editor_builder_layer, text="Sentence builder")
+        builder_outer.pack(fill="x", expand=False, pady=(0, 0))
         self._note_builder_outer = builder_outer
 
         canvas = tk.Canvas(builder_outer, highlightthickness=0, height=440)
@@ -691,13 +709,14 @@ class FamilySocialSectionCore(ttk.Frame):
 
         self.note_builder_canvas = canvas
 
-        ttk.Label(note_inner, text="Note text (editable — saved to chart, Live Preview, and PDF):").pack(
-            anchor="w", padx=10, pady=(4, 2)
-        )
+        ttk.Label(
+            self._note_editor_text_layer,
+            text="Note text (editable — saved to chart, Live Preview, and PDF):",
+        ).pack(anchor="w", padx=0, pady=(4, 2))
 
         # --- Formatting toolbar (Bold / Italic / Underline) ---
-        fmt_bar = tk.Frame(note_inner, bd=0)
-        fmt_bar.pack(anchor="w", padx=10, pady=(0, 2))
+        fmt_bar = tk.Frame(self._note_editor_text_layer, bd=0)
+        fmt_bar.pack(anchor="w", padx=0, pady=(0, 2))
         _tf_btn = ("Segoe UI", 9)
         tk.Label(fmt_bar, text="Format selection:", font=_tf_btn).pack(side="left", padx=(0, 6))
         self._fmt_bold_btn = tk.Button(
@@ -724,8 +743,8 @@ class FamilySocialSectionCore(ttk.Frame):
             font=("Segoe UI", 8), foreground="#666666",
         ).pack(side="left")
 
-        self.text = tk.Text(note_inner, width=110, height=12, wrap="word")
-        self.text.pack(fill="x", expand=False, padx=10, pady=(0, 8))
+        self.text = tk.Text(self._note_editor_text_layer, width=110, height=12, wrap="word")
+        self.text.pack(fill="x", expand=False, padx=0, pady=(0, 8))
         self.text.bind("<KeyRelease>", lambda e: self._on_note_text_changed())
         # Save selection when focus leaves the text widget so the format buttons
         # can still access it (clicking a button shifts focus away from the widget).
@@ -741,6 +760,8 @@ class FamilySocialSectionCore(ttk.Frame):
         self.text.tag_configure("_FMT_BU",  font=(*_tf, "bold"),        underline=True)
         self.text.tag_configure("_FMT_IU",  font=(*_tf, "italic"),      underline=True)
         self.text.tag_configure("_FMT_BIU", font=(*_tf, "bold italic"), underline=True)
+
+        self._note_editor_builder_layer.tkraise()
 
     @staticmethod
     def _widget_is_descendant_of(ancestor: tk.Widget | None, w: tk.Widget | None) -> bool:
