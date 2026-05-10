@@ -5229,10 +5229,17 @@ class App(tk.Tk):
         if isinstance(dx_struct, dict):
             self.diagnosis_page.from_dict(dx_struct)
         else:
-            try:
-                self.diagnosis_page.set_value(soap.get("diagnosis", ""))
-            except Exception:
-                pass
+            # Always call from_dict (even with {}) so text_frame is packed and all
+            # structured sections (Dx Block, Imaging, Referrals, Employment) are
+            # properly initialised rather than left hidden / unpopulated.
+            self.diagnosis_page.from_dict({})
+            # Backward-compat: if an old save only had a plain-text "diagnosis" string,
+            # write it into the notes area as well.
+            if soap.get("diagnosis"):
+                try:
+                    self.diagnosis_page.set_value(soap.get("diagnosis", ""))
+                except Exception:
+                    pass
         plan = soap.get("plan") or {}
         if isinstance(plan, dict):
             self.plan_page.load_struct(plan)
@@ -5270,16 +5277,34 @@ class App(tk.Tk):
         except Exception:
             return None
 
-    def _overlay_diagnosis_from_prior_saved_exam(self, merged_soap: dict) -> None:
+    def _overlay_diagnosis_from_prior_saved_exam(
+        self, merged_soap: dict, template_fallback: dict | None = None
+    ) -> None:
         """
         Replace merged_soap diagnosis keys with those from the previous exam's saved JSON.
         Mutates merged_soap in place.
+
+        When no prior exam exists (or its file is unreadable), falls back to the
+        template's own diagnosis_struct so Assessment sections are not left blank
+        for new patients / first visits.
         """
+        def _apply_fallback() -> None:
+            if template_fallback is None:
+                return
+            dx_fb = template_fallback.get("diagnosis_struct")
+            if isinstance(dx_fb, dict):
+                merged_soap["diagnosis_struct"] = copy.deepcopy(dx_fb)
+            diag_fb = template_fallback.get("diagnosis", "")
+            if diag_fb:
+                merged_soap["diagnosis"] = diag_fb
+
         prev_name = self._previous_exam_in_nav_order()
         if not prev_name:
+            _apply_fallback()
             return
         prev_soap = self._load_soap_dict_from_saved_exam(prev_name)
         if not prev_soap:
+            _apply_fallback()
             return
         dx_struct = prev_soap.get("diagnosis_struct")
         if isinstance(dx_struct, dict):
@@ -5307,6 +5332,9 @@ class App(tk.Tk):
         if template_soap is None:
             template_soap = {k: v for k, v in template_dict.items() if k != "template_name"}
 
+        # Snapshot the original template soap BEFORE any keys are popped so we can
+        # use it as a fallback for diagnosis when there is no prior saved exam.
+        template_soap_original = dict(template_soap)
         template_soap = dict(template_soap)
         preserve_dx_from_prior_exam = (
             template_category_slug is not None
@@ -5347,7 +5375,9 @@ class App(tk.Tk):
                             bd["narrative"] = ""
 
         if preserve_dx_from_prior_exam:
-            self._overlay_diagnosis_from_prior_saved_exam(merged_soap)
+            self._overlay_diagnosis_from_prior_saved_exam(
+                merged_soap, template_fallback=template_soap_original
+            )
 
         self._apply_soap_to_ui(merged_soap)
 
