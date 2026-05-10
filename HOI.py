@@ -8,6 +8,11 @@ from HOIpdf import build_hoi_flowables, _strip_auto_tag
 
 from scrollframe import ScrollFrame
 
+from family_social_history_page import FamilySocialHistoryPage
+
+# Independent template file for HOI Canvas (dropdown sentence builders + template editor).
+HOI_CANVAS_TEMPLATES_FILENAME = "hoi_canvas_doc_templates.json"
+
 AUTO_MOI_TAG = "[AUTO:MOI]"
 
 def _clean(s: str) -> str:
@@ -656,7 +661,17 @@ class HOIPage(ttk.Frame):
         runs.append(("Mechanism of Injury (MOI):\n", "H_BOLD"))
         runs.append(("\n", None))
         runs.append((moi_text + "\n\n", None))
-        return runs    
+        return runs
+
+    def get_live_preview_runs_hoi_canvas(self):
+        """Runs from HOI Canvas (FamilySocialHistoryPage), same format as Family/Social preview."""
+        try:
+            cp = getattr(self, "hoi_canvas_page", None)
+            if cp is None or not hasattr(cp, "get_live_preview_runs"):
+                return []
+            return cp.get_live_preview_runs() or []
+        except Exception:
+            return []
     
     def _bind_wheel_to_widget(self, widget, *, yview_func=None, xview_func=None):
         """
@@ -1056,9 +1071,10 @@ class HOIPage(ttk.Frame):
     # -----------------------------
     # init
     # -----------------------------
-    def __init__(self, parent, on_change_callback):
+    def __init__(self, parent, on_change_callback, app=None):
         super().__init__(parent)
         self.on_change_callback = on_change_callback
+        self._app = app
 
         self.intro_event_options = ["incident", "accident", "event", "injury"]
         self.intro_event_word_var = tk.StringVar(value=self.intro_event_options[0])
@@ -1594,8 +1610,51 @@ class HOIPage(ttk.Frame):
             self._internal_set_moi = False
 
     # ---------------- UI ----------------
+    def _on_hoi_canvas_change(self) -> None:
+        cb = self.on_change_callback
+        if not callable(cb):
+            return
+        try:
+            cb(regen_moi=False)
+        except TypeError:
+            cb()
+
+    def _go_hoi_canvas(self) -> None:
+        self._hoi_canvas_frame.tkraise()
+
+    def _go_hoi_main(self) -> None:
+        self._hoi_main_frame.tkraise()
+
+    def _confirm_reset_hoi_canvas(self) -> None:
+        ok = messagebox.askyesno(
+            "Reset HOI Canvas",
+            "This will clear ONLY the HOI Canvas area for this exam.\n\n"
+            "It will NOT touch your other HOI blocks (MOI, ROF, etc.), "
+            "and it will not delete any saved template files.\n\n"
+            "Continue?",
+        )
+        if not ok:
+            return
+        try:
+            cp = getattr(self, "hoi_canvas_page", None)
+            if cp is not None:
+                cp.reset()
+        except Exception:
+            pass
+        self._on_hoi_canvas_change()
+
     def _build_ui(self):
         padx = 10
+
+        self._hoi_stack = ttk.Frame(self)
+        self._hoi_stack.pack(fill="both", expand=True)
+        self._hoi_stack.grid_rowconfigure(0, weight=1)
+        self._hoi_stack.grid_columnconfigure(0, weight=1)
+
+        self._hoi_main_frame = ttk.Frame(self._hoi_stack)
+        self._hoi_main_frame.grid(row=0, column=0, sticky="nsew")
+        self._hoi_canvas_frame = ttk.Frame(self._hoi_stack)
+        self._hoi_canvas_frame.grid(row=0, column=0, sticky="nsew")
 
         self._section_buttons = {}
 
@@ -1612,7 +1671,7 @@ class HOIPage(ttk.Frame):
         )
 
         # block buttons
-        top = ttk.Frame(self)
+        top = ttk.Frame(self._hoi_main_frame)
         top.pack(fill="x", padx=padx, pady=(10, 6))
 
         ttk.Label(top, text="HOI Blocks:").pack(side="left", padx=(0, 8))
@@ -1640,9 +1699,18 @@ class HOIPage(ttk.Frame):
         add_btn("Diagnostics")
         add_btn("Review of Findings")
 
+        tk.Button(
+            self.block_buttons,
+            text="HOI CANVAS",
+            font=("Segoe UI", 10),
+            relief="raised",
+            bd=1,
+            command=self._go_hoi_canvas,
+        ).pack(side="left", padx=4)
+
         # container
         # ✅ Wrap everything below the top buttons in a vertical ScrollFrame
-        self.scroll = ScrollFrame(self)
+        self.scroll = ScrollFrame(self._hoi_main_frame)
         self.scroll.pack(fill="both", expand=True, padx=padx, pady=(0, 10))
 
         self.container = ttk.Frame(self.scroll.content)
@@ -1663,8 +1731,29 @@ class HOIPage(ttk.Frame):
         for f in self.frames.values():
             f.grid(row=0, column=0, sticky="nsew")
 
+        canvas_top = ttk.Frame(self._hoi_canvas_frame)
+        canvas_top.pack(fill="x", padx=10, pady=(10, 6))
+        ttk.Button(canvas_top, text="Back to HOI", command=self._go_hoi_main).pack(side="left")
+        ttk.Button(
+            canvas_top,
+            text="Reset HOI Canvas",
+            command=self._confirm_reset_hoi_canvas,
+        ).pack(side="left", padx=(8, 0))
+
+        self.hoi_canvas_page = FamilySocialHistoryPage(
+            self._hoi_canvas_frame,
+            "HOI Canvas",
+            self._on_hoi_canvas_change,
+            app=self._app,
+            templates_filename=HOI_CANVAS_TEMPLATES_FILENAME,
+            section_header=None,
+            clear_assoc_on_primary_clear=True,
+        )
+        self.hoi_canvas_page.pack(fill="both", expand=True, padx=10, pady=(0, 10))
+
     def _show_block(self, name: str):
         if name in self.frames:
+            self._go_hoi_main()
             self.active_block.set(name)
             self.frames[name].tkraise()
 
@@ -2135,7 +2224,7 @@ class HOIPage(ttk.Frame):
 
         manual_paragraph = (manual_map.get(mode) or "").strip()
 
-        return {
+        out = {
             "active_block": self.active_block.get(),
 
             "rof": {
@@ -2202,6 +2291,23 @@ class HOIPage(ttk.Frame):
                 },
             }
         }
+
+        try:
+            cp = getattr(self, "hoi_canvas_page", None)
+            if cp is not None:
+                out["canvas"] = {
+                    "text": cp.get_value(),
+                    "builder_state": cp.get_builder_state(),
+                    "section_skipped": (
+                        cp.get_section_skipped()
+                        if hasattr(cp, "get_section_skipped")
+                        else False
+                    ),
+                }
+        except Exception:
+            pass
+
+        return out
 
 
     def from_dict(self, data: dict):
@@ -2338,6 +2444,30 @@ class HOIPage(ttk.Frame):
         finally:
             self._loading = False
 
+        try:
+            cp = getattr(self, "hoi_canvas_page", None)
+            if cp is not None:
+                canvas_state = (data or {}).get("canvas") or {}
+                if isinstance(canvas_state, dict):
+                    canvas_text = canvas_state.get("text") or ""
+                    canvas_builder = canvas_state.get("builder_state")
+                    cp.set_value(
+                        canvas_text,
+                        builder_state=(
+                            canvas_builder if isinstance(canvas_builder, dict) else None
+                        ),
+                    )
+                    if hasattr(cp, "set_section_skipped"):
+                        cp.set_section_skipped(
+                            bool(canvas_state.get("section_skipped"))
+                        )
+                else:
+                    cp.set_value("")
+                    if hasattr(cp, "set_section_skipped"):
+                        cp.set_section_skipped(False)
+        except Exception:
+            pass
+
         self._on_rof_input_mode_changed()
         self._regen_rof_now()
 
@@ -2380,6 +2510,13 @@ class HOIPage(ttk.Frame):
         # Existing check
         if _clean(self.injury_type_var.get()) not in ("", "(none)"):
             return True
+
+        try:
+            cp = getattr(self, "hoi_canvas_page", None)
+            if cp is not None and cp.has_content():
+                return True
+        except Exception:
+            pass
 
         return any(
             _clean(v.get())
@@ -2538,4 +2675,12 @@ class HOIPage(ttk.Frame):
         self._regen_rof_now()
 
         self._regen_moi_now(force=True)
+
+        try:
+            cp = getattr(self, "hoi_canvas_page", None)
+            if cp is not None:
+                cp.reset()
+        except Exception:
+            pass
+
         self._changed()

@@ -680,6 +680,14 @@ class App(tk.Tk):
                             runs.append(("\n\n", None))
                         runs.extend(moi_runs)
 
+                # 2b. HOI Canvas — after MOI (same Family/Social-style builders; mirrors PDF)
+                if hasattr(self.hoi_page, "get_live_preview_runs_hoi_canvas"):
+                    hoi_canvas_runs = self.hoi_page.get_live_preview_runs_hoi_canvas() or []
+                    if hoi_canvas_runs:
+                        if runs:
+                            runs.append(("\n\n", None))
+                        runs.extend(hoi_canvas_runs)
+
                 # 3. Subjectives
                 if hasattr(self, "subjectives_page") and self.subjectives_page is not None:
                     subj_runs = self.subjectives_page.get_live_preview_runs()
@@ -3683,7 +3691,7 @@ class App(tk.Tk):
         # call once after widget is created:
         apply_preview_styles(self.hoi_preview_text)        
         
-        self.hoi_page = HOIPage(self.content, self.schedule_autosave)
+        self.hoi_page = HOIPage(self.content, self.schedule_autosave, app=self)
         self.after(50, self.request_live_preview_refresh)
 
         def _subjectives_on_change(*, regen_moi: bool = True):

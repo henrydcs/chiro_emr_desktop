@@ -3791,6 +3791,18 @@ def build_subjectives_canvas_flowables(subj: dict, styles) -> list:
     return out
 
 
+def build_hoi_canvas_flowables(hoi_struct: dict, styles) -> list:
+    """
+    HOI Canvas note output: same JSON shape as Subjectives canvas, nested under
+    hoi_struct['canvas'].
+    """
+    hoi_struct = hoi_struct or {}
+    canvas = hoi_struct.get("canvas")
+    if not isinstance(canvas, dict):
+        return []
+    return build_subjectives_canvas_flowables({"canvas": canvas}, styles)
+
+
 # =======================================================
 # Payload parsing
 # =======================================================
@@ -4242,7 +4254,12 @@ def build_combined_pdf(path: str, payloads: list):
         hoi_flow = build_hoi_flowables(hoi_struct, styles, doc_width)
         if hoi_flow:
             story.extend(hoi_flow)
-            story.append(Spacer(1, 0.12 * inch))        
+            story.append(Spacer(1, 0.12 * inch))
+
+        hoi_canvas_flow = build_hoi_canvas_flowables(hoi_struct, styles)
+        if hoi_canvas_flow:
+            story.extend(hoi_canvas_flow)
+            story.append(Spacer(1, 0.12 * inch))
 
         # Subjectives
         story.append(Paragraph("<b>SUBJECTIVES</b>", styles["Heading2"]))
