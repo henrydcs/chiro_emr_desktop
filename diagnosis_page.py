@@ -312,6 +312,7 @@ class DiagnosisPage(ttk.Frame):
         on_click_referral_callback=None,
         on_open_referral_letter_callback=None,
         on_referrals_removed_callback=None,
+        on_load_prior_dx_callback=None,
     ):
         super().__init__(parent)
         self.on_change_callback = on_change_callback
@@ -323,6 +324,7 @@ class DiagnosisPage(ttk.Frame):
         self.on_click_referral_callback = on_click_referral_callback
         self.on_open_referral_letter_callback = on_open_referral_letter_callback
         self.on_referrals_removed_callback = on_referrals_removed_callback
+        self.on_load_prior_dx_callback = on_load_prior_dx_callback
         self.max_blocks = max_blocks
 
         self._loading = False
@@ -1078,9 +1080,22 @@ class DiagnosisPage(ttk.Frame):
         fr.columnconfigure(0, weight=1)
         fr.rowconfigure(0, weight=1)
 
+        # Action row above the diagnosis blocks: manual button to pull the prior
+        # exam's diagnosis codes into the current Dx Blocks (independent of the
+        # template auto-fill path).  Useful when templates fail to carry codes
+        # forward, or when the user wants to re-pull prior codes after editing.
+        action_row = ttk.Frame(fr)
+        action_row.pack(fill="x", padx=padx, pady=(10, 0))
+        self.prev_visit_dx_btn = ttk.Button(
+            action_row,
+            text="Previous Visit Dx Codes",
+            command=self.load_prior_visit_dx_codes,
+        )
+        self.prev_visit_dx_btn.pack(side="left")
+
         # Diagnosis blocks container (scrollable) — same structure as before, now inside tkRaise
         self.blocks_frame = ttk.Frame(fr)
-        self.blocks_frame.pack(fill="both", expand=True, padx=padx, pady=(10, 10))
+        self.blocks_frame.pack(fill="both", expand=True, padx=padx, pady=(6, 10))
 
         blocks_container = ttk.Frame(self.blocks_frame)
         blocks_container.pack(fill="both", expand=True)
@@ -1316,6 +1331,95 @@ class DiagnosisPage(ttk.Frame):
         self.blocks[idx], self.blocks[new_idx] = self.blocks[new_idx], self.blocks[idx]
         self._layout_blocks()
         self._on_blocks_changed()
+
+    def load_prior_visit_dx_codes(self, silent: bool = False) -> bool:
+        """Replace the current Dx Blocks with the prior exam's saved blocks.
+
+        Calls the host-app callback (which knows how to find the prior exam) and
+        rebuilds the block grid from the returned list of block dicts.  Leaves
+        Assessment, Causation, Prognosis, Imaging, Referrals, Work Status, and
+        all notes untouched — only the ICD-10 dx blocks change.
+
+        Returns True if blocks were replaced, False otherwise.
+
+        Parameters
+        ----------
+        silent : bool
+            If True, suppresses the "no diagnosis codes were found" info popup so
+            this method can be called programmatically from the template apply
+            path without nagging the user on first visits.  Errors from the
+            callback are still surfaced regardless of `silent`.
+        """
+        cb = getattr(self, "on_load_prior_dx_callback", None)
+        if not callable(cb):
+            if not silent:
+                messagebox.showinfo(
+                    "Previous Visit Dx Codes",
+                    "This action is not wired up in the host application.",
+                )
+            return False
+
+        try:
+            result = cb()
+        except Exception as e:
+            messagebox.showerror(
+                "Previous Visit Dx Codes",
+                f"Could not load prior exam diagnoses:\n{e}",
+            )
+            return False
+
+        prior_blocks: list[dict] = []
+        if isinstance(result, dict):
+            blocks_val = result.get("blocks")
+            if isinstance(blocks_val, list):
+                prior_blocks = [b for b in blocks_val if isinstance(b, dict)]
+        elif isinstance(result, list):
+            prior_blocks = [b for b in result if isinstance(b, dict)]
+
+        if not prior_blocks:
+            if not silent:
+                messagebox.showinfo(
+                    "Previous Visit Dx Codes",
+                    "No diagnosis codes were found on a prior saved exam for this patient.",
+                )
+            return False
+
+        if len(prior_blocks) > self.max_blocks:
+            prior_blocks = prior_blocks[: self.max_blocks]
+
+        self._loading = True
+        try:
+            for b in list(self.blocks):
+                b.destroy()
+            self.blocks.clear()
+
+            for bd in prior_blocks:
+                b = DxBlock(self.grid_area)
+                b.bind_actions(
+                    on_change=self._on_blocks_changed,
+                    on_remove=lambda bb=b: self.remove_block(bb),
+                    on_move_up=lambda bb=b: self.move_block(bb, -1),
+                    on_move_down=lambda bb=b: self.move_block(bb, +1),
+                )
+                b.from_dict(bd)
+                self.blocks.append(b)
+
+            if not self.blocks:
+                b = DxBlock(self.grid_area)
+                b.bind_actions(
+                    on_change=self._on_blocks_changed,
+                    on_remove=lambda bb=b: self.remove_block(bb),
+                    on_move_up=lambda bb=b: self.move_block(bb, -1),
+                    on_move_down=lambda bb=b: self.move_block(bb, +1),
+                )
+                self.blocks.append(b)
+
+            self._layout_blocks()
+        finally:
+            self._loading = False
+
+        self._changed()
+        return True
 
     def _layout_blocks(self):
         for child in self.grid_area.winfo_children():

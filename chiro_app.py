@@ -3714,6 +3714,7 @@ class App(tk.Tk):
             on_click_referral_callback=self._on_referral_clicked,
             on_open_referral_letter_callback=self._open_referral_recommendation_letter_editor,
             on_referrals_removed_callback=self._on_referrals_changed_cleanup,
+            on_load_prior_dx_callback=self._get_prior_exam_dx_blocks,
         )
 
         self.plan_page = PlanPage(self.content, on_change=self.schedule_autosave)
@@ -5253,17 +5254,6 @@ class App(tk.Tk):
         except Exception:
             pass
 
-    def _previous_exam_in_nav_order(self) -> str | None:
-        """Exam name immediately before the current one in self.exams (index order), if any."""
-        cur = (self.current_exam.get() or "").strip()
-        exams = getattr(self, "exams", None) or []
-        if not cur or not exams:
-            return None
-        for i, name in enumerate(exams):
-            if name.lower() == cur.lower():
-                return exams[i - 1] if i > 0 else None
-        return None
-
     def _load_soap_dict_from_saved_exam(self, exam_name: str) -> dict | None:
         """Load soap dict from disk for a named exam, or None if missing/unreadable."""
         path = self.compute_exam_path(exam_name)
@@ -5277,42 +5267,102 @@ class App(tk.Tk):
         except Exception:
             return None
 
-    def _overlay_diagnosis_from_prior_saved_exam(
-        self, merged_soap: dict, template_fallback: dict | None = None
-    ) -> None:
-        """
-        Replace merged_soap diagnosis keys with those from the previous exam's saved JSON.
-        Mutates merged_soap in place.
+    def _get_prior_exam_dx_blocks(self) -> dict | None:
+        """Return the most-recently-saved prior exam's diagnosis blocks for this patient.
 
-        When no prior exam exists (or its file is unreadable), falls back to the
-        template's own diagnosis_struct so Assessment sections are not left blank
-        for new patients / first visits.
-        """
-        def _apply_fallback() -> None:
-            if template_fallback is None:
-                return
-            dx_fb = template_fallback.get("diagnosis_struct")
-            if isinstance(dx_fb, dict):
-                merged_soap["diagnosis_struct"] = copy.deepcopy(dx_fb)
-            diag_fb = template_fallback.get("diagnosis", "")
-            if diag_fb:
-                merged_soap["diagnosis"] = diag_fb
+        Single source of truth used by:
+          - The "Previous Visit Dx Codes" button on the Diagnosis page.
+          - The non-Initials template apply path (carries blocks forward silently).
 
-        prev_name = self._previous_exam_in_nav_order()
-        if not prev_name:
-            _apply_fallback()
-            return
-        prev_soap = self._load_soap_dict_from_saved_exam(prev_name)
-        if not prev_soap:
-            _apply_fallback()
-            return
-        dx_struct = prev_soap.get("diagnosis_struct")
-        if isinstance(dx_struct, dict):
-            merged_soap["diagnosis_struct"] = copy.deepcopy(dx_struct)
-        else:
-            merged_soap.pop("diagnosis_struct", None)
-        merged_soap["diagnosis"] = prev_soap.get("diagnosis", "")
-    
+        Returns a dict like:
+            {"blocks": [block_dict, ...], "source": "Initial 1"}
+        or None if no prior exam can be found.
+
+        Lookup strategy:
+          1. Walk back through self.exams from the current exam, trying each prior name.
+          2. If that finds nothing, scan the patient's exams/ folder on disk and pick
+             the most-recently-modified .json file other than the current exam's file.
+        """
+        cur = (self.current_exam.get() or "").strip()
+        exams = list(getattr(self, "exams", None) or [])
+
+        prev_soap: dict | None = None
+        prev_name_used: str | None = None
+
+        cur_index: int | None = None
+        for i, name in enumerate(exams):
+            if name.lower() == cur.lower():
+                cur_index = i
+                break
+
+        if cur_index is not None and cur_index > 0:
+            for j in range(cur_index - 1, -1, -1):
+                candidate_name = exams[j]
+                soap = self._load_soap_dict_from_saved_exam(candidate_name)
+                if soap:
+                    prev_soap = soap
+                    prev_name_used = candidate_name
+                    break
+
+        if prev_soap is None:
+            try:
+                patient_root = self.get_current_patient_root()
+                if patient_root:
+                    exams_dir = os.path.join(patient_root, PATIENT_SUBDIR_EXAMS)
+                    if os.path.isdir(exams_dir):
+                        cur_filename_lower = (
+                            f"{safe_slug(cur)}.json".lower() if cur else None
+                        )
+                        index_filename_lower = EXAM_INDEX_FILENAME.lower()
+                        candidates: list[tuple[float, str, str]] = []
+                        for fn in os.listdir(exams_dir):
+                            fnl = fn.lower()
+                            if not fnl.endswith(".json"):
+                                continue
+                            if fnl == index_filename_lower:
+                                continue
+                            if cur_filename_lower and fnl == cur_filename_lower:
+                                continue
+                            full = os.path.join(exams_dir, fn)
+                            try:
+                                mtime = os.path.getmtime(full)
+                            except OSError:
+                                continue
+                            candidates.append((mtime, full, fn))
+
+                        if candidates:
+                            candidates.sort(key=lambda x: x[0], reverse=True)
+                            for _mt, full, fn in candidates:
+                                try:
+                                    with open(full, "r", encoding="utf-8") as f:
+                                        payload = json.load(f) or {}
+                                    soap = payload.get("soap")
+                                    if isinstance(soap, dict):
+                                        prev_soap = soap
+                                        prev_name_used = fn
+                                        break
+                                except Exception:
+                                    continue
+            except Exception:
+                pass
+
+        if prev_soap is None:
+            return None
+
+        prev_dx_struct = prev_soap.get("diagnosis_struct")
+        if not isinstance(prev_dx_struct, dict):
+            return None
+
+        prior_blocks = prev_dx_struct.get("blocks")
+        if not isinstance(prior_blocks, list):
+            return None
+
+        clean_blocks = [copy.deepcopy(b) for b in prior_blocks if isinstance(b, dict)]
+        if not clean_blocks:
+            return None
+
+        return {"blocks": clean_blocks, "source": prev_name_used or ""}
+
     def apply_template_to_current_exam(
         self,
         template_dict: dict,
@@ -5321,10 +5371,20 @@ class App(tk.Tk):
         """
         Merge template (partial soap) into current exam payload and refresh UI.
 
-        - Templates in folder slug TEMPLATE_CATEGORY_INITIALS_SLUG may update diagnosis from the file.
-        - All other categories: ignore diagnosis in the template and, after merge, copy diagnosis
-          from the *previous* exam's saved JSON (nav order in self.exams) so it stays aligned with
-          the last visit; you can still edit diagnosis in the UI afterward.
+        Diagnosis-block handling:
+          - Templates in folder slug TEMPLATE_CATEGORY_INITIALS_SLUG keep their
+            own dx blocks (Initials are typically used on first visits).
+          - All other categories: the template's 'blocks' list inside
+            diagnosis_struct is stripped before the merge so stale codes baked
+            into the template file at save-time can never appear.  After the
+            UI is populated, the "Previous Visit Dx Codes" code path is invoked
+            (silently) to populate the dx blocks from the prior saved exam — the
+            same code the button on the Diagnosis page uses.  This is the single
+            source of truth for "carry diagnosis codes forward".
+
+        All non-block diagnosis fields (assessment, prognosis, causation,
+        imaging_recs, referrals, employment/work status, notes) come from the
+        template as the author saved them.
         """
         if not template_dict:
             return
@@ -5332,20 +5392,25 @@ class App(tk.Tk):
         if template_soap is None:
             template_soap = {k: v for k, v in template_dict.items() if k != "template_name"}
 
-        # Snapshot the original template soap BEFORE any keys are popped so we can
-        # use it as a fallback for diagnosis when there is no prior saved exam.
-        template_soap_original = dict(template_soap)
         template_soap = dict(template_soap)
         preserve_dx_from_prior_exam = (
             template_category_slug is not None
             and template_category_slug != TEMPLATE_CATEGORY_INITIALS_SLUG
         )
         if preserve_dx_from_prior_exam:
-            template_soap.pop("diagnosis_struct", None)
-            template_soap.pop("diagnosis", None)
+            # Strip the template's stored 'blocks' so they cannot bleed into the
+            # exam.  Other diagnosis fields (assessment, prognosis, causation,
+            # imaging_recs, referrals, work status, notes) come through as the
+            # template author saved them — typically empty for Therapy Only, etc.
+            ds = template_soap.get("diagnosis_struct")
+            if isinstance(ds, dict):
+                ds = dict(ds)
+                ds.pop("blocks", None)
+                template_soap["diagnosis_struct"] = ds
+            template_soap.pop("diagnosis", None)  # legacy plain-text field
 
-        # Optional: reset active Subjectives blocks to "(none)" so region change clears
-        # narrative (same idea as toggling region in the UI). Only affects merged
+        # Reset active Subjectives blocks to "(none)" so region change clears
+        # narrative (same as toggling region in the UI).  Only affects merged
         # "subjectives" when the template does NOT override that key.
         try:
             subj_page = getattr(self, "subjectives_page", None)
@@ -5374,12 +5439,105 @@ class App(tk.Tk):
                         if isinstance(bd, dict):
                             bd["narrative"] = ""
 
-        if preserve_dx_from_prior_exam:
-            self._overlay_diagnosis_from_prior_saved_exam(
-                merged_soap, template_fallback=template_soap_original
-            )
-
         self._apply_soap_to_ui(merged_soap)
+
+        # Post-load actions, all deferred via `after_idle` so they only run
+        # AFTER Tk has finished laying out every widget created by the template
+        # load above:
+        #   1. For non-Initials templates, auto-click "Previous Visit Dx Codes"
+        #      so the dx blocks are pulled from the prior saved exam.  Silent
+        #      on first visits (no prior exam = no popup).
+        #   2. Always pop up a confirmation dialog telling the user the
+        #      template is fully loaded, with an OK button to dismiss it.
+        try:
+            self.update_idletasks()
+        except Exception:
+            pass
+
+        def _finalize_template_load():
+            if preserve_dx_from_prior_exam:
+                try:
+                    self.diagnosis_page.load_prior_visit_dx_codes(silent=True)
+                except Exception:
+                    pass
+            try:
+                self.update_idletasks()
+            except Exception:
+                pass
+            try:
+                self._show_template_loaded_popup()
+            except Exception:
+                pass
+
+        try:
+            self.after_idle(_finalize_template_load)
+        except Exception:
+            _finalize_template_load()
+
+    def _show_template_loaded_popup(self):
+        """Modal confirmation that the template finished loading.
+
+        Shows two buttons:
+          - "Previous Visit Dx Codes" — same call as the button on the
+            Diagnosis page (non-silent: shows popups on first visits with no
+            prior exam).  Lets the user re-pull prior codes without leaving
+            this dialog.
+          - "Close" — dismisses the popup.
+        """
+        popup = tk.Toplevel(self)
+        popup.title("Template Loaded")
+        popup.transient(self)
+        popup.resizable(False, False)
+        popup.attributes("-topmost", True)
+
+        frame = ttk.Frame(popup, padding=16)
+        frame.pack(fill="both", expand=True)
+
+        ttk.Label(
+            frame,
+            text="Template is fully loaded.",
+            font=("Segoe UI", 10),
+        ).pack(anchor="w", pady=(0, 12))
+
+        btn_row = ttk.Frame(frame)
+        btn_row.pack(fill="x")
+
+        def _click_prev_visit_dx():
+            try:
+                self.diagnosis_page.load_prior_visit_dx_codes()
+            except Exception as e:
+                messagebox.showerror(
+                    "Previous Visit Dx Codes",
+                    f"Could not load prior exam diagnoses:\n{e}",
+                    parent=popup,
+                )
+
+        ttk.Button(
+            btn_row,
+            text="Previous Visit Dx Codes",
+            command=_click_prev_visit_dx,
+        ).pack(side="left")
+
+        ttk.Button(
+            btn_row,
+            text="Close",
+            command=popup.destroy,
+        ).pack(side="right")
+
+        popup.update_idletasks()
+        try:
+            self.update_idletasks()
+            px = self.winfo_rootx() + (self.winfo_width() // 2) - (popup.winfo_width() // 2)
+            py = self.winfo_rooty() + (self.winfo_height() // 3) - (popup.winfo_height() // 2)
+            popup.geometry(f"+{max(px, 0)}+{max(py, 0)}")
+        except Exception:
+            pass
+
+        try:
+            popup.grab_set()
+        except Exception:
+            pass
+        popup.focus_set()
 
     def _open_templates_popup(self):
         """Open a Toplevel: Save Template button + 6-column categorized template list."""
@@ -5451,7 +5609,7 @@ class App(tk.Tk):
                 apply_btn = ttk.Button(
                     row,
                     text=label,
-                    command=lambda d=data.copy(), p=popup, cat=slug: self._apply_template_and_close(
+                    command=lambda d=copy.deepcopy(data), p=popup, cat=slug: self._apply_template_and_close(
                         d, p, cat
                     ),
                 )

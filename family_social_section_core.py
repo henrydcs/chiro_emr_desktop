@@ -1576,6 +1576,35 @@ class FamilySocialSectionCore(ttk.Frame):
         underline annotations survive into the PDF.
         """
         from xml.sax.saxutils import escape as _xe
+
+        def _wrap_run_safe(chunk: str, tag: "str | None") -> str:
+            """Escape `chunk`, convert `\\n` to `<br/>`, and wrap each
+            `<br/>`-separated segment in the run's bold/italic/underline
+            tags.  Wrapping per-segment guarantees `<br/>` never appears
+            INSIDE the formatting tags — splitting on `<br/>` downstream
+            (e.g. in the PDF exporter) would otherwise produce unbalanced
+            fragments that ReportLab silently degrades to plain text.
+            """
+            safe = _xe(chunk).replace("\n\n", "<br/><br/>").replace("\n", "<br/>")
+            if not tag:
+                return safe
+            b = "B" in tag
+            it = "I" in tag
+            u = "U" in tag
+            if not (b or it or u):
+                return safe
+            wrapped_segments: list[str] = []
+            for seg in safe.split("<br/>"):
+                if seg:
+                    if u:
+                        seg = f"<u>{seg}</u>"
+                    if it:
+                        seg = f"<i>{seg}</i>"
+                    if b:
+                        seg = f"<b>{seg}</b>"
+                wrapped_segments.append(seg)
+            return "<br/>".join(wrapped_segments)
+
         runs = self._compose_builder_annotated_runs()
         plain = "".join(t for t, _, _ in runs).strip()
         if plain != self.text.get("1.0", tk.END).strip() or self._user_has_formatted:
@@ -1584,36 +1613,8 @@ class FamilySocialSectionCore(ttk.Frame):
             widget_runs = self._runs_from_text_widget()
             if not widget_runs:
                 return ""
-            parts: list[str] = []
-            for chunk, tag, _px in widget_runs:
-                safe = _xe(chunk).replace("\n\n", "<br/><br/>").replace("\n", "<br/>")
-                if tag:
-                    b = "B" in tag
-                    it = "I" in tag
-                    u = "U" in tag
-                    if u:
-                        safe = f"<u>{safe}</u>"
-                    if it:
-                        safe = f"<i>{safe}</i>"
-                    if b:
-                        safe = f"<b>{safe}</b>"
-                parts.append(safe)
-            return "".join(parts)
-        parts: list[str] = []
-        for chunk, tag, _px in runs:
-            safe = _xe(chunk).replace("\n\n", "<br/><br/>").replace("\n", "<br/>")
-            if tag:
-                b = "B" in tag
-                it = "I" in tag
-                u = "U" in tag
-                if u:
-                    safe = f"<u>{safe}</u>"
-                if it:
-                    safe = f"<i>{safe}</i>"
-                if b:
-                    safe = f"<b>{safe}</b>"
-            parts.append(safe)
-        return "".join(parts)
+            return "".join(_wrap_run_safe(chunk, tag) for chunk, tag, _px in widget_runs)
+        return "".join(_wrap_run_safe(chunk, tag) for chunk, tag, _px in runs)
 
     def get_builder_state(self) -> dict:
         """Serializable dropdown selections for exam JSON.

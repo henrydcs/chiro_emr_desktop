@@ -3248,14 +3248,169 @@ def _pdf_preserve_whitespace(plain: str) -> str:
     return plain
 
 
+# ReportLab's `Paragraph` mini-parser rejects empty inline formatting tags
+# such as `<b></b>`, `<i></i>`, `<u></u>` (and their nested combinations),
+# raising "Parse error: saw </para> instead of expected </u>".  These can be
+# emitted by the Family/Social sentence builder when the user has applied
+# bold/italic/underline styling to an empty selection, so we strip them before
+# handing the string to ReportLab.
+_PDF_EMPTY_INLINE_TAG_RE = re.compile(
+    r"<(b|i|u|strong|em)\b[^>]*>\s*</\1>",
+    re.IGNORECASE,
+)
+
+
+def _pdf_strip_empty_inline_tags(rich: str) -> str:
+    """Iteratively remove empty inline formatting tags from a rich XML string.
+
+    Each pass strips one nesting level of `<b></b>`, `<i></i>`, `<u></u>`,
+    `<strong></strong>`, `<em></em>` (whitespace inside the tag pair is
+    tolerated).  Repeats until a pass makes no further changes so that
+    nested combinations like `<b><i><u></u></i></b>` collapse entirely.
+    """
+    if not rich:
+        return rich
+    prev = None
+    cur = rich
+    while prev != cur:
+        prev = cur
+        cur = _PDF_EMPTY_INLINE_TAG_RE.sub("", cur)
+    return cur
+
+
+# Tokenizer for `_pdf_hoist_br_out_of_tags`: matches a <br/>, an opening
+# formatting tag (with optional attrs), or a closing formatting tag.  Anything
+# between matches is treated as literal text and passed through unchanged.
+_PDF_BR_HOIST_TOKEN_RE = re.compile(
+    r"<br\s*/?>|<(?:b|i|u|strong|em)\b[^>]*>|</(?:b|i|u|strong|em)\s*>",
+    re.IGNORECASE,
+)
+_PDF_TAG_NAME_RE = re.compile(r"</?(\w+)", re.IGNORECASE)
+
+
+def _pdf_close_open_tag(open_tag: str) -> str:
+    """Given an opening tag like `<b>` or `<b foo="x">`, return `</b>`."""
+    m = _PDF_TAG_NAME_RE.match(open_tag)
+    if not m:
+        return ""
+    return f"</{m.group(1).lower()}>"
+
+
+def _pdf_hoist_br_out_of_tags(rich: str) -> str:
+    """Close+reopen `<b>`/`<i>`/`<u>`/`<strong>`/`<em>` around every `<br/>`.
+
+    When a Tk `Text` selection spans a trailing newline (Shift+End / Shift+Down
+    while bold/underline is active), the saved rich-text ends up with
+    `<br/>` INSIDE the formatting tags, e.g.
+        prefix<b><u><br/>\\t• content</u></b> rest
+    Later splitting on `<br/>` produces two unbalanced fragments
+    (`prefix<b><u>` and `\\t• content</u></b> rest`) that ReportLab's
+    `Paragraph` parser rejects — silently degrading the bullet to plain text.
+
+    This pass rewrites the string to
+        prefix<b><u></u></b><br/><b><u>\\t• content</u></b> rest
+    which the empty-inline-tag stripper then collapses to
+        prefix<br/><b><u>\\t• content</u></b> rest
+    and the splitter produces balanced fragments that render correctly.
+    """
+    if not rich or "<br" not in rich.lower():
+        return rich
+    out: list[str] = []
+    stack: list[str] = []
+    pos = 0
+    for m in _PDF_BR_HOIST_TOKEN_RE.finditer(rich):
+        if m.start() > pos:
+            out.append(rich[pos:m.start()])
+        pos = m.end()
+        tok = m.group(0)
+        low = tok.lower()
+        if low.startswith("<br"):
+            for opener in reversed(stack):
+                out.append(_pdf_close_open_tag(opener))
+            out.append("<br/>")
+            out.extend(stack)
+        elif tok.startswith("</"):
+            mn = _PDF_TAG_NAME_RE.match(tok)
+            name = mn.group(1).lower() if mn else ""
+            for k in range(len(stack) - 1, -1, -1):
+                om = _PDF_TAG_NAME_RE.match(stack[k])
+                if om and om.group(1).lower() == name:
+                    stack.pop(k)
+                    break
+            out.append(tok)
+        else:
+            stack.append(tok)
+            out.append(tok)
+    if pos < len(rich):
+        out.append(rich[pos:])
+    return "".join(out)
+
+
+# Hoists leading whitespace from inside a formatting tag to before its opening
+# token, so that after `_pdf_hoist_br_out_of_tags` runs the bullet-detection
+# strip in `_fs_pdf_flowables_from_note_rich` (which looks at the literal
+# leading character of the rich line) can still see and remove the tab.
+_PDF_LEADING_WS_IN_TAG_RE = re.compile(
+    r"(<(?:b|i|u|strong|em)\b[^>]*>)(\s+)",
+    re.IGNORECASE,
+)
+
+
+def _pdf_hoist_leading_ws_out_of_tags(rich: str) -> str:
+    """Move leading whitespace (`\\t`, spaces, newlines) that sits immediately
+    after an opening formatting tag to before that opening tag.  Repeated
+    until stable so nested tags like `<b><u>\\tX</u></b>` collapse to
+    `\\t<b><u>X</u></b>`.  Whitespace carries no visible formatting so this
+    rewrite is purely cosmetic + structural.
+    """
+    if not rich:
+        return rich
+    prev = None
+    cur = rich
+    while prev != cur:
+        prev = cur
+        cur = _PDF_LEADING_WS_IN_TAG_RE.sub(r"\2\1", cur)
+    return cur
+
+
 def _pdf_preserve_whitespace_in_rich(rich: str) -> str:
     """Apply `_pdf_preserve_whitespace` to text nodes only inside a rich XML
-    string, leaving tag tokens (e.g. <b>, </i>) untouched."""
+    string, leaving tag tokens (e.g. <b>, </i>) untouched.  Empty inline
+    formatting tags are stripped first so ReportLab's `Paragraph` parser
+    never sees `<b></b>`/`<i></i>`/`<u></u>` shells that would otherwise
+    crash the PDF export.
+    """
+    rich = _pdf_hoist_br_out_of_tags(rich or "")
+    rich = _pdf_hoist_leading_ws_out_of_tags(rich)
+    rich = _pdf_strip_empty_inline_tags(rich)
     parts = _FS_XML_TOKEN.split(rich)
     return "".join(
         part if part.startswith("<") else _pdf_preserve_whitespace(part)
         for part in parts
     )
+
+
+# Match any XML/HTML tag so we can strip them as a last-resort fallback when
+# `Paragraph` rejects malformed rich markup.
+_PDF_ANY_TAG_RE = re.compile(r"<[^>]+>")
+
+
+def _safe_rich_paragraph(rich_or_safe: str, style):
+    """Build a ReportLab `Paragraph` from a rich-text string, but never crash.
+
+    If ReportLab's mini-XML parser rejects the markup (unbalanced tags,
+    unsupported constructs, etc.) we fall back to stripping every tag and
+    re-escaping the result so the PDF still renders the plain text instead
+    of aborting the entire export.
+    """
+    try:
+        return Paragraph(rich_or_safe, style)
+    except Exception:
+        try:
+            plain = _PDF_ANY_TAG_RE.sub("", rich_or_safe or "")
+            return Paragraph(_pdf_preserve_whitespace(xml_escape(plain)), style)
+        except Exception:
+            return Paragraph("", style)
 
 
 def _fs_pdf_tab_indent_pt(font_name: str, font_size: float) -> float:
@@ -3427,6 +3582,16 @@ def _fs_pdf_flowables_from_note_rich(
     font_name = getattr(base_style, "fontName", "Helvetica") or "Helvetica"
     font_size = getattr(base_style, "fontSize", 10) or 10
 
+    # Hoist any `<br/>` that sits INSIDE formatting tags (which happens when
+    # a Tk Text selection spans a trailing newline) so the split below never
+    # produces unbalanced fragments.  Also hoist leading whitespace out of
+    # opening tags so the bullet-detection strip below still sees the literal
+    # leading `\t`.  Finally strip the empty tag shells the hoist leaves
+    # behind at split boundaries.
+    rich = _pdf_hoist_br_out_of_tags(rich)
+    rich = _pdf_hoist_leading_ws_out_of_tags(rich)
+    rich = _pdf_strip_empty_inline_tags(rich)
+
     rich_lines = _FS_RICH_BR_SPLIT.split(rich)
     buf: list[str] = []
 
@@ -3442,7 +3607,7 @@ def _fs_pdf_flowables_from_note_rich(
             buf.clear()
             return
         chunk = "<br/>".join(_pdf_preserve_whitespace_in_rich(x) for x in cleaned)
-        out.append(Paragraph(chunk, base_style))
+        out.append(_safe_rich_paragraph(chunk, base_style))
         buf.clear()
 
     prev_was_tab_bullet = False
@@ -3457,7 +3622,7 @@ def _fs_pdf_flowables_from_note_rich(
         if not pending_bullet_lines:
             return
         combined = "<br/>".join(pending_bullet_lines)
-        out.append(Paragraph(combined, pending_bullet_hst))
+        out.append(_safe_rich_paragraph(combined, pending_bullet_hst))
         pending_bullet_lines = []
 
     for rich_line in rich_lines:
@@ -3545,7 +3710,7 @@ def build_family_social_flowables(soap: dict, styles) -> list:
                     for fl in _fs_pdf_flowables_from_note_rich(rich, fs_body, styles):
                         out.append(fl)
                 else:
-                    out.append(Paragraph(_pdf_preserve_whitespace_in_rich(rich), fs_body))
+                    out.append(_safe_rich_paragraph(_pdf_preserve_whitespace_in_rich(rich), fs_body))
             else:
                 for fl in _fs_pdf_flowables_from_note_plain(text, fs_body, styles):
                     out.append(fl)
@@ -3606,7 +3771,7 @@ def build_subjectives_canvas_flowables(subj: dict, styles) -> list:
                         for fl in _fs_pdf_flowables_from_note_rich(rich, body_style, styles):
                             out.append(fl)
                     else:
-                        out.append(Paragraph(_pdf_preserve_whitespace_in_rich(rich), body_style))
+                        out.append(_safe_rich_paragraph(_pdf_preserve_whitespace_in_rich(rich), body_style))
                 else:
                     for fl in _fs_pdf_flowables_from_note_plain(text, body_style, styles):
                         out.append(fl)
