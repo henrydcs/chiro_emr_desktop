@@ -429,19 +429,13 @@ class FamilySocialSectionCore(ttk.Frame):
         self._build_note_tab(self)
         self._mw_bound = False
 
-        if self._app is not None:
-            try:
-                self._app.dob_var.trace_add("write", lambda *_: self._on_demographics_changed())
-                self._app.exam_date_var.trace_add("write", lambda *_: self._on_demographics_changed())
-                for attr in ("first_name_var", "last_name_var", "doi_var"):
-                    v = getattr(self._app, attr, None)
-                    if v is not None and hasattr(v, "trace_add"):
-                        v.trace_add("write", lambda *_: self._on_demographics_changed())
-                hp = getattr(self._app, "hoi_page", None)
-                if hp is not None and hasattr(hp, "sex_var"):
-                    hp.sex_var.trace_add("write", lambda *_: self._on_demographics_changed())
-            except Exception:
-                pass
+        # Demographic-var traces (DOB, exam date, names, sex) are owned by
+        # `FamilySocialHistoryPage` instead of here.  See `tk_lifecycle.py`
+        # and `FamilySocialHistoryPage._register_demographic_traces` for why:
+        # the page outlives every section, so binding traces there makes the
+        # subscription lifetime match the listener lifetime and prevents
+        # stale callbacks firing on destroyed section text widgets after the
+        # user deletes / renames / re-loads a sub-heading.
 
         self._render_note_builder()
         self._wire_mousewheel()
@@ -1909,6 +1903,17 @@ class FamilySocialSectionCore(ttk.Frame):
                         var.set(items[0] if items else OPTION_OMIT)
 
     def _apply_builder_to_note(self) -> None:
+        # Belt-and-suspenders: if this section's text widget has already been
+        # destroyed (e.g. a stray late-arriving demographic-var trace fired
+        # after the page tore down this sub-heading), do nothing instead of
+        # raising `TclError: invalid command name`.  With the page-owned
+        # trace lifecycle this branch should be unreachable, but it keeps
+        # the surface defensive against any future code path that calls in.
+        try:
+            if not self.text.winfo_exists():
+                return
+        except tk.TclError:
+            return
         runs = self._compose_builder_annotated_runs()
         self.text.delete("1.0", tk.END)
         self._insert_builder_runs(runs)

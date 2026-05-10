@@ -17,6 +17,7 @@ from family_social_section_core import (
     TEMPLATES_FILENAME,
     VALID_DROPDOWN_BULLET_STYLES,
 )
+from tk_lifecycle import trace_for_lifetime
 
 # Exam JSON key `family_social_builder` top-level version (wraps per-block builder states).
 BUILDER_STATE_VERSION = 2
@@ -253,6 +254,69 @@ class FamilySocialHistoryPage(ttk.Frame):
 
         self._build_subsection_manager_tab()
         self.nb.bind("<<NotebookTabChanged>>", self._on_nb_tab_changed)
+
+        # Demographic-var traces (DOB / exam date / first / last / DOI / sex)
+        # were historically registered inside each `FamilySocialSectionCore`
+        # so the section could re-render its builder text whenever the user
+        # changed a demographic field.  But sections are TRANSIENT — the user
+        # can freely add, rename, or delete sub-headings — while the Tk
+        # variables they subscribed to live for the whole app session.  Each
+        # delete/reload cycle therefore left dead callbacks behind, raising
+        # `TclError: invalid command name` on every subsequent demographic
+        # write.
+        #
+        # Fix: register the trace ONCE on this page (which lives as long as
+        # the app does) and broadcast to every CURRENTLY-LIVE section.  The
+        # `trace_for_lifetime` helper still ties the trace to this page's
+        # `<Destroy>` event as a safety net, but in practice the page only
+        # dies with the app.
+        self._register_demographic_traces()
+
+    def _register_demographic_traces(self) -> None:
+        """Subscribe ONCE to the app-level demographic vars and fan out
+        changes to every currently-live section core.
+
+        Tolerates the app or any individual var being absent (e.g. tests,
+        partial construction order) — missing vars are simply skipped.
+        """
+        app = self._app
+        if app is None:
+            return
+        candidates: list[tk.Variable] = []
+        for attr in ("dob_var", "exam_date_var", "first_name_var", "last_name_var", "doi_var"):
+            v = getattr(app, attr, None)
+            if v is not None and hasattr(v, "trace_add"):
+                candidates.append(v)
+        hp = getattr(app, "hoi_page", None)
+        if hp is not None:
+            sx = getattr(hp, "sex_var", None)
+            if sx is not None and hasattr(sx, "trace_add"):
+                candidates.append(sx)
+        for var in candidates:
+            try:
+                trace_for_lifetime(
+                    self,
+                    var,
+                    "write",
+                    lambda *_a: self._on_demographics_changed_dispatch(),
+                )
+            except Exception:
+                pass
+
+    def _on_demographics_changed_dispatch(self) -> None:
+        """Notify every LIVE section that a demographic value changed.
+
+        Iterates over a snapshot of `_cores_by_id` so any callback that
+        mutates the dict (unlikely but possible) does not break the loop.
+        Each section's `_on_demographics_changed` is wrapped in a
+        try/except so one failing section cannot stop the others from
+        receiving the update.
+        """
+        for core in list(self._cores_by_id.values()):
+            try:
+                core._on_demographics_changed()
+            except Exception:
+                pass
 
     def _on_skip_section_toggled(self) -> None:
         app = self._app
