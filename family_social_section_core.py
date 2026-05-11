@@ -632,28 +632,8 @@ class FamilySocialSectionCore(ttk.Frame):
 
     # --- note tab ---
     def _build_note_tab(self, parent: ttk.Frame) -> None:
-        # Outer note-tab scroller (for smaller laptop heights). Existing inner builder
-        # and canvas-editor wheel behavior remains independent.
-        note_canvas = tk.Canvas(parent, highlightthickness=0)
-        note_sb = ttk.Scrollbar(parent, orient="vertical", command=note_canvas.yview)
-        note_canvas.configure(yscrollcommand=note_sb.set)
-        note_canvas.pack(side="left", fill="both", expand=True)
-        note_sb.pack(side="right", fill="y")
-
-        note_inner = ttk.Frame(note_canvas)
-        note_window = note_canvas.create_window((0, 0), window=note_inner, anchor="nw")
-
-        def _sync_note_scrollregion(_e=None) -> None:
-            note_canvas.configure(scrollregion=note_canvas.bbox("all"))
-
-        def _sync_note_inner_width(event: tk.Event) -> None:
-            note_canvas.itemconfigure(note_window, width=event.width)
-
-        note_inner.bind("<Configure>", _sync_note_scrollregion)
-        note_canvas.bind("<Configure>", _sync_note_inner_width)
-
-        self.note_tab_canvas = note_canvas
-        self._note_tab_outer = parent
+        note_inner = ttk.Frame(parent)
+        note_inner.pack(fill="both", expand=True)
 
         demo_row = ttk.Frame(note_inner)
         demo_row.pack(fill="x", padx=10, pady=(4, 2))
@@ -899,12 +879,6 @@ class FamilySocialSectionCore(ttk.Frame):
                 return "break"
             return None
 
-        nt = getattr(self, "_note_tab_outer", None)
-        nc = getattr(self, "note_tab_canvas", None)
-        if nt is not None and nc is not None and w is not None and self._widget_is_descendant_of(nt, w):
-            if self._scroll_canvas_y(nc, event):
-                return "break"
-            return None
         return None
 
     @staticmethod
@@ -952,45 +926,31 @@ class FamilySocialSectionCore(ttk.Frame):
             pass
 
     def _run_with_note_builder_scroll_preserved(self, fn) -> None:
-        """Run `fn` while keeping BOTH the inner sentence-builder canvas AND the
-        outer note-tab canvas viewport stable in *absolute pixels*.
+        """Run `fn` while keeping the sentence-builder canvas viewport stable in *absolute pixels*.
 
         Restoration is deferred via after_idle so Tk can process the <Configure>
-        event that updates each scrollregion *before* yview_moveto is called.
+        event that updates the scrollregion *before* yview_moveto is called.
 
         Why pixels and not fractions: when assoc columns are destroyed and
-        recreated, each canvas's bbox("all") (and therefore its scrollregion
+        recreated, the canvas bbox("all") (and therefore its scrollregion
         height) changes. yview()[0] is a fraction of that height, so restoring
         the same fraction shifts the visible content. We capture the absolute
         top-pixel of the viewport, then re-derive the new fraction against the
         new scrollregion in the after_idle callback.
-
-        The outer note-tab canvas matters most when this page is embedded in
-        another area (e.g. Subjectives on Canvas) where header content above
-        the page forces the outer canvas to actually be scrolled.
         """
         nb = getattr(self, "note_builder_canvas", None)
-        nt = getattr(self, "note_tab_canvas", None)
 
         nb_pix = self._capture_canvas_top_pixel(nb)
-        nt_pix = self._capture_canvas_top_pixel(nt)
 
         fn()
 
-        if nb_pix is not None or nt_pix is not None:
+        if nb_pix is not None:
             _nb = nb
-            _nt = nt
             _nb_saved = nb_pix
-            _nt_saved = nt_pix
 
             def _restore() -> None:
                 self._restore_canvas_top_pixel(_nb, _nb_saved)
-                self._restore_canvas_top_pixel(_nt, _nt_saved)
 
-            # Two deferred passes: the first lets Tk recompute scrollregion after
-            # the rebuild; the second covers a follow-up <Configure> burst that
-            # can fire one tick later when nested LabelFrames re-layout. Without
-            # the second pass, the outer canvas can still drift on slow systems.
             self.after_idle(_restore)
             self.after_idle(lambda: self.after(0, _restore))
 
@@ -1980,21 +1940,11 @@ class FamilySocialSectionCore(ttk.Frame):
     _SCROLL_BTN_AT_TOP_EPSILON = 0.001
 
     def _find_enclosing_scroll_canvas(self, w: tk.Misc) -> tk.Canvas | None:
-        """Walk up the master chain until we hit one of this page's known scrollable canvases.
-
-        Returns the inner builder canvas if encountered first (it's the one that
-        actually shifts when assoc columns rebuild). Falls back to the outer
-        note-tab canvas if only that one is in the chain.
-        """
-        known: list[tk.Misc] = []
+        """Walk up the master chain until we hit the sentence-builder scroll canvas."""
         nb = getattr(self, "note_builder_canvas", None)
-        nt = getattr(self, "note_tab_canvas", None)
-        if nb is not None:
-            known.append(nb)
-        if nt is not None:
-            known.append(nt)
-        if not known:
+        if nb is None:
             return None
+        known: list[tk.Misc] = [nb]
         cur: tk.Misc | None = w
         # Bound the walk to avoid runaway loops on malformed widget trees.
         for _ in range(64):
