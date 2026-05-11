@@ -3803,6 +3803,18 @@ def build_hoi_canvas_flowables(hoi_struct: dict, styles) -> list:
     return build_subjectives_canvas_flowables({"canvas": canvas}, styles)
 
 
+def build_objectives_canvas_flowables(objectives_struct: dict, styles) -> list:
+    """
+    Objectives Canvas: same JSON shape as Subjectives canvas, nested under
+    objectives_struct['canvas'].
+    """
+    objectives_struct = objectives_struct or {}
+    canvas = objectives_struct.get("canvas")
+    if not isinstance(canvas, dict):
+        return []
+    return build_subjectives_canvas_flowables({"canvas": canvas}, styles)
+
+
 # =======================================================
 # Payload parsing
 # =======================================================
@@ -4340,19 +4352,25 @@ def build_combined_pdf(path: str, payloads: list):
         
         # Objectives
         obj_flow = build_objectives_flowables(objectives_struct, styles, doc_width)
+        obj_canvas_flow = build_objectives_canvas_flowables(objectives_struct, styles)
 
         safe_obj = (objectives_text or "").strip()
 
         # ✅ If nothing is selected/entered, do NOT print the Objectives title at all
-        if obj_flow or safe_obj:
+        if obj_flow or safe_obj or obj_canvas_flow:
             story.append(Paragraph("<b>OBJECTIVES</b>", styles["Heading2"]))
             story.append(Spacer(1, 0.10 * inch))
 
             if obj_flow:
                 story.extend(obj_flow)
-            else:
-                safe_obj = xml_escape(safe_obj).replace("\n\n", "<br/><br/>").replace("\n", "<br/>")
-                story.append(Paragraph(safe_obj, styles["BodyText"]))
+            elif safe_obj:
+                safe_obj_esc = xml_escape(safe_obj).replace("\n\n", "<br/><br/>").replace("\n", "<br/>")
+                story.append(Paragraph(safe_obj_esc, styles["BodyText"]))
+
+            if obj_canvas_flow:
+                if obj_flow or safe_obj:
+                    story.append(Spacer(1, 0.10 * inch))
+                story.extend(obj_canvas_flow)
 
             story.append(Spacer(1, 0.10 * inch))
 

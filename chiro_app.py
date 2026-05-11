@@ -744,12 +744,22 @@ class App(tk.Tk):
                         from pdf_export import objectives_struct_to_live_preview_runs
                         obj_struct = self.objectives_page.to_dict() or {}
                         obj_runs = objectives_struct_to_live_preview_runs(obj_struct)
-                        if obj_runs:
+                        obj_canvas_runs = []
+                        if hasattr(self.objectives_page, "get_live_preview_runs_objectives_canvas"):
+                            obj_canvas_runs = (
+                                self.objectives_page.get_live_preview_runs_objectives_canvas() or []
+                            )
+                        if obj_runs or obj_canvas_runs:
                             if runs:
                                 runs.append(("\n\n", None))
                             runs.append(("OBJECTIVES\n", "H_BOLD"))
                             runs.append(("\n", None))
-                            runs.extend(obj_runs)
+                            if obj_runs:
+                                runs.extend(obj_runs)
+                            if obj_canvas_runs:
+                                if obj_runs:
+                                    runs.append(("\n\n", None))
+                                runs.extend(obj_canvas_runs)
                     except Exception:
                         pass
 
@@ -3710,7 +3720,7 @@ class App(tk.Tk):
             app=self,
             clear_assoc_on_primary_clear=True,
         )
-        self.objectives_page = ObjectivesPage(self.content, self.schedule_autosave)
+        self.objectives_page = ObjectivesPage(self.content, self.schedule_autosave, app=self)
         self.diagnosis_page = DiagnosisPage(
             self.content,
             self.schedule_autosave,
@@ -6080,6 +6090,9 @@ class App(tk.Tk):
             obj_struct["global"] = g if isinstance(g, dict) else {}
             b = raw.get("blocks")
             obj_struct["blocks"] = b if isinstance(b, list) else []
+            canv = raw.get("canvas")
+            if isinstance(canv, dict):
+                obj_struct["canvas"] = canv
         else:
             obj_struct = {"global": {}, "blocks": []}
 

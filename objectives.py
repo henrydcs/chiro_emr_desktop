@@ -3,6 +3,11 @@ import tkinter as tk
 from tkinter import ttk, messagebox
 from config import REGION_OPTIONS, REGION_LABELS, REGION_MUSCLES
 
+from family_social_history_page import FamilySocialHistoryPage
+
+# Independent template file for Objectives on Canvas (dropdown builders + template editor).
+OBJECTIVES_CANVAS_TEMPLATES_FILENAME = "objectives_canvas_doc_templates.json"
+
 # Severity scale (0-9)
 SEVERITY_LABELS = {
     0: "Within Normal Levels",
@@ -1764,9 +1769,10 @@ class ObjectivesBlock(ttk.Frame):
 # Objectives Page (Global + Blocks)
 # -----------------------------
 class ObjectivesPage(ttk.Frame):
-    def __init__(self, parent, on_change_callback):
+    def __init__(self, parent, on_change_callback, app=None):
         super().__init__(parent)
         self.on_change_callback = on_change_callback
+        self._app = app
 
         #self.global_panel = VitalsInspectionPanel(self, self._handle_change)
 
@@ -1775,7 +1781,51 @@ class ObjectivesPage(ttk.Frame):
 
         self._build_ui()
 
+    def _on_objectives_canvas_change(self) -> None:
+        cb = self.on_change_callback
+        if not callable(cb):
+            return
+        try:
+            cb(regen_moi=False)
+        except TypeError:
+            cb()
+
+    def _go_objectives_canvas(self) -> None:
+        self._obj_canvas_frame.tkraise()
+
+    def _go_objectives_main(self) -> None:
+        self._obj_main_frame.tkraise()
+
+    def _confirm_reset_objectives_canvas(self) -> None:
+        ok = messagebox.askyesno(
+            "Reset Objectives Canvas",
+            "This will clear ONLY the Objectives Canvas area for this exam.\n\n"
+            "It will NOT touch your main Objectives blocks or global vitals/inspection, "
+            "and it will not delete any saved template files.\n\n"
+            "Continue?",
+        )
+        if not ok:
+            return
+        try:
+            cp = getattr(self, "objectives_canvas_page", None)
+            if cp is not None:
+                cp.reset()
+        except Exception:
+            pass
+        self._on_objectives_canvas_change()
+
+    def get_live_preview_runs_objectives_canvas(self):
+        """Runs from Objectives Canvas (FamilySocialHistoryPage)."""
+        try:
+            cp = getattr(self, "objectives_canvas_page", None)
+            if cp is None or not hasattr(cp, "get_live_preview_runs"):
+                return []
+            return cp.get_live_preview_runs() or []
+        except Exception:
+            return []
+
     def show_global(self):
+        self._go_objectives_main()
         self.global_wrap.tkraise()
         # force expanded so it doesn't look blank
         try:
@@ -1786,6 +1836,7 @@ class ObjectivesPage(ttk.Frame):
             pass
 
     def show_blocks(self):
+        self._go_objectives_main()
         self.block_container.tkraise()        
     
     
@@ -1904,17 +1955,28 @@ class ObjectivesPage(ttk.Frame):
     
     
     def _build_ui(self):
-        top = ttk.Frame(self)
+        self._page_stack = ttk.Frame(self)
+        self._page_stack.pack(fill="both", expand=True)
+        self._page_stack.grid_rowconfigure(0, weight=1)
+        self._page_stack.grid_columnconfigure(0, weight=1)
+
+        self._obj_main_frame = ttk.Frame(self._page_stack)
+        self._obj_main_frame.grid(row=0, column=0, sticky="nsew")
+        self._obj_canvas_frame = ttk.Frame(self._page_stack)
+        self._obj_canvas_frame.grid(row=0, column=0, sticky="nsew")
+
+        top = ttk.Frame(self._obj_main_frame)
         top.pack(fill="x", padx=10, pady=(10, 0))
 
         ttk.Button(top, text="Add Block", command=self.add_block).pack(side="left")
         ttk.Button(top, text="Reset Objectives", command=self.reset).pack(side="left", padx=(8, 0))
+        ttk.Button(top, text="Objectives on CANVAS", command=self._go_objectives_canvas).pack(side="left", padx=(8, 0))
 
         ttk.Label(top, text="Blocks:").pack(side="left", padx=(16, 6))
         self.btns_frame = ttk.Frame(top)
         self.btns_frame.pack(side="left")
 
-        self.stack = ttk.Frame(self)
+        self.stack = ttk.Frame(self._obj_main_frame)
         self.stack.pack(fill="both", expand=True, padx=0, pady=0)
         self.stack.grid_rowconfigure(0, weight=1)
         self.stack.grid_columnconfigure(0, weight=1)
@@ -1933,6 +1995,28 @@ class ObjectivesPage(ttk.Frame):
 
         # Default view = blocks
         self.block_container.tkraise()
+
+        canvas_top = ttk.Frame(self._obj_canvas_frame)
+        canvas_top.pack(fill="x", padx=10, pady=(10, 6))
+        ttk.Button(canvas_top, text="Back to Objectives", command=self._go_objectives_main).pack(side="left")
+        ttk.Button(
+            canvas_top,
+            text="Reset Objectives Canvas",
+            command=self._confirm_reset_objectives_canvas,
+        ).pack(side="left", padx=(8, 0))
+
+        self.objectives_canvas_page = FamilySocialHistoryPage(
+            self._obj_canvas_frame,
+            "Objectives on CANVAS",
+            self._on_objectives_canvas_change,
+            app=self._app,
+            templates_filename=OBJECTIVES_CANVAS_TEMPLATES_FILENAME,
+            section_header=None,
+            clear_assoc_on_primary_clear=True,
+        )
+        self.objectives_canvas_page.pack(fill="both", expand=True, padx=10, pady=(0, 10))
+
+        self._go_objectives_main()
 
     def _rebuild_block_buttons(self):
         for c in self.btns_frame.winfo_children():
@@ -1978,13 +2062,36 @@ class ObjectivesPage(ttk.Frame):
             self.on_change_callback()
 
     def has_content(self) -> bool:
-        return self.global_panel.has_content() or any(b.has_content() for b in self.blocks)
+        if self.global_panel.has_content() or any(b.has_content() for b in self.blocks):
+            return True
+        try:
+            cp = getattr(self, "objectives_canvas_page", None)
+            if cp is not None and cp.has_content():
+                return True
+        except Exception:
+            pass
+        return False
 
     def to_dict(self) -> dict:
-        return {
+        out = {
             "global": self.global_panel.to_dict(),
             "blocks": [b.to_dict() for b in self.blocks],
         }
+        try:
+            cp = getattr(self, "objectives_canvas_page", None)
+            if cp is not None:
+                out["canvas"] = {
+                    "text": cp.get_value(),
+                    "builder_state": cp.get_builder_state(),
+                    "section_skipped": (
+                        cp.get_section_skipped()
+                        if hasattr(cp, "get_section_skipped")
+                        else False
+                    ),
+                }
+        except Exception:
+            pass
+        return out
 
     def from_dict(self, data: dict):
         data = data or {}
@@ -2018,6 +2125,47 @@ class ObjectivesPage(ttk.Frame):
             for c in self.block_container.winfo_children():
                 c.pack_forget()
 
+        try:
+            cp = getattr(self, "objectives_canvas_page", None)
+            if cp is not None:
+                canvas_state = (data or {}).get("canvas") or {}
+                if isinstance(canvas_state, dict):
+                    canvas_text = canvas_state.get("text") or ""
+                    canvas_builder = canvas_state.get("builder_state")
+                    cp.set_value(
+                        canvas_text,
+                        builder_state=(
+                            canvas_builder if isinstance(canvas_builder, dict) else None
+                        ),
+                    )
+                    if hasattr(cp, "set_section_skipped"):
+                        cp.set_section_skipped(
+                            bool(canvas_state.get("section_skipped"))
+                        )
+                else:
+                    cp.set_value("")
+                    if hasattr(cp, "set_section_skipped"):
+                        cp.set_section_skipped(False)
+        except Exception:
+            pass
+
+        # After reload, push builder output into each subsection's note text (same as a
+        # dropdown change) so Textbox Edit / Live Preview match without a manual click.
+        if isinstance(data, dict) and "canvas" in data:
+            def _sync_obj_canvas_notes():
+                try:
+                    cp = getattr(self, "objectives_canvas_page", None)
+                    if cp is None:
+                        return
+                    for core in cp._cores_by_id.values():
+                        fn = getattr(core, "_apply_builder_to_note", None)
+                        if callable(fn):
+                            fn()
+                except Exception:
+                    pass
+
+            self.after_idle(_sync_obj_canvas_notes)
+
         self._handle_change()
 
     def reset(self):
@@ -2031,6 +2179,13 @@ class ObjectivesPage(ttk.Frame):
         self.blocks.clear()
         self.active_index = -1
         self._rebuild_block_buttons()
+
+        try:
+            cp = getattr(self, "objectives_canvas_page", None)
+            if cp is not None:
+                cp.reset()
+        except Exception:
+            pass
 
         self._handle_change()
 
