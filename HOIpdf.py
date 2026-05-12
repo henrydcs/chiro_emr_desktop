@@ -133,6 +133,8 @@ def build_rof_flowables(
         rof_struct = {}
 
     rof_mode = _clean_text(rof_struct.get("mode", ""))
+    input_mode = _clean_text(rof_struct.get("input_mode", ""))
+    heading_only = input_mode == "HeadingOnly"
 
     # ✅ MODE FILTERING (controls where this section prints)
     if allow_modes is not None and rof_mode not in allow_modes:
@@ -156,19 +158,24 @@ def build_rof_flowables(
             heading = rof_mode
 
     rof_paragraphs = []
-    if rof_auto:
-        rof_paragraphs.append(rof_auto)
-    if rof_manual:
-        rof_paragraphs.append(rof_manual)
+    if not heading_only:
+        if rof_auto:
+            rof_paragraphs.append(rof_auto)
+        if rof_manual:
+            rof_paragraphs.append(rof_manual)
 
-    if not rof_paragraphs and legacy_rof:
-        rof_paragraphs = [legacy_rof]
+        if not rof_paragraphs and legacy_rof:
+            rof_paragraphs = [legacy_rof]
 
-    if not rof_paragraphs:
+    if not rof_paragraphs and not heading_only:
         return []
 
     out.append(Paragraph(f"<b>{xml_escape(heading)}</b>", styles["Heading2"]))
     out.append(Spacer(1, 0.08 * inch))
+
+    if heading_only:
+        out.append(Spacer(1, 0.14 * inch))
+        return out
 
     for i, para in enumerate(rof_paragraphs):
         safe_para = _format_multiline(para)

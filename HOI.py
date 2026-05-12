@@ -616,19 +616,24 @@ class HOIPage(ttk.Frame):
 
         structured = _clean(self.rof_auto_paragraph_var.get())
         textwrite = _clean(self.rof_manual_paragraph_var.get())
+        entry_mode = (self.rof_input_mode_var.get() or "Structured").strip()
+        heading_only = entry_mode == "HeadingOnly"
 
-        if not (structured or textwrite):
+        if not heading_only and not (structured or textwrite):
             return []
 
         runs.append((title + "\n", "H_BOLD"))
         runs.append(("\n", None))
+
+        if heading_only:
+            return runs
 
         # ✅ Always show structured paragraph first (Intro OR ROF imaging)
         if structured:
             runs.append((structured + "\n\n", None))
 
         # ✅ Only show manual paragraph when Text/Write is active
-        if (self.rof_input_mode_var.get() == "Text/Write") and textwrite:
+        if entry_mode == "Text/Write" and textwrite:
             runs.append((textwrite + "\n\n", None))
 
         return runs
@@ -1124,7 +1129,8 @@ class HOIPage(ttk.Frame):
         #Notes for Type of Injury
         self.course_notes_var = tk.StringVar(value="")  # type.course_notes (new)
 
-        self.rof_input_mode_var = tk.StringVar(value="Structured")  # "Structured" or "Text/Write"
+        # "Structured", "Text/Write", or "HeadingOnly" (heading prints; intro/ROF body omitted)
+        self.rof_input_mode_var = tk.StringVar(value="Structured")
         
         # Optional providers
         self._regions_provider = None
@@ -2081,6 +2087,14 @@ class HOIPage(ttk.Frame):
             top,
             text="Text/Write",
             value="Text/Write",
+            variable=self.rof_input_mode_var,
+            #command=self._on_rof_input_mode_changed,
+        ).pack(side="left", padx=(8, 0))
+
+        ttk.Radiobutton(
+            top,
+            text="Heading Only, No Paragraph",
+            value="HeadingOnly",
             variable=self.rof_input_mode_var,
             #command=self._on_rof_input_mode_changed,
         ).pack(side="left", padx=(8, 0))
