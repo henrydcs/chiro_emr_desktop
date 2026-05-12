@@ -4263,10 +4263,12 @@ def build_combined_pdf(path: str, payloads: list):
         # HOI (History of Injury)
         soap = payload.get("soap", {}) or {}
         hoi_struct = soap.get("hoi_struct") or {}
+        rof_struct = hoi_struct.get("rof") if isinstance(hoi_struct.get("rof"), dict) else {}
+        hpi_heading_only = (rof_struct.get("input_mode") or "").strip() == "HeadingOnly"
         hoi_flow = build_hoi_flowables(hoi_struct, styles, doc_width)
         if hoi_flow:
             story.extend(hoi_flow)
-            story.append(Spacer(1, 0.12 * inch))
+            story.append(Spacer(1, 0.08 * inch if hpi_heading_only else 0.12 * inch))
 
         hoi_canvas_flow = build_hoi_canvas_flowables(hoi_struct, styles)
         if hoi_canvas_flow:

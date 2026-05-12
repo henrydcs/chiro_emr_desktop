@@ -623,10 +623,13 @@ class HOIPage(ttk.Frame):
             return []
 
         runs.append((title + "\n", "H_BOLD"))
-        runs.append(("\n", None))
 
+        # Heading only: stop here — same rhythm as SUBJECTIVES (heading then one blank via
+        # chiro_app's \n\n before the next block); do not add the extra \n used before body text.
         if heading_only:
             return runs
+
+        runs.append(("\n", None))
 
         # ✅ Always show structured paragraph first (Intro OR ROF imaging)
         if structured:

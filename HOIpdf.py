@@ -171,11 +171,12 @@ def build_rof_flowables(
         return []
 
     out.append(Paragraph(f"<b>{xml_escape(heading)}</b>", styles["Heading2"]))
-    out.append(Spacer(1, 0.08 * inch))
-
     if heading_only:
-        out.append(Spacer(1, 0.14 * inch))
+        # Tighter than body+H2: aligns visual gap with SUBJECTIVES → subheading spacing.
+        out.append(Spacer(1, 0.05 * inch))
         return out
+
+    out.append(Spacer(1, 0.08 * inch))
 
     for i, para in enumerate(rof_paragraphs):
         safe_para = _format_multiline(para)

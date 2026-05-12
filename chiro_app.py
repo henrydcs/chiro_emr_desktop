@@ -660,33 +660,48 @@ class App(tk.Tk):
             # Build runs in PDF order: Beginning (Initial/Re-Exam/Final) → Subjectives → Objectives → ROF → Assessment
             runs = []
             try:
+                hpi_beginning_added = False
                 # 1. Beginning: Initial / Re-Exam / Final (HPI, Status Update, Final Visit Summary)
                 if hasattr(self.hoi_page, "get_live_preview_runs_beginning"):
                     beginning_runs = self.hoi_page.get_live_preview_runs_beginning() or []
                     if beginning_runs:
                         runs.extend(beginning_runs)
+                        hpi_beginning_added = True
                 elif hasattr(self.hoi_page, "get_live_preview_runs"):
                     # Fallback: if new methods don't exist, use old behavior for beginning only when not ROF
                     all_rof = self.hoi_page.get_live_preview_runs() or []
                     mode = (getattr(self.hoi_page, "rof_mode_var", None) or type("", (), {"get": lambda: "ROF"})()).get()
                     if all_rof and (mode or "").strip() not in ("ROF", ""):
                         runs.extend(all_rof)
+                        hpi_beginning_added = True
+
+                # HPI "Heading only": use a single newline before MOI/canvas (closer to SUBJECTIVES rhythm).
+                tight_after_hpi = False
+                if hpi_beginning_added:
+                    try:
+                        im = getattr(self.hoi_page, "rof_input_mode_var", None)
+                        if im is not None and (im.get() or "").strip() == "HeadingOnly":
+                            tight_after_hpi = True
+                    except Exception:
+                        pass
 
                 # 2. HOI History (MOI) — after History of Present Illness, before Subjectives
                 if hasattr(self.hoi_page, "get_live_preview_runs_moi"):
                     moi_runs = self.hoi_page.get_live_preview_runs_moi() or []
                     if moi_runs:
                         if runs:
-                            runs.append(("\n\n", None))
+                            runs.append(("\n", None) if tight_after_hpi else ("\n\n", None))
                         runs.extend(moi_runs)
+                        tight_after_hpi = False
 
                 # 2b. HOI Canvas — after MOI (same Family/Social-style builders; mirrors PDF)
                 if hasattr(self.hoi_page, "get_live_preview_runs_hoi_canvas"):
                     hoi_canvas_runs = self.hoi_page.get_live_preview_runs_hoi_canvas() or []
                     if hoi_canvas_runs:
                         if runs:
-                            runs.append(("\n\n", None))
+                            runs.append(("\n", None) if tight_after_hpi else ("\n\n", None))
                         runs.extend(hoi_canvas_runs)
+                        tight_after_hpi = False
 
                 # 3. Subjectives
                 if hasattr(self, "subjectives_page") and self.subjectives_page is not None:
