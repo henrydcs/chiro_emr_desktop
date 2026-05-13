@@ -1256,15 +1256,13 @@ class DiagnosisPage(ttk.Frame):
         self.text_area.rowconfigure(0, weight=1)   # tkRaise sections get the space
         self.text_area.rowconfigure(1, weight=0)   # Notes takes natural height
 
-        # Top: tkRaise container (Dx Block, Assessment, Prognosis, etc.)
-        top_frame = ttk.Frame(self.text_area)
-        top_frame.grid(row=0, column=0, sticky="nsew", pady=(0, 10))
-        top_frame.columnconfigure(0, weight=1)
-        top_frame.rowconfigure(0, weight=1)
+        # Vertically scrollable host for Dx Block / Assessment / … (toolbar H-scroll unchanged)
+        self.dx_sections_scroll = ScrollFrame(self.text_area)
+        self.dx_sections_scroll.grid(row=0, column=0, sticky="nsew", pady=(0, 10))
 
         # ---- tkRaise container (stacked section frames) ----
-        self._dx_container = ttk.Frame(top_frame)
-        self._dx_container.grid(row=0, column=0, sticky="nsew")
+        self._dx_container = ttk.Frame(self.dx_sections_scroll.content)
+        self._dx_container.pack(fill="both", expand=True)
         self._dx_container.grid_rowconfigure(0, weight=1)
         self._dx_container.grid_columnconfigure(0, weight=1)
 
