@@ -76,6 +76,7 @@ from pdf_export import (
     referral_letter_editable_text,
     referral_letter_should_generate,
     referral_provider_types_in_payload,
+    _norm_imaging_body_part_key,
 )
 from pdf_export import diagnosis_struct_to_live_preview_runs
 import copy
@@ -131,6 +132,16 @@ TEMPLATE_CATEGORIES = [
 # Only "initials" templates may replace diagnosis from the template file;
 # other categories keep diagnosis aligned with the previous saved exam (see apply_template_to_current_exam).
 TEMPLATE_CATEGORY_INITIALS_SLUG = "initials"
+
+
+def _canonical_imaging_body_part_label(body_part: str, body_parts: list[str]) -> str | None:
+    """Map an imaging body-part label to the matching entry in ``body_parts`` (spacing/case)."""
+    nk = _norm_imaging_body_part_key(body_part)
+    for bp in body_parts:
+        if _norm_imaging_body_part_key(bp) == nk:
+            return bp
+    return None
+
 
 def get_templates_root() -> Path:
     """
@@ -2471,10 +2482,31 @@ class App(tk.Tk):
         """
         exam = (self.current_exam.get() or "").strip()
         if not exam:
+            messagebox.showwarning(
+                "Imaging Letter Diagnosis Selection",
+                "No exam (visit) is selected.\n\n"
+                "Choose an exam tab first, then add imaging recommendations.",
+                parent=self,
+            )
             return
         payload = self.make_payload() or {}
         body_parts, _choices_map = imaging_dx_choices_by_body_part(payload, modality)
-        if body_part not in body_parts:
+        if not body_parts:
+            messagebox.showwarning(
+                "Imaging Letter Diagnosis Selection",
+                "No imaging body regions were found for this modality.\n\n"
+                "Save the chart or try adding the imaging line again.",
+                parent=self,
+            )
+            return
+        canonical_bp = _canonical_imaging_body_part_label(body_part, body_parts)
+        if canonical_bp is None:
+            messagebox.showwarning(
+                "Imaging Letter Diagnosis Selection",
+                f"Could not match this imaging line ({modality} — {body_part}) to the chart.\n\n"
+                "Try removing and re-adding the recommendation.",
+                parent=self,
+            )
             return
         all_choices = imaging_dx_all_ui_choices(payload)
         if not all_choices:
@@ -2492,11 +2524,11 @@ class App(tk.Tk):
         mod_map = exam_map.get(mod_key, {})
         if not isinstance(mod_map, dict):
             mod_map = {}
-        current_icd = (mod_map.get(body_part) or "").strip()
-        picked = self._prompt_single_imaging_dx_choice(modality, body_part, all_choices, current_icd)
+        current_icd = (mod_map.get(canonical_bp) or "").strip()
+        picked = self._prompt_single_imaging_dx_choice(modality, canonical_bp, all_choices, current_icd)
         if not picked:
             return
-        mod_map[body_part] = picked
+        mod_map[canonical_bp] = picked
         exam_map[mod_key] = mod_map
         self.imaging_letter_dx_selections[exam] = exam_map
         try:
@@ -2815,11 +2847,67 @@ class App(tk.Tk):
             pass
 
     def _open_imaging_recommendation_letter_editor(self, modality: str) -> None:
-        """Open editable text popup for a modality-specific imaging recommendation letter."""
+        """Generate/open the modality imaging letter PDF (vault/imaging), then open the text editor."""
         exam = (self.current_exam.get() or "").strip()
         if not exam:
+            messagebox.showwarning(
+                "Imaging Recommendation Letter",
+                "No exam (visit) is selected.\n\nChoose an exam tab first.",
+                parent=self,
+            )
             return
+        if not self._ensure_reportlab():
+            return
+
         payload = self.make_payload() or {}
+        pr = self.get_current_patient_root() or ""
+        if pr:
+            try:
+                vault_paths = self._export_imaging_recommendation_letter_vault(payload, pr)
+                mod_slug = safe_slug(modality).lower().replace(" ", "_")
+                letter_pdf = ""
+                for pth in vault_paths or []:
+                    low = os.path.basename(pth).lower()
+                    if f"__letter_{mod_slug}.pdf" in low:
+                        letter_pdf = pth
+                        break
+                if letter_pdf:
+                    self.open_pdf_file(letter_pdf)
+                else:
+                    messagebox.showwarning(
+                        "Imaging Recommendation Letter",
+                        f"No PDF was generated for {modality}.\n\n"
+                        "Add this modality under Imaging Recommendations on the Diagnosis page, "
+                        "then try again (or use Master Save).",
+                        parent=self,
+                    )
+                try:
+                    self.write_settings({
+                        "last_imaging_letter_pdfs": self.last_imaging_letter_pdf_paths,
+                        "imaging_letter_dx_selections": self.imaging_letter_dx_selections,
+                        "imaging_letter_text_overrides": self.imaging_letter_text_overrides,
+                    })
+                except Exception:
+                    pass
+                try:
+                    self.doc_vault_page.refresh_current_folder()
+                except Exception:
+                    pass
+            except Exception as e:
+                messagebox.showerror(
+                    "Imaging Recommendation Letter",
+                    f"Could not create the letter PDF:\n\n{e}",
+                    parent=self,
+                )
+        else:
+            messagebox.showinfo(
+                "Imaging Recommendation Letter",
+                "Load or create a patient chart first to generate letter PDFs "
+                "(they save under Doc Vault → imaging).\n\n"
+                "You can still edit letter text below.",
+                parent=self,
+            )
+
         mod_key = (modality or "").strip().lower()
 
         exam_pick_map = self.imaging_letter_dx_selections.get(exam, {})

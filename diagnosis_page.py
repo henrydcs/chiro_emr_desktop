@@ -343,7 +343,8 @@ class DiagnosisPage(ttk.Frame):
 
         self._build_ui()
         self.add_block()  # start with #1
-        
+        self._apply_collapse_states(startup=True)
+
     def _on_blocks_inner_configure(self, _evt=None):
         # Update the scrollable region to encompass the inner frame
         try:
@@ -390,9 +391,6 @@ class DiagnosisPage(ttk.Frame):
         except Exception:
             pass
 
-
-        # apply startup collapsed state
-        self._apply_collapse_states(startup=True)
     def _refresh_imaging_list(self):
         self.imaging_list.delete(0, "end")
         for it in self.imaging_recs:
@@ -432,8 +430,15 @@ class DiagnosisPage(ttk.Frame):
         if callable(cb):
             try:
                 cb(modality)
-            except Exception:
-                pass
+            except Exception as e:
+                try:
+                    messagebox.showerror(
+                        "Imaging Recommendation Letter",
+                        f"Could not open the imaging letter:\n\n{e}",
+                        parent=self.winfo_toplevel(),
+                    )
+                except Exception:
+                    pass
 
     def _add_imaging_rec(self):
         mod = _clean(self.img_mod_var.get())
