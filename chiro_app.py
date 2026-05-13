@@ -5625,7 +5625,7 @@ class App(tk.Tk):
 
         def _click_prev_visit_dx():
             try:
-                self.diagnosis_page.load_prior_visit_dx_codes()
+                self.diagnosis_page.confirm_load_prior_visit_dx_codes(messagebox_parent=popup)
             except Exception as e:
                 messagebox.showerror(
                     "Previous Visit Dx Codes",

@@ -391,6 +391,25 @@ class DiagnosisPage(ttk.Frame):
         except Exception:
             pass
 
+    def _sync_dx_toolbar_hscroll_geometry(self, _evt=None):
+        """Keep the diagnosis top toolbar horizontally scrollable (full row in one strip)."""
+        canvas = getattr(self, "toolbar_row_canvas", None)
+        inner = getattr(self, "_toolbar_row_inner", None)
+        rid = getattr(self, "_toolbar_row_window_id", None)
+        if canvas is None or inner is None or rid is None:
+            return
+        try:
+            canvas.update_idletasks()
+            w_req = max(inner.winfo_reqwidth(), 1)
+            h_req = max(inner.winfo_reqheight(), 1)
+            canvas.itemconfigure(rid, width=w_req, height=h_req)
+            canvas.configure(height=h_req)
+            bbox = canvas.bbox("all")
+            if bbox:
+                canvas.configure(scrollregion=bbox)
+        except tk.TclError:
+            pass
+
     def _refresh_imaging_list(self):
         self.imaging_list.delete(0, "end")
         for it in self.imaging_recs:
@@ -1085,22 +1104,9 @@ class DiagnosisPage(ttk.Frame):
         fr.columnconfigure(0, weight=1)
         fr.rowconfigure(0, weight=1)
 
-        # Action row above the diagnosis blocks: manual button to pull the prior
-        # exam's diagnosis codes into the current Dx Blocks (independent of the
-        # template auto-fill path).  Useful when templates fail to carry codes
-        # forward, or when the user wants to re-pull prior codes after editing.
-        action_row = ttk.Frame(fr)
-        action_row.pack(fill="x", padx=padx, pady=(10, 0))
-        self.prev_visit_dx_btn = ttk.Button(
-            action_row,
-            text="Previous Visit Dx Codes",
-            command=self.load_prior_visit_dx_codes,
-        )
-        self.prev_visit_dx_btn.pack(side="left")
-
         # Diagnosis blocks container (scrollable) — same structure as before, now inside tkRaise
         self.blocks_frame = ttk.Frame(fr)
-        self.blocks_frame.pack(fill="both", expand=True, padx=padx, pady=(6, 10))
+        self.blocks_frame.pack(fill="both", expand=True, padx=padx, pady=(10, 10))
 
         blocks_container = ttk.Frame(self.blocks_frame)
         blocks_container.pack(fill="both", expand=True)
@@ -1157,22 +1163,54 @@ class DiagnosisPage(ttk.Frame):
         self.main_screen = ttk.Frame(self)
         self.main_screen.pack(fill="both", expand=True)
 
-        # Top controls
+        # Top controls — one horizontal scrollbar under the entire toolbar row so
+        # wide layouts (through Current Work Status + Show/Hide Text Box) are reachable.
         top = ttk.Frame(self.main_screen)
         top.pack(fill="x", padx=padx, pady=(10, 6))
 
-        ttk.Button(top, text="Add Dx", command=self.add_block).pack(side="left")
-        ttk.Button(top, text="Reset Dx", command=self._confirm_reset).pack(side="left", padx=(8, 0))
+        self.toolbar_row_canvas = tk.Canvas(top, highlightthickness=0, height=1)
+        self.toolbar_row_hsb = ttk.Scrollbar(
+            top,
+            orient="horizontal",
+            command=self.toolbar_row_canvas.xview,
+        )
+        self.toolbar_row_canvas.configure(xscrollcommand=self.toolbar_row_hsb.set)
+
+        self.toolbar_row_canvas.pack(side="top", fill="both", expand=True)
+        self.toolbar_row_hsb.pack(side="bottom", fill="x")
+
+        toolbar_inner = ttk.Frame(self.toolbar_row_canvas)
+        self._toolbar_row_inner = toolbar_inner
+        self._toolbar_row_window_id = self.toolbar_row_canvas.create_window(
+            (0, 0), window=toolbar_inner, anchor="nw"
+        )
+
+        toolbar_inner.bind(
+            "<Configure>",
+            lambda e: self.after_idle(self._sync_dx_toolbar_hscroll_geometry),
+        )
+        self.toolbar_row_canvas.bind(
+            "<Configure>",
+            lambda e: self.after_idle(self._sync_dx_toolbar_hscroll_geometry),
+        )
+
+        ttk.Button(toolbar_inner, text="Add Dx", command=self.add_block).pack(side="left")
+        ttk.Button(toolbar_inner, text="Reset Dx", command=self._confirm_reset).pack(
+            side="left", padx=(8, 0)
+        )
+        self.prev_visit_dx_btn = ttk.Button(
+            toolbar_inner,
+            text="Previous Visit Dx Codes",
+            command=self.confirm_load_prior_visit_dx_codes,
+        )
+        self.prev_visit_dx_btn.pack(side="left", padx=(8, 0))
 
         self._section_buttons = {}
-        ttk.Label(top, text="Sections:").pack(side="left", padx=(18, 8))
-
-        block_btns = ttk.Frame(top)
-        block_btns.pack(side="left", fill="x", expand=True)
+        ttk.Label(toolbar_inner, text="Sections:").pack(side="left", padx=(18, 8))
 
         def _add_dx_btn(name):
             btn = tk.Button(
-                block_btns, text=name, font=("Segoe UI", 10),
+                toolbar_inner, text=name, font=("Segoe UI", 10),
                 relief="raised", bd=1,
                 command=lambda n=name: self._show_dx_block(n),
             )
@@ -1187,12 +1225,19 @@ class DiagnosisPage(ttk.Frame):
         _add_dx_btn("Referrals")
         _add_dx_btn("Current Work Status")
 
-        # Collapse toggles (right side)
-        self.toggle_blocks_btn = ttk.Button(top, text="Hide Blocks", command=self._toggle_blocks)
-        #self.toggle_blocks_btn.pack(side="right")
+        self.toggle_text_btn = ttk.Button(
+            toolbar_inner, text="Show Text Box", command=self._toggle_text
+        )
+        self.toggle_text_btn.pack(side="left", padx=(16, 8))
 
-        self.toggle_text_btn = ttk.Button(top, text="Show Text Box", command=self._toggle_text)
-        self.toggle_text_btn.pack(side="right", padx=(0, 8))
+        # Optional — pack into toolbar_inner when re-enabled.
+        self.toggle_blocks_btn = ttk.Button(toolbar_inner, text="Hide Blocks", command=self._toggle_blocks)
+        # self.toggle_blocks_btn.pack(side="left", padx=(8, 0))
+
+        try:
+            self.after_idle(self._sync_dx_toolbar_hscroll_geometry)
+        except Exception:
+            pass
 
         ttk.Separator(self.main_screen).pack(fill="x", padx=padx, pady=(6, 10))      
 
@@ -1277,6 +1322,11 @@ class DiagnosisPage(ttk.Frame):
             self.toggle_blocks_btn.configure(text="Hide Blocks" if self.blocks_visible.get() else "Show Blocks")
             self.toggle_text_btn.configure(text="Hide Text Box" if self.text_visible.get() else "Show Text Box")
 
+        try:
+            self.after_idle(self._sync_dx_toolbar_hscroll_geometry)
+        except Exception:
+            pass
+
     def _toggle_blocks(self):
         self.blocks_visible.set(not self.blocks_visible.get())
         self._apply_collapse_states()
@@ -1295,6 +1345,16 @@ class DiagnosisPage(ttk.Frame):
         )
         if ok:
             self.reset()
+
+    def confirm_load_prior_visit_dx_codes(self, messagebox_parent: tk.Misc | None = None) -> None:
+        parent = messagebox_parent if messagebox_parent is not None else self.winfo_toplevel()
+        if not messagebox.askyesno(
+            "Previous Visit Dx Codes",
+            "Do you want to change the diagnosis to that of the previous visit?",
+            parent=parent,
+        ):
+            return
+        self.load_prior_visit_dx_codes(silent=False)
 
     # ---------- blocks ----------
     def add_block(self):
