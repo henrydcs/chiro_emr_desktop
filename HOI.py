@@ -386,14 +386,14 @@ class ImagingBlock(ttk.Frame):
 
 class HOIPage(ttk.Frame):
     """
-    HOI page with dropdowns/radio buttons that regenerate the MOI paragraph when
-    Auto-generate is enabled.
+    HOI page with dropdowns/radio buttons that regenerate the MOI narrative from structured
+    fields while the MOI text has not been hand-edited in the session.
 
     Key behavior:
-    - Auto-generate ON (default): structured dropdown changes refresh the MOI text.
-    - After you type or paste directly in the MOI textbox, refreshes stop until you click
-      "Regenerate now" or turn Auto-generate off and back on (so drafts are not erased).
-    - Auto-generate OFF: dropdown changes no longer overwrite MOI unless you click Regenerate.
+    - Dropdown / structured-field changes refresh the MOI text until you edit the MOI
+      textbox directly (typing or paste). Then refreshes stop until you click
+      "Regenerate now" (discards edits and rebuilds from current dropdown values).
+    - Saved exams reload the MOI text as stored; nothing is regenerated on open.
 
     MOI text uses patient first name from demographics when provided (else "The patient")
     and pronouns from Sex / Type of Injury choices.
@@ -1142,14 +1142,11 @@ class HOIPage(ttk.Frame):
         # Guards
         self._loading = False
         self._internal_set_moi = False  # prevent MOI typing from turning off auto during programmatic writes
-        self._moi_user_customized = False  # True once user edits MOI directly; clears on Regenerate / auto re-enabled
+        self._moi_user_customized = False  # True once user edits MOI directly; clears on Regenerate
 
         # Text widget bindings
         self._text_bindings: list[tuple[tk.Text, tk.StringVar]] = []
         self._moi_text: tk.Text | None = None
-
-        # Auto toggle
-        self.auto_moi_var = tk.BooleanVar(value=True)
 
         # ----------------
         # Vars (PDF-compatible keys)
@@ -1223,13 +1220,6 @@ class HOIPage(ttk.Frame):
     def _changed(self):
         if callable(self.on_change_callback):
             self.on_change_callback()
-
-    def _on_auto_moi_toggled(self):
-        """User turned Auto-generate on — rebuild MOI from structured fields."""
-        if self._loading:
-            return
-        if self.auto_moi_var.get():
-            self._regen_moi_now(force=True)
 
     def _wire_traces(self):
         regen_drivers = [
@@ -1451,10 +1441,8 @@ class HOIPage(ttk.Frame):
     def _regen_moi_now(self, *, force: bool = False):
         if self._loading:
             return
-        # User typed in the MOI box — don't overwrite until Regenerate now or Auto is re-enabled.
+        # User typed in the MOI box — don't overwrite until Regenerate now.
         if not force and getattr(self, "_moi_user_customized", False):
-            return
-        if not self.auto_moi_var.get() and not force:
             return
 
         injury = _clean(self.injury_type_var.get())
@@ -1775,17 +1763,14 @@ class HOIPage(ttk.Frame):
     def _build_history_block(self, parent):
         f = ttk.LabelFrame(parent, text="History of Injury")
 
-        toggle_row = ttk.Frame(f)
-        toggle_row.pack(fill="x", padx=10, pady=(10, 6))
+        regen_row = ttk.Frame(f)
+        regen_row.pack(fill="x", padx=10, pady=(10, 6))
 
-        ttk.Checkbutton(
-            toggle_row,
-            text="Auto-generate MOI from dropdowns (recommended)",
-            variable=self.auto_moi_var,
-            command=self._on_auto_moi_toggled,
+        ttk.Button(
+            regen_row,
+            text="Regenerate now",
+            command=lambda: self._regen_moi_now(force=True),
         ).pack(side="left")
-
-        ttk.Button(toggle_row, text="Regenerate now", command=lambda: self._regen_moi_now(force=True)).pack(side="left", padx=(10, 0))
 
         ttk.Label(f, text="Mechanism of Injury (MOI):").pack(anchor="w", padx=10, pady=(6, 4))
 
@@ -2276,7 +2261,7 @@ class HOIPage(ttk.Frame):
             "other": {"text": self.other_notes_var.get()},
 
             "struct": {
-                "auto_moi": bool(self.auto_moi_var.get()),
+                "moi_hand_edited": bool(getattr(self, "_moi_user_customized", False)),
                 "sex": self.sex_var.get(),
                 "course": self.course_var.get(),
                 "course_notes": self.course_notes_var.get(),  # ✅ NEW (best place)
@@ -2392,7 +2377,12 @@ class HOIPage(ttk.Frame):
 
             struct = data.get("struct") or {}
             self.course_notes_var.set(struct.get("course_notes", ""))
-            self.auto_moi_var.set(bool(struct.get("auto_moi", True)))
+
+            if "moi_hand_edited" in struct:
+                self._moi_user_customized = bool(struct["moi_hand_edited"])
+            else:
+                # Legacy: auto_moi false meant dropdown-driven regen did not overwrite MOI.
+                self._moi_user_customized = not bool(struct.get("auto_moi", True))
 
             self.sex_var.set(struct.get("sex", self.SEX_OPTIONS[0]))
             self.course_var.set(struct.get("course", self.COURSE[0]))
@@ -2488,8 +2478,6 @@ class HOIPage(ttk.Frame):
         self._on_rof_input_mode_changed()
         self._regen_rof_now()
 
-
-        self._regen_moi_now()
         self._show_block(self.active_block.get())
 
     def _restore_listbox_selection(self, lb, all_items, selected_items):
@@ -2599,8 +2587,6 @@ class HOIPage(ttk.Frame):
         self._loading = True
         try:
             self.active_block.set("History of Injury")
-
-            self.auto_moi_var.set(True)
 
             self.moi_var.set("")
             self.doi_var.set("")

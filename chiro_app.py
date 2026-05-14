@@ -5367,11 +5367,11 @@ class App(tk.Tk):
             self.plan_page.load_struct(plan)
         else:
             self.plan_page.load_struct({"plan_text": str(plan or ""), "auto_enabled": False})
-                # Regen MOI so regions sentence includes subjectives (HOI loads before subjectives)
+
+        # Regen MOI so injured-regions paragraph can reflect subjectives (HOI loads before subjectives).
         try:
-            if hasattr(self, "hoi_page") and self.hoi_page is not None:
-                if self.hoi_page.auto_moi_var.get():
-                    self.hoi_page._regen_moi_now()
+            if getattr(self, "hoi_page", None) is not None:
+                self.hoi_page._regen_moi_now()
         except Exception:
             pass
 
