@@ -410,6 +410,39 @@ class DiagnosisPage(ttk.Frame):
         except tk.TclError:
             pass
 
+    def _fit_dx_block_notes_height(self, _event=None):
+        """Grow or shrink Dx Block general notes Text to fit wrapped lines (height in rows)."""
+        txt = getattr(self, "dx_block_notes", None)
+        if txt is None:
+            return
+        try:
+            if not txt.winfo_exists():
+                return
+        except tk.TclError:
+            return
+        min_lines = 4
+        try:
+            txt.update_idletasks()
+            body = txt.get("1.0", "end-1c")
+            if not body.strip():
+                h = min_lines
+            else:
+                try:
+                    dl = int(txt.tk.call(txt._w, "count", "-update", "-displaylines", "1.0", "end-1c"))
+                except (tk.TclError, ValueError):
+                    dl = body.count("\n") + 1
+                h = max(min_lines, dl)
+
+            cur = txt.cget("height")
+            try:
+                cur_i = int(float(cur))
+            except (TypeError, ValueError):
+                cur_i = min_lines
+            if cur_i != h:
+                txt.configure(height=h)
+        except (tk.TclError, ValueError):
+            pass
+
     def _refresh_imaging_list(self):
         self.imaging_list.delete(0, "end")
         for it in self.imaging_recs:
@@ -1148,9 +1181,30 @@ class DiagnosisPage(ttk.Frame):
             pass
         def _sync_dx_notes(*_):
             self._sync_notes_to_var(self.dx_block_notes, self.dx_block_notes_var)
+            self.after_idle(self._fit_dx_block_notes_height)
+
         self.dx_block_notes.bind("<KeyRelease>", lambda e: _sync_dx_notes())
+
         self.dx_block_notes.bind("<<Paste>>", lambda e: self.after(1, _sync_dx_notes))
         self.dx_block_notes.bind("<<Cut>>", lambda e: self.after(1, _sync_dx_notes))
+
+        _notes_resize_state: dict[str, int | None] = {"last_w": None}
+
+        def _on_notes_row_configure(event):
+            if event.widget is not notes_row:
+                return
+            try:
+                w = notes_row.winfo_width()
+            except tk.TclError:
+                return
+            if _notes_resize_state["last_w"] == w:
+                return
+            _notes_resize_state["last_w"] = w
+            self.after_idle(self._fit_dx_block_notes_height)
+
+        notes_row.bind("<Configure>", _on_notes_row_configure)
+
+        self.after_idle(self._fit_dx_block_notes_height)
 
         return fr
     
@@ -1510,6 +1564,7 @@ class DiagnosisPage(ttk.Frame):
             if hasattr(self, "dx_block_notes") and self.dx_block_notes.winfo_exists():
                 self.dx_block_notes.delete("1.0", "end")
                 self.dx_block_notes.insert("1.0", s or "")
+                self.after_idle(self._fit_dx_block_notes_height)
         try:
             if hasattr(self, "text") and self.text.winfo_exists():
                 self.text.edit_modified(False)
@@ -1724,6 +1779,8 @@ class DiagnosisPage(ttk.Frame):
                         w.insert("1.0", val)
                     except Exception:
                         pass
+
+            self.after_idle(self._fit_dx_block_notes_height)
 
             self.prognosis_var.set(data.get("prognosis") or "(select)")
 
