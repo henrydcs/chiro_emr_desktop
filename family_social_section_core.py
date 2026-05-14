@@ -679,10 +679,11 @@ class FamilySocialSectionCore(ttk.Frame):
         canvas = tk.Canvas(builder_outer, highlightthickness=0, height=440)
         sb = ttk.Scrollbar(builder_outer, orient="vertical", command=canvas.yview)
         self.note_scroll_frame = ttk.Frame(canvas)
-        self.note_scroll_frame.bind(
-            "<Configure>", lambda e: canvas.configure(scrollregion=canvas.bbox("all"))
+        self.note_scroll_frame.bind("<Configure>", lambda _e: self._sync_note_builder_scrollregion())
+        self._note_builder_canvas_window_id = canvas.create_window(
+            (0, 0), window=self.note_scroll_frame, anchor="nw"
         )
-        canvas.create_window((0, 0), window=self.note_scroll_frame, anchor="nw")
+        canvas.bind("<Configure>", self._on_note_builder_canvas_configure)
         canvas.configure(yscrollcommand=sb.set)
         canvas.pack(side="left", fill="both", expand=True)
         sb.pack(side="right", fill="y")
@@ -808,6 +809,41 @@ class FamilySocialSectionCore(ttk.Frame):
         lb.bind("<Button-4>", _on_wheel)
         lb.bind("<Button-5>", _on_wheel)
 
+    def _bind_sentence_builder_readonly_combobox_wheel(self, cb: ttk.Combobox) -> None:
+        """Wheel over sentence-builder single-choice combobox scrolls the builder canvas only.
+
+        Tk applies `TCombobox` class bindings before the toplevel routed handler, so the
+        value can change under the pointer unless we bind on the widget first and break.
+        """
+        nb = getattr(self, "note_builder_canvas", None)
+        if nb is None:
+            return
+
+        def _wheel(_e: tk.Event, canvas=nb) -> str:
+            try:
+                if canvas.winfo_exists():
+                    self._scroll_canvas_y(canvas, _e)
+            except Exception:
+                pass
+            return "break"
+
+        def _bind_on(w: tk.Misc | None, depth: int = 0) -> None:
+            if w is None or depth > 6:
+                return
+            try:
+                w.bind("<MouseWheel>", _wheel)
+                w.bind("<Button-4>", _wheel)
+                w.bind("<Button-5>", _wheel)
+            except Exception:
+                pass
+            try:
+                for ch in w.winfo_children():
+                    _bind_on(ch, depth + 1)
+            except Exception:
+                pass
+
+        _bind_on(cb)
+
     @staticmethod
     def _filter_items_by_prefix(items: list[str], query: str) -> list[int]:
         """Return source indexes of `items` whose text starts with `query` (case-insensitive).
@@ -830,6 +866,48 @@ class FamilySocialSectionCore(ttk.Frame):
         if not isinstance(sel, set):
             return None
         return sorted(int(x) for x in sel)
+
+    # Extra pixels below the last builder row so the scrollbar range fully clears
+    # the last dropdown (ttk layout + canvas embedding often clips the bottom otherwise).
+    _NOTE_BUILDER_BOTTOM_SPACER_PX = 28
+
+    def _on_note_builder_canvas_configure(self, event: tk.Event) -> None:
+        """Keep the embedded frame width in sync with the canvas interior width."""
+        canvas = getattr(self, "note_builder_canvas", None)
+        wid = getattr(self, "_note_builder_canvas_window_id", None)
+        if canvas is None or wid is None:
+            return
+        try:
+            if not canvas.winfo_exists():
+                return
+        except Exception:
+            return
+        # Scrollbar is packed beside the canvas, not inside it — full width is correct.
+        try:
+            canvas.itemconfigure(wid, width=event.width)
+        except Exception:
+            pass
+
+    def _sync_note_builder_scrollregion(self, _event: tk.Event | None = None) -> None:
+        canvas = getattr(self, "note_builder_canvas", None)
+        if canvas is None:
+            return
+        try:
+            if not canvas.winfo_exists():
+                return
+        except Exception:
+            return
+        try:
+            self.note_scroll_frame.update_idletasks()
+        except Exception:
+            pass
+        bbox = canvas.bbox("all")
+        if not bbox:
+            return
+        try:
+            canvas.configure(scrollregion=bbox)
+        except Exception:
+            pass
 
     def _scroll_canvas_y(self, canvas: tk.Canvas, event: tk.Event) -> bool:
         """Return True if wheel was handled (Windows delta or Linux b4/b5)."""
@@ -2775,14 +2853,22 @@ class FamilySocialSectionCore(ttk.Frame):
                     cb = ttk.Combobox(fr, textvariable=var, values=display_items, state="readonly", width=80)
                     cb.pack(fill="x")
                     cb.bind("<<ComboboxSelected>>", lambda e: self._on_builder_selection_changed())
+                    self._bind_sentence_builder_readonly_combobox_wheel(cb)
                     row_vars.append(var)
                     meta_row.append({"multi": False, "lb": None, "items": items, "fmt_var": _fmt_var})
 
             self.note_combo_vars.append(row_vars)
             self._note_builder_meta.append(meta_row)
 
-        self.note_scroll_frame.update_idletasks()
-        self.note_builder_canvas.configure(scrollregion=self.note_builder_canvas.bbox("all"))
+        pad_h = self._NOTE_BUILDER_BOTTOM_SPACER_PX
+        tail = tk.Frame(self.note_scroll_frame, height=pad_h)
+        tail.pack(fill="x")
+        tail.pack_propagate(False)
+
+        self._sync_note_builder_scrollregion()
+        # ttk + Windows can finalize heights one idle tick late; second sync catches the true extent.
+        self.after_idle(self._sync_note_builder_scrollregion)
+
         self._update_age_hint()
         if snapshot is not None:
             try:
