@@ -6,7 +6,7 @@ import json
 import os
 import re
 from datetime import datetime
-from tkinter import ttk, messagebox
+from tkinter import ttk, messagebox, colorchooser
 
 import tkinter as tk
 import tkinter.font as tkfont
@@ -24,6 +24,20 @@ _BUILDER_SLOT_DEFAULT = object()
 # Prepended to each builder dropdown (not stored in JSON). Selecting it drops that clause from output.
 OPTION_OMIT = "(Omit — exclude from sentence)"
 TEMPLATE_BAND_COLORS = ("#9D9D9D", "#C5C5C5")
+
+# Associated-dropdown slot colors (DD1, DD2, DD3, ...). DD1 starts orange by request.
+ASSOC_SLOT_DEFAULT_COLORS: tuple[tuple[str, str], ...] = (
+    ("Orange", "#f39c12"),  # DD1
+    ("Green", "#2e7d32"),   # DD2
+    ("Blue", "#1e88e5"),    # DD3
+    ("Purple", "#8e24aa"),
+    ("Teal", "#00897b"),
+    ("Brown", "#6d4c41"),
+    ("Red", "#c62828"),
+    ("Pink", "#d81b60"),
+    ("Indigo", "#3949ab"),
+    ("Gray", "#616161"),
+)
 
 # Parts prefixed with this character attach to the previous run with no intervening space
 # (used for intra-line header / detail segments in Associated Multiple bullet lines).
@@ -412,12 +426,15 @@ class FamilySocialSectionCore(ttk.Frame):
         self._app = app
         self.section = section
         self.templates = section.setdefault("templates", [])
+        # Global color map for DD slot borders (DD1/DD2/...) across this whole section.
+        self._assoc_slot_colors = section.setdefault("assoc_slot_colors", [])
         self._persist_all = persist_all_callback
         self.note_combo_vars: list[list[tk.StringVar]] = []
         self._note_builder_meta: list[list[dict]] = []
         self._visit_skip_by_tid: dict[int, bool] = {}
         # Note/Builder-only visual promotion target per template (does not affect print order).
         self._builder_dd_top_by_tid: dict[int, int] = {}
+        self._builder_dd_repack_by_tid: dict[int, object] = {}
         self._skip_checkbox_vars: dict[int, tk.BooleanVar] = {}
         self._clear_assoc_on_primary_clear = bool(clear_assoc_on_primary_clear)
         if token_feedback_var is not None:
@@ -2143,7 +2160,7 @@ class FamilySocialSectionCore(ttk.Frame):
         except Exception:
             pass
 
-    def _render_associated_multi_row(self, card: ttk.Frame, dd: dict) -> tuple[tk.StringVar, dict]:
+    def _render_associated_multi_row(self, card: ttk.Frame, dd: dict, dd_slot_index: int = 0) -> tuple[tk.StringVar, dict]:
         """
         Build primary multi-select plus one illuminated paired list box per ordered primary pick.
         """
@@ -2168,6 +2185,7 @@ class FamilySocialSectionCore(ttk.Frame):
         }
 
         dd_ref = dd
+        dd_slot_i = max(0, int(dd_slot_index))
 
         top_fr = ttk.Frame(card)
         top_fr.pack(fill="x")
@@ -2332,8 +2350,9 @@ class FamilySocialSectionCore(ttk.Frame):
                 if pidx not in selected_set_primary or not (0 <= pidx < len(primary_items)):
                     continue
                 ptitle = primary_items[pidx]
-                hilite = meta.get("highlight_primary_idx") == pidx
-                bd = "#f39c12" if hilite else "#c8c8c8"
+                # Keep border colors stable by DD slot order (DD1/DD2/DD3...) so
+                # colors stay consistent across templates regardless of source item index.
+                bd = self._assoc_slot_color_for_dd(dd_ref, dd_slot_i)
 
                 outer_col = tk.Frame(assoc_host, highlightthickness=2, highlightbackground=bd)
                 outer_col.pack(fill="x", pady=(8, 0))
@@ -2673,6 +2692,7 @@ class FamilySocialSectionCore(ttk.Frame):
         self.note_combo_vars = []
         self._note_builder_meta = []
         self._skip_checkbox_vars = {}
+        self._builder_dd_repack_by_tid = {}
 
         self._prefix_resolved_labels: list[ttk.Label] = []
 
@@ -2739,21 +2759,27 @@ class FamilySocialSectionCore(ttk.Frame):
 
             active_switch_row: list[ttk.Frame | None] = [None]
 
-            def _refresh_embedded_switch_row(_tid: int = tid, _dds: list[dict] = dds) -> None:
-                old_row = active_switch_row[0]
+            def _refresh_embedded_switch_row(
+                _tid: int = tid,
+                _dds: list[dict] = dds,
+                _active_switch_row: list[ttk.Frame | None] = active_switch_row,
+                _dd_frames: dict[int, ttk.LabelFrame] = dd_frames,
+                _display_order_fn=_display_order_for_template,
+            ) -> None:
+                old_row = _active_switch_row[0]
                 if old_row is not None:
                     try:
                         old_row.destroy()
                     except Exception:
                         pass
-                    active_switch_row[0] = None
+                    _active_switch_row[0] = None
                 if len(_dds) <= 1:
                     return
-                order_idxs = _display_order_for_template()
+                order_idxs = _display_order_fn()
                 if not order_idxs:
                     return
                 top_di = order_idxs[0]
-                top_fr = dd_frames.get(top_di)
+                top_fr = _dd_frames.get(top_di)
                 if top_fr is None:
                     return
                 switch_row = ttk.Frame(top_fr)
@@ -2773,22 +2799,26 @@ class FamilySocialSectionCore(ttk.Frame):
                         font=("Segoe UI", 8),
                         padx=5,
                         pady=1,
-                        command=lambda _di=di, _tid2=_tid: (
-                            self._builder_dd_top_by_tid.__setitem__(_tid2, _di),
-                            _repack_dropdown_blocks(),
-                        ),
+                        command=lambda _di=di, _tid2=_tid: self._on_template_dd_quick_switch(_tid2, _di),
                     ).pack(side="left", padx=(0, 4))
-                active_switch_row[0] = switch_row
+                _active_switch_row[0] = switch_row
 
-            def _repack_dropdown_blocks(_tid: int = tid) -> None:
-                order_idxs = _display_order_for_template()
-                for wid in dd_host.winfo_children():
+            def _repack_dropdown_blocks(
+                _tid: int = tid,
+                _dd_host: ttk.Frame = dd_host,
+                _dd_frames: dict[int, ttk.LabelFrame] = dd_frames,
+                _display_order_fn=_display_order_for_template,
+                _refresh_fn=_refresh_embedded_switch_row,
+            ) -> None:
+                order_idxs = _display_order_fn()
+                for wid in _dd_host.winfo_children():
                     wid.pack_forget()
                 for di2 in order_idxs:
-                    fr2 = dd_frames.get(di2)
+                    fr2 = _dd_frames.get(di2)
                     if fr2 is not None:
                         fr2.pack(fill="x", pady=3)
-                _refresh_embedded_switch_row()
+                _refresh_fn()
+            self._builder_dd_repack_by_tid[tid] = _repack_dropdown_blocks
 
             for di, dd in enumerate(dds):
                 items = list(dd.get("items") or [])
@@ -2796,7 +2826,7 @@ class FamilySocialSectionCore(ttk.Frame):
                 fr = ttk.LabelFrame(dd_host, text=f"Template {tmpl['id']} ({dd_name})")
                 dd_frames[di] = fr
                 if bool(dd.get("associated_multi")):
-                    var_am, meta_am = self._render_associated_multi_row(fr, dd)
+                    var_am, meta_am = self._render_associated_multi_row(fr, dd, di)
                     row_vars.append(var_am)
                     meta_row.append(meta_am)
                     continue
@@ -3061,6 +3091,259 @@ class FamilySocialSectionCore(ttk.Frame):
     def _builder_dd_button_name(dd: dict, di: int) -> str:
         raw = str(dd.get("builder_button_name") or "").strip()
         return raw or f"DD{di + 1}"
+
+    @staticmethod
+    def _associated_column_border_color(slot_index: int) -> str:
+        """Stable color by associated slot index (DD1, DD2, DD3, ...)."""
+        palette = [hexv for _name, hexv in ASSOC_SLOT_DEFAULT_COLORS]
+        if slot_index < 0:
+            return "#c8c8c8"
+        return palette[slot_index % len(palette)]
+
+    @staticmethod
+    def _normalize_hex_color(raw: str) -> str | None:
+        s = (raw or "").strip()
+        if not s:
+            return None
+        if not s.startswith("#"):
+            s = "#" + s
+        if re.fullmatch(r"#[0-9a-fA-F]{6}", s):
+            return s.upper()
+        return None
+
+    @staticmethod
+    def _normalize_rgb_to_hex(raw: str) -> str | None:
+        s = (raw or "").strip()
+        if not s:
+            return None
+        parts = [p for p in re.split(r"[,\s]+", s) if p]
+        if len(parts) != 3:
+            return None
+        vals: list[int] = []
+        for p in parts:
+            try:
+                v = int(p)
+            except Exception:
+                return None
+            if v < 0 or v > 255:
+                return None
+            vals.append(v)
+        return "#{:02X}{:02X}{:02X}".format(vals[0], vals[1], vals[2])
+
+    def _assoc_slot_color_for_dd(self, dd: dict, slot_index: int) -> str:
+        custom = self._assoc_slot_colors if isinstance(self._assoc_slot_colors, list) else []
+        if 0 <= slot_index < len(custom):
+            hx = self._normalize_hex_color(str(custom[slot_index]))
+            if hx:
+                return hx
+        return self._associated_column_border_color(slot_index)
+
+    def _set_assoc_slot_color_for_dd(self, dd: dict, slot_index: int, color_hex: str) -> None:
+        hx = self._normalize_hex_color(color_hex)
+        if not hx or slot_index < 0:
+            return
+        arr = self._assoc_slot_colors if isinstance(self._assoc_slot_colors, list) else []
+        if not isinstance(self._assoc_slot_colors, list):
+            self._assoc_slot_colors = arr
+            self.section["assoc_slot_colors"] = arr
+        while len(arr) <= slot_index:
+            arr.append(self._associated_column_border_color(len(arr)))
+        arr[slot_index] = hx
+
+    def _max_dropdown_count(self) -> int:
+        try:
+            return max((len(t.get("dropdowns") or []) for t in self.templates), default=0)
+        except Exception:
+            return 0
+
+    def _ask_assoc_slot_color(self, slot_index: int, current_hex: str) -> str | None:
+        dlg = tk.Toplevel(self.winfo_toplevel())
+        dlg.title(f"Choose color for DD{slot_index + 1}")
+        try:
+            dlg.transient(self.winfo_toplevel())
+        except Exception:
+            pass
+        dlg.grab_set()
+        ttk.Label(
+            dlg,
+            text=f"Pick color for DD{slot_index + 1}:",
+            font=("Segoe UI", 9, "bold"),
+        ).pack(anchor="w", padx=12, pady=(10, 4))
+
+        result: list[str | None] = [None]
+        current_norm = self._normalize_hex_color(current_hex or "") or ""
+
+        popular_box = ttk.LabelFrame(dlg, text="Popular colors")
+        popular_box.pack(fill="x", padx=12, pady=(0, 8))
+        row = ttk.Frame(popular_box)
+        row.pack(fill="x", padx=8, pady=8)
+
+        for name, hx in ASSOC_SLOT_DEFAULT_COLORS:
+            is_selected = hx.upper() == current_norm.upper()
+            # Wrap each button so the selected color can show a clear colored border ring.
+            ring = tk.Frame(
+                row,
+                highlightthickness=(2 if is_selected else 0),
+                highlightbackground=hx,
+                highlightcolor=hx,
+                bd=0,
+            )
+            ring.pack(side="left", padx=(0, 6), pady=(0, 2))
+            btn = tk.Button(
+                ring,
+                text=f"\u25CF {name}",
+                fg=hx,
+                font=("Segoe UI", 9, "bold" if is_selected else "normal"),
+                padx=6,
+                pady=2,
+                command=lambda _hx=hx: (result.__setitem__(0, _hx), dlg.destroy()),
+            )
+            btn.pack()
+
+        adv = ttk.LabelFrame(dlg, text="Advanced")
+        adv.pack(fill="x", padx=12, pady=(0, 10))
+        hex_row = ttk.Frame(adv)
+        hex_row.pack(fill="x", padx=8, pady=(8, 4))
+        ttk.Label(hex_row, text="Hex (#RRGGBB):").pack(side="left")
+        hex_var = tk.StringVar(value=current_hex)
+        ttk.Entry(hex_row, textvariable=hex_var, width=14).pack(side="left", padx=6)
+
+        rgb_row = ttk.Frame(adv)
+        rgb_row.pack(fill="x", padx=8, pady=(0, 8))
+        ttk.Label(rgb_row, text="RGB (r,g,b):").pack(side="left")
+        rgb_var = tk.StringVar(value="")
+        ttk.Entry(rgb_row, textvariable=rgb_var, width=16).pack(side="left", padx=6)
+
+        btn_row = ttk.Frame(dlg)
+        btn_row.pack(fill="x", padx=12, pady=(0, 12))
+
+        def _use_hex() -> None:
+            hx = self._normalize_hex_color(hex_var.get() or "")
+            if not hx:
+                messagebox.showwarning("Invalid color", "Enter a valid hex color like #F39C12.")
+                return
+            result[0] = hx
+            dlg.destroy()
+
+        def _use_rgb() -> None:
+            hx = self._normalize_rgb_to_hex(rgb_var.get() or "")
+            if not hx:
+                messagebox.showwarning("Invalid color", "Enter RGB as r,g,b with values 0-255.")
+                return
+            result[0] = hx
+            dlg.destroy()
+
+        def _use_picker() -> None:
+            _rgb, hx = colorchooser.askcolor(color=current_hex, parent=dlg)
+            if hx:
+                result[0] = self._normalize_hex_color(hx) or hx
+                dlg.destroy()
+
+        ttk.Button(btn_row, text="Use hex", command=_use_hex).pack(side="left")
+        ttk.Button(btn_row, text="Use RGB", command=_use_rgb).pack(side="left", padx=(8, 0))
+        ttk.Button(btn_row, text="More colors…", command=_use_picker).pack(side="left", padx=(8, 0))
+        ttk.Button(btn_row, text="Cancel", command=dlg.destroy).pack(side="right")
+
+        dlg.wait_window(dlg)
+        return result[0]
+
+    def _build_assoc_slot_color_editor(self, parent: ttk.Frame, dd: dict) -> None:
+        band = ttk.LabelFrame(parent, text="Associated dropdown border colors (DD slots)")
+        band.pack(fill="x", padx=6, pady=(0, 8))
+        ttk.Label(
+            band,
+            text="DD1/DD2/DD3 colors stay consistent across templates. Pick a slot from the dropdown menu to edit.",
+        ).pack(anchor="w", padx=6, pady=(6, 4))
+
+        slot_count = max(10, self._max_dropdown_count())
+        select_row = ttk.Frame(band)
+        select_row.pack(fill="x", padx=6, pady=(0, 6))
+        ttk.Label(select_row, text="Color slot:").pack(side="left")
+
+        selected_label = tk.StringVar(value="")
+
+        def _slot_label(si: int) -> str:
+            cur_hex = self._assoc_slot_color_for_dd(dd, si)
+            return f"DD{si + 1}  \u25CF {cur_hex}"
+
+        def _slot_hex(si: int) -> str:
+            return self._assoc_slot_color_for_dd(dd, si)
+
+        if slot_count > 0:
+            selected_label.set(_slot_label(0))
+
+        menu_btn = tk.Menubutton(
+            select_row,
+            textvariable=selected_label,
+            relief="raised",
+            indicatoron=True,
+            direction="below",
+            padx=8,
+            pady=2,
+            width=24,
+            anchor="w",
+        )
+        menu_btn.pack(side="left", padx=(6, 0))
+        slot_menu = tk.Menu(menu_btn, tearoff=False)
+        menu_btn.configure(menu=slot_menu)
+        if slot_count > 0:
+            try:
+                menu_btn.configure(fg=_slot_hex(0))
+            except Exception:
+                pass
+
+        def _pick_slot(_si: int, _dd=dd) -> None:
+            selected_label.set(_slot_label(_si))
+            try:
+                menu_btn.configure(fg=_slot_hex(_si))
+            except Exception:
+                pass
+            self._choose_assoc_slot_color_and_save(_dd, _si)
+
+        for si in range(slot_count):
+            cur_hex = self._assoc_slot_color_for_dd(dd, si)
+            slot_menu.add_command(
+                label=_slot_label(si),
+                foreground=cur_hex,
+                activeforeground=cur_hex,
+                command=lambda _si=si: _pick_slot(_si),
+            )
+
+    def _choose_assoc_slot_color_and_save(self, dd: dict, slot_index: int) -> None:
+        cur = self._assoc_slot_color_for_dd(dd, slot_index)
+        picked = self._ask_assoc_slot_color(slot_index, cur)
+        if not picked:
+            return
+        self._set_assoc_slot_color_for_dd(dd, slot_index, picked)
+        self._persist_templates()
+
+        # IMPORTANT: when this is triggered from a tk.Menu / popup command, immediate
+        # widget teardown+rebuild can race the active Tk callback stack on Windows and
+        # terminate the app. Defer UI rebuild to the next idle tick.
+        def _refresh_after_color_change() -> None:
+            try:
+                self._render_note_builder()
+                self._render_canvas_editor()
+                self._apply_builder_to_note()
+                self.on_change_callback()
+            except Exception:
+                # Keep app alive if any stale widget path appears during deferred rebuild.
+                pass
+
+        self.after_idle(_refresh_after_color_change)
+
+    def _on_template_dd_quick_switch(self, tid: int, di: int) -> None:
+        """Promote a dropdown to top position in Note/Builder for one template only."""
+        self._builder_dd_top_by_tid[int(tid)] = int(di)
+        repack_cb = self._builder_dd_repack_by_tid.get(int(tid))
+        if callable(repack_cb):
+            try:
+                repack_cb()
+                return
+            except Exception:
+                pass
+        # Fallback if callback is stale (e.g., after an unexpected widget teardown).
+        self._render_note_builder()
 
     def _build_prefix_token_bank(self, parent: ttk.Widget) -> None:
         """
@@ -3487,6 +3770,7 @@ class FamilySocialSectionCore(ttk.Frame):
             ae.bind("<FocusOut>", _save_al)
             ae.bind("<Return>", _save_al)
 
+            self._build_assoc_slot_color_editor(frame, dd)
             self._canvas_item_list_editor_shell(frame, "Primary (top) choices", dd["items"])
             self._build_dd_format_row(
                 frame, dd,
@@ -3717,16 +4001,39 @@ class FamilySocialSectionCore(ttk.Frame):
         self.templates.append(cloned)
         self._save_and_reload()
 
+    def _renumber_templates_and_state(self) -> None:
+        """Ensure template IDs are contiguous (1..N) and remap per-template UI state."""
+        old_to_new: dict[int, int] = {}
+        for new_i, t in enumerate(self.templates, start=1):
+            try:
+                old_i = int(t.get("id"))
+            except Exception:
+                old_i = new_i
+            old_to_new[old_i] = new_i
+            t["id"] = new_i
+
+        old_skip = dict(self._visit_skip_by_tid)
+        self._visit_skip_by_tid.clear()
+        for old_i, is_skip in old_skip.items():
+            new_i = old_to_new.get(int(old_i))
+            if new_i is not None:
+                self._visit_skip_by_tid[new_i] = bool(is_skip)
+
+        old_top = dict(self._builder_dd_top_by_tid)
+        self._builder_dd_top_by_tid.clear()
+        for old_i, top_di in old_top.items():
+            new_i = old_to_new.get(int(old_i))
+            if new_i is not None and isinstance(top_di, int):
+                self._builder_dd_top_by_tid[new_i] = top_di
+
     def _delete_template(self, tmpl: dict) -> None:
-        if len(self.templates) <= 1:
-            messagebox.showwarning("Cannot delete", "At least one template is required.")
-            return
         if messagebox.askyesno("Delete template", f"Delete template {tmpl['id']}?"):
             self._visit_skip_by_tid.pop(int(tmpl["id"]), None)
             self._builder_dd_top_by_tid.pop(int(tmpl["id"]), None)
             # Mutate list in place — self.templates aliases section["templates"]; assigning
             # a new list would break persistence (orchestrator saves section dicts).
             self.templates[:] = [t for t in self.templates if t["id"] != tmpl["id"]]
+            self._renumber_templates_and_state()
             self._save_and_reload()
 
     def _move_template(self, idx: int, direction: int) -> None:
