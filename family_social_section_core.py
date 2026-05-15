@@ -416,6 +416,8 @@ class FamilySocialSectionCore(ttk.Frame):
         self.note_combo_vars: list[list[tk.StringVar]] = []
         self._note_builder_meta: list[list[dict]] = []
         self._visit_skip_by_tid: dict[int, bool] = {}
+        # Note/Builder-only visual promotion target per template (does not affect print order).
+        self._builder_dd_top_by_tid: dict[int, int] = {}
         self._skip_checkbox_vars: dict[int, tk.BooleanVar] = {}
         self._clear_assoc_on_primary_clear = bool(clear_assoc_on_primary_clear)
         if token_feedback_var is not None:
@@ -2717,10 +2719,82 @@ class FamilySocialSectionCore(ttk.Frame):
 
             row_vars: list[tk.StringVar] = []
             meta_row: list[dict] = []
-            for dd in tmpl.get("dropdowns") or []:
+            dds = list(tmpl.get("dropdowns") or [])
+            dd_host = ttk.Frame(card)
+            dd_host.pack(fill="x", padx=8, pady=(2, 4))
+            dd_frames: dict[int, ttk.LabelFrame] = {}
+
+            top_idx = self._builder_dd_top_by_tid.get(tid)
+            if not isinstance(top_idx, int) or top_idx < 0 or top_idx >= len(dds):
+                top_idx = None
+                self._builder_dd_top_by_tid.pop(tid, None)
+
+            def _display_order_for_template(_tid: int = tid, _dds: list[dict] = dds) -> list[int]:
+                if not _dds:
+                    return []
+                pinned = self._builder_dd_top_by_tid.get(_tid)
+                if not isinstance(pinned, int) or pinned < 0 or pinned >= len(_dds):
+                    return list(range(len(_dds)))
+                return [pinned] + [i2 for i2 in range(len(_dds)) if i2 != pinned]
+
+            active_switch_row: list[ttk.Frame | None] = [None]
+
+            def _refresh_embedded_switch_row(_tid: int = tid, _dds: list[dict] = dds) -> None:
+                old_row = active_switch_row[0]
+                if old_row is not None:
+                    try:
+                        old_row.destroy()
+                    except Exception:
+                        pass
+                    active_switch_row[0] = None
+                if len(_dds) <= 1:
+                    return
+                order_idxs = _display_order_for_template()
+                if not order_idxs:
+                    return
+                top_di = order_idxs[0]
+                top_fr = dd_frames.get(top_di)
+                if top_fr is None:
+                    return
+                switch_row = ttk.Frame(top_fr)
+                kids = top_fr.winfo_children()
+                if kids:
+                    switch_row.pack(fill="x", padx=6, pady=(2, 2), before=kids[0])
+                else:
+                    switch_row.pack(fill="x", padx=6, pady=(2, 2))
+                ttk.Label(switch_row, text="Quick dropdown buttons:").pack(side="left", padx=(0, 4))
+                for di, dd in enumerate(_dds):
+                    btn_name = self._builder_dd_button_name(dd, di)
+                    if di == top_di:
+                        btn_name = f"[{btn_name}]"
+                    tk.Button(
+                        switch_row,
+                        text=btn_name,
+                        font=("Segoe UI", 8),
+                        padx=5,
+                        pady=1,
+                        command=lambda _di=di, _tid2=_tid: (
+                            self._builder_dd_top_by_tid.__setitem__(_tid2, _di),
+                            _repack_dropdown_blocks(),
+                        ),
+                    ).pack(side="left", padx=(0, 4))
+                active_switch_row[0] = switch_row
+
+            def _repack_dropdown_blocks(_tid: int = tid) -> None:
+                order_idxs = _display_order_for_template()
+                for wid in dd_host.winfo_children():
+                    wid.pack_forget()
+                for di2 in order_idxs:
+                    fr2 = dd_frames.get(di2)
+                    if fr2 is not None:
+                        fr2.pack(fill="x", pady=3)
+                _refresh_embedded_switch_row()
+
+            for di, dd in enumerate(dds):
                 items = list(dd.get("items") or [])
-                fr = ttk.Frame(card)
-                fr.pack(fill="x", padx=8, pady=3)
+                dd_name = self._builder_dd_button_name(dd, di)
+                fr = ttk.LabelFrame(dd_host, text=f"Template {tmpl['id']} ({dd_name})")
+                dd_frames[di] = fr
                 if bool(dd.get("associated_multi")):
                     var_am, meta_am = self._render_associated_multi_row(fr, dd)
                     row_vars.append(var_am)
@@ -2925,6 +2999,7 @@ class FamilySocialSectionCore(ttk.Frame):
                     row_vars.append(var)
                     meta_row.append({"multi": False, "lb": None, "items": items, "fmt_var": _fmt_var})
 
+            _repack_dropdown_blocks()
             self.note_combo_vars.append(row_vars)
             self._note_builder_meta.append(meta_row)
 
@@ -2981,6 +3056,11 @@ class FamilySocialSectionCore(ttk.Frame):
             self._clear_token_copy_msg_after_id = None
 
         self._clear_token_copy_msg_after_id = self.after(6000, _clear_msg)
+
+    @staticmethod
+    def _builder_dd_button_name(dd: dict, di: int) -> str:
+        raw = str(dd.get("builder_button_name") or "").strip()
+        return raw or f"DD{di + 1}"
 
     def _build_prefix_token_bank(self, parent: ttk.Widget) -> None:
         """
@@ -3328,6 +3408,24 @@ class FamilySocialSectionCore(ttk.Frame):
         le.bind("<FocusOut>", _save_lbl)
         le.bind("<Return>", _save_lbl)
 
+        dd.setdefault("builder_button_name", f"DD{di + 1}")
+        btn_name_row = ttk.Frame(frame)
+        btn_name_row.pack(fill="x", padx=6, pady=(0, 4))
+        ttk.Label(btn_name_row, text="Note/Builder button name:").pack(side="left")
+        btn_name_var = tk.StringVar(value=self._builder_dd_button_name(dd, di))
+
+        def _save_btn_name(_e=None, d=dd, v=btn_name_var) -> None:
+            d["builder_button_name"] = (v.get() or "").strip()
+            self._persist_templates()
+            self._render_note_builder()
+            self._apply_builder_to_note()
+            self.on_change_callback()
+
+        btn_name_entry = ttk.Entry(btn_name_row, textvariable=btn_name_var, width=28)
+        btn_name_entry.pack(side="left", padx=6, fill="x", expand=True)
+        btn_name_entry.bind("<FocusOut>", _save_btn_name)
+        btn_name_entry.bind("<Return>", _save_btn_name)
+
         if bool(dd.get("associated_multi")):
             frame.configure(text=f"Dropdown {di + 1} — Associated Multiple")
             dd["multi"] = False
@@ -3581,6 +3679,7 @@ class FamilySocialSectionCore(ttk.Frame):
             first_dd = {
                 "label": "Primary options",
                 "items": ["MRI", "X-Ray", "CT scan"],
+                "builder_button_name": "DD1",
                 "associated_multi": True,
                 "associate_label": "Body region / detail",
                 "associate_items": [
@@ -3595,6 +3694,7 @@ class FamilySocialSectionCore(ttk.Frame):
             first_dd = {
                 "label": "Option",
                 "items": ["First phrase", "Second phrase"],
+                "builder_button_name": "DD1",
                 "multi": choice == "multiple",
             }
         self.templates.append(
@@ -3623,6 +3723,7 @@ class FamilySocialSectionCore(ttk.Frame):
             return
         if messagebox.askyesno("Delete template", f"Delete template {tmpl['id']}?"):
             self._visit_skip_by_tid.pop(int(tmpl["id"]), None)
+            self._builder_dd_top_by_tid.pop(int(tmpl["id"]), None)
             # Mutate list in place — self.templates aliases section["templates"]; assigning
             # a new list would break persistence (orchestrator saves section dicts).
             self.templates[:] = [t for t in self.templates if t["id"] != tmpl["id"]]
@@ -3649,6 +3750,7 @@ class FamilySocialSectionCore(ttk.Frame):
             new_dd = {
                 "label": "Primary options",
                 "items": ["MRI", "X-Ray", "CT scan"],
+                "builder_button_name": f"DD{len(tmpl.get('dropdowns') or []) + 1}",
                 "associated_multi": True,
                 "prefix": str(tmpl.get("prefix") or ""),
                 "associate_label": "Body region / detail",
@@ -3661,7 +3763,12 @@ class FamilySocialSectionCore(ttk.Frame):
                 ],
             }
         else:
-            new_dd = {"label": "New dropdown", "items": ["A", "B"], "multi": choice == "multiple"}
+            new_dd = {
+                "label": "New dropdown",
+                "items": ["A", "B"],
+                "builder_button_name": f"DD{len(tmpl.get('dropdowns') or []) + 1}",
+                "multi": choice == "multiple",
+            }
         tmpl.setdefault("dropdowns", []).append(new_dd)
         self._save_and_reload()
 
@@ -3673,6 +3780,13 @@ class FamilySocialSectionCore(ttk.Frame):
             return
         if messagebox.askyesno("Remove dropdown", "Remove this dropdown?"):
             dds.pop(di)
+            tid = int(tmpl.get("id") or 0)
+            top_di = self._builder_dd_top_by_tid.get(tid)
+            if isinstance(top_di, int):
+                if top_di == di:
+                    self._builder_dd_top_by_tid.pop(tid, None)
+                elif top_di > di:
+                    self._builder_dd_top_by_tid[tid] = top_di - 1
             self._save_and_reload()
 
     def _save_and_reload(self) -> None:
