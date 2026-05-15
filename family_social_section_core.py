@@ -867,6 +867,12 @@ class FamilySocialSectionCore(ttk.Frame):
             return None
         return sorted(int(x) for x in sel)
 
+    # Template cards are arranged in two columns in both the Note builder and
+    # Template editor canvas views.
+    _TEMPLATE_GRID_COLUMNS = 2
+    _TEMPLATE_GRID_COLUMN_GAP_PX = 2
+    _TEMPLATE_GRID_ROW_GAP_PX = 2
+
     # Extra pixels below the last builder row so the scrollbar range fully clears
     # the last dropdown (ttk layout + canvas embedding often clips the bottom otherwise).
     _NOTE_BUILDER_BOTTOM_SPACER_PX = 28
@@ -1337,9 +1343,6 @@ class FamilySocialSectionCore(ttk.Frame):
                 meta = meta_row[j] if j < len(meta_row) else {}
 
                 if isinstance(meta, dict) and meta.get("associated_multi"):
-                    po = list(meta.get("primary_order") or [])
-                    if not po:
-                        continue
                     abp_raw = meta.get("assoc_by_primary") or {}
                     abp: dict[int, set[int]] = {}
                     if isinstance(abp_raw, dict):
@@ -1353,16 +1356,42 @@ class FamilySocialSectionCore(ttk.Frame):
                             elif isinstance(vv, (list, tuple)):
                                 abp[ik] = set(int(x) for x in vv if isinstance(x, int))
                     pitems = meta.get("primary_items") or list(dd.get("items") or [])
+                    selected_primary: set[int] = set()
+                    pss_raw = meta.get("primary_selected_set")
+                    if isinstance(pss_raw, set):
+                        selected_primary = {int(x) for x in pss_raw if isinstance(x, int)}
+                    else:
+                        # Back-compat fallback for older meta: infer selected primaries
+                        # from display-order list if the selected-set is unavailable.
+                        selected_primary = {
+                            int(x)
+                            for x in (meta.get("primary_order") or [])
+                            if isinstance(x, int)
+                        }
+                    if not selected_primary:
+                        continue
+
                     alist = list(dd.get("associate_items") or [])
                     # Proxy dicts so _dd_fmt_tag reads the correct key for each part.
                     _pri_proxy: dict = {"text_format": dd.get("text_format") or {}}
                     _asc_proxy: dict = {"text_format": dd.get("assoc_text_format") or {}}
                     first_bullet = True
                     any_bullet = False
-                    for pix in po:
-                        if pix < 0 or pix >= len(pitems):
+                    dd_prefix_raw = self._resolve_vars(str(dd.get("prefix") or "")).strip()
+                    if dd_prefix_raw:
+                        dd_prefix_text = _prefix_before_bullet_list(dd_prefix_raw)
+                        if dropdown_parts:
+                            # When an associated dropdown prefix follows prior content,
+                            # start it as a new paragraph (blank line gap).
+                            dd_prefix_text = "\n\n" + dd_prefix_text
+                        dropdown_parts.append(dd_prefix_text)
+                        _dropdown_dds.append(None)
+                    # Output order follows the Primary options layout (source of truth),
+                    # not the associated-column visual order.
+                    for pix, ptxt in enumerate(pitems):
+                        if pix not in selected_primary:
                             continue
-                        hdr = self._resolve_vars(str(pitems[pix])).strip()
+                        hdr = self._resolve_vars(str(ptxt)).strip()
                         if not hdr:
                             continue
                         hdr = _wrap_long_bullet_tokens(dd, hdr)
@@ -2272,17 +2301,14 @@ class FamilySocialSectionCore(ttk.Frame):
                 while rm in order:
                     order.remove(rm)
                 meta["assoc_by_primary"].pop(rm, None)
-            if len(added_list) == 1:
-                ad = added_list[0]
-                if ad not in order:
-                    order.append(ad)
-                meta["highlight_primary_idx"] = ad
-            else:
-                for ad in added_list:
-                    if ad not in order:
-                        order.append(ad)
-                if added_list:
-                    meta["highlight_primary_idx"] = added_list[-1]
+            for ad in added_list:
+                # New selections should immediately surface at the top so users
+                # can work in the newly-created associated column without a second click.
+                while ad in order:
+                    order.remove(ad)
+                order.insert(0, ad)
+            if added_list:
+                meta["highlight_primary_idx"] = added_list[-1]
             order[:] = [p for p in order if p in selected_set_primary]
             meta["dummy_var"].set("")
             def _rebuild_and_notify() -> None:
@@ -2450,6 +2476,28 @@ class FamilySocialSectionCore(ttk.Frame):
             _hint_tip[0] = tip
             tip.after(2500, _dismiss_hint)
 
+        def _promote_primary_assoc_column(src_idx: int) -> None:
+            """Move the clicked primary's paired column to the top of the associated list."""
+            if src_idx not in selected_set_primary:
+                return
+            order = meta.get("primary_order")
+            if not isinstance(order, list):
+                return
+
+            # Keep selected order stable, but force the clicked primary to the first column.
+            current_selected = set(selected_set_primary)
+            reordered = [src_idx]
+            reordered.extend(p for p in order if p in current_selected and p != src_idx)
+            # Defensive: include any selected primary not present in `order`.
+            extras = sorted(p for p in current_selected if p != src_idx and p not in order)
+            reordered.extend(extras)
+
+            if order == reordered and meta.get("highlight_primary_idx") == src_idx:
+                return
+            order[:] = reordered
+            meta["highlight_primary_idx"] = src_idx
+            self._run_with_note_builder_scroll_preserved(_rebuild_assoc_columns)
+
         def _on_primary_press(event, _plb=plb, _vis=visible_pri, _ss=selected_set_primary) -> str:
             """Plain click — add to selection only; show hint if item is already selected."""
             # Returning "break" prevents Tk's default class binding, which normally
@@ -2464,6 +2512,7 @@ class FamilySocialSectionCore(ttk.Frame):
                     _plb.selection_set(idx)
                     _schedule_primary_sync()
                 else:
+                    _promote_primary_assoc_column(src)
                     _show_deselect_hint(event)
             return "break"
 
@@ -2515,7 +2564,11 @@ class FamilySocialSectionCore(ttk.Frame):
             primary_items.append(txt)
             li = len(primary_items) - 1
             selected_set_primary.add(li)
-            meta["primary_order"].append(li)
+            od = meta.get("primary_order")
+            if isinstance(od, list):
+                while li in od:
+                    od.remove(li)
+                od.insert(0, li)
             meta["highlight_primary_idx"] = li
             search_var.set("")
             _refresh_primary_filter()
@@ -2621,9 +2674,24 @@ class FamilySocialSectionCore(ttk.Frame):
 
         self._prefix_resolved_labels: list[ttk.Label] = []
 
+        cols = max(1, int(self._TEMPLATE_GRID_COLUMNS))
+        for col in range(cols):
+            self.note_scroll_frame.grid_columnconfigure(col, weight=1, uniform="note_template_cols")
+
         for idx, tmpl in enumerate(self.templates):
+            row_idx = idx // cols
+            col_idx = idx % cols
+            left_gap = 2
+            right_gap = self._TEMPLATE_GRID_COLUMN_GAP_PX if col_idx == 0 else 2
+
             band = tk.Frame(self.note_scroll_frame, bg=self._template_band_bg(idx))
-            band.pack(fill="x", padx=4, pady=4)
+            band.grid(
+                row=row_idx,
+                column=col_idx,
+                sticky="nsew",
+                padx=(left_gap, right_gap),
+                pady=(2, self._TEMPLATE_GRID_ROW_GAP_PX),
+            )
 
             card = ttk.LabelFrame(band, text=f"Template {tmpl['id']}")
             card.pack(fill="x", padx=5, pady=5)
@@ -2643,7 +2711,7 @@ class FamilySocialSectionCore(ttk.Frame):
             ).pack(anchor="w", padx=8, pady=(4, 0))
 
             pv = self._resolve_vars(tmpl.get("prefix") or "")
-            pl = ttk.Label(card, text=f"Prefix (resolved): {pv}", wraplength=560)
+            pl = ttk.Label(card, text=f"Prefix (resolved): {pv}", wraplength=420)
             pl.pack(anchor="w", padx=8, pady=(6, 2))
             self._prefix_resolved_labels.append(pl)
 
@@ -2850,7 +2918,7 @@ class FamilySocialSectionCore(ttk.Frame):
                     display_items = [OPTION_OMIT] + items
                     initial = items[0] if items else OPTION_OMIT
                     var = tk.StringVar(value=initial)
-                    cb = ttk.Combobox(fr, textvariable=var, values=display_items, state="readonly", width=80)
+                    cb = ttk.Combobox(fr, textvariable=var, values=display_items, state="readonly", width=46)
                     cb.pack(fill="x")
                     cb.bind("<<ComboboxSelected>>", lambda e: self._on_builder_selection_changed())
                     self._bind_sentence_builder_readonly_combobox_wheel(cb)
@@ -2862,8 +2930,13 @@ class FamilySocialSectionCore(ttk.Frame):
 
         pad_h = self._NOTE_BUILDER_BOTTOM_SPACER_PX
         tail = tk.Frame(self.note_scroll_frame, height=pad_h)
-        tail.pack(fill="x")
-        tail.pack_propagate(False)
+        tail.grid(
+            row=(len(self.templates) + cols - 1) // cols,
+            column=0,
+            columnspan=cols,
+            sticky="ew",
+        )
+        tail.grid_propagate(False)
 
         self._sync_note_builder_scrollregion()
         # ttk + Windows can finalize heights one idle tick late; second sync catches the true extent.
@@ -2989,15 +3062,31 @@ class FamilySocialSectionCore(ttk.Frame):
         for w in self.canvas_scroll_frame.winfo_children():
             w.destroy()
 
+        cols = max(1, int(self._TEMPLATE_GRID_COLUMNS))
+        for col in range(cols):
+            self.canvas_scroll_frame.grid_columnconfigure(col, weight=1, uniform="canvas_template_cols")
+
         for idx, tmpl in enumerate(self.templates):
-            self._build_template_editor_card(self.canvas_scroll_frame, tmpl, idx)
+            self._build_template_editor_card(self.canvas_scroll_frame, tmpl, idx, cols)
 
         self.canvas_scroll_frame.update_idletasks()
         self.canvas_editor_widget.configure(scrollregion=self.canvas_editor_widget.bbox("all"))
 
-    def _build_template_editor_card(self, parent: ttk.Frame, tmpl: dict, idx: int) -> None:
+    def _build_template_editor_card(self, parent: ttk.Frame, tmpl: dict, idx: int, cols: int | None = None) -> None:
+        col_count = max(1, int(cols or self._TEMPLATE_GRID_COLUMNS))
+        row_idx = idx // col_count
+        col_idx = idx % col_count
+        left_gap = 2
+        right_gap = self._TEMPLATE_GRID_COLUMN_GAP_PX if col_idx == 0 else 2
+
         band = tk.Frame(parent, bg=self._template_band_bg(idx))
-        band.pack(fill="x", padx=2, pady=5)
+        band.grid(
+            row=row_idx,
+            column=col_idx,
+            sticky="nsew",
+            padx=(left_gap, right_gap),
+            pady=(2, self._TEMPLATE_GRID_ROW_GAP_PX),
+        )
 
         outer = ttk.LabelFrame(band, text=f"Template {tmpl['id']}")
         outer.pack(fill="x", padx=5, pady=5)
@@ -3011,7 +3100,7 @@ class FamilySocialSectionCore(ttk.Frame):
 
         ttk.Label(outer, text="Prefix:").pack(anchor="w", padx=8)
         prefix_var = tk.StringVar(value=tmpl.get("prefix") or "")
-        pe = ttk.Entry(outer, textvariable=prefix_var, width=90)
+        pe = ttk.Entry(outer, textvariable=prefix_var, width=48)
         pe.pack(fill="x", padx=8, pady=(0, 6))
 
         def _save_prefix(_e=None, t=tmpl, v=prefix_var):
@@ -3245,6 +3334,7 @@ class FamilySocialSectionCore(ttk.Frame):
             dd.setdefault("associate_label", "Associated detail")
             dd.setdefault("associate_items", [])
             dd.setdefault("items", [])
+            dd.setdefault("prefix", "")
 
             type_row = ttk.Frame(frame)
             type_row.pack(fill="x", padx=6, pady=(0, 4))
@@ -3264,6 +3354,23 @@ class FamilySocialSectionCore(ttk.Frame):
                 self._save_and_reload()
 
             ttk.Button(type_row, text="Convert to plain multiple…", command=_convert_am_to_plain).pack(side="right")
+
+            pref_row = ttk.Frame(frame)
+            pref_row.pack(fill="x", padx=6, pady=(0, 4))
+            ttk.Label(pref_row, text="Prefix (for this associated dropdown):").pack(side="left")
+            pref_var = tk.StringVar(value=str(dd.get("prefix") or ""))
+
+            def _save_pref(_e=None, d=dd, v=pref_var) -> None:
+                d["prefix"] = v.get()
+                self._persist_templates()
+                self._render_note_builder()
+                self._apply_builder_to_note()
+                self.on_change_callback()
+
+            pref_entry = ttk.Entry(pref_row, textvariable=pref_var, width=48)
+            pref_entry.pack(side="left", padx=6, fill="x", expand=True)
+            pref_entry.bind("<FocusOut>", _save_pref)
+            pref_entry.bind("<Return>", _save_pref)
 
             al_pair = ttk.Frame(frame)
             al_pair.pack(fill="x", padx=6, pady=(4, 2))
@@ -3543,6 +3650,7 @@ class FamilySocialSectionCore(ttk.Frame):
                 "label": "Primary options",
                 "items": ["MRI", "X-Ray", "CT scan"],
                 "associated_multi": True,
+                "prefix": str(tmpl.get("prefix") or ""),
                 "associate_label": "Body region / detail",
                 "associate_items": [
                     "Cervical spine",
