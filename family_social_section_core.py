@@ -478,8 +478,8 @@ class FamilySocialSectionCore(ttk.Frame):
     ) -> str | None:
         """
         Prompt for a new template/dropdown selection mode.
-        Returns "single", "multiple", "multiple_full_prefix", "associated_multiple",
-        or None if cancelled.
+        Returns "single", "single_full_prefix", "multiple", "multiple_full_prefix",
+        "associated_multiple", or None if cancelled.
         """
         result: list[str | None] = [None]
         dlg = tk.Toplevel(self.winfo_toplevel())
@@ -504,6 +504,12 @@ class FamilySocialSectionCore(ttk.Frame):
         ttk.Button(bf, text="Single choice", width=22, command=lambda: _pick("single")).pack(
             side="top", pady=3
         )
+        ttk.Button(
+            bf,
+            text="Single choice Full/Full",
+            width=22,
+            command=lambda: _pick("single_full_prefix"),
+        ).pack(side="top", pady=3)
         ttk.Button(bf, text="Multiple choice", width=22, command=lambda: _pick("multiple")).pack(
             side="top", pady=3
         )
@@ -1391,6 +1397,26 @@ class FamilySocialSectionCore(ttk.Frame):
         dropdown_parts.append(dd_prefix_text)
         dropdown_dds.append(None)
 
+    def _append_single_full_prefix_fragment(
+        self,
+        dd: dict,
+        dropdown_parts: list[str],
+        dropdown_dds: list[dict | None],
+    ) -> None:
+        """Emit resolved dropdown prefix before Single choice Full/Full output.
+
+        Unlike Associated Multiple / Multiple Full/Full, does not insert a blank paragraph;
+        finalize joins this fragment with a single space like consecutive plain dropdown sentences.
+        """
+        if bool(dd.get("multi")) or not bool(dd.get("single_full_prefix")):
+            return
+        dd_prefix_raw = self._resolve_vars(str(dd.get("prefix") or "")).strip()
+        if not dd_prefix_raw:
+            return
+        dd_prefix_text = _prefix_before_bullet_list(dd_prefix_raw)
+        dropdown_parts.append(dd_prefix_text)
+        dropdown_dds.append(None)
+
     def _compose_parts_for_template(
         self,
         i: int,
@@ -1545,6 +1571,7 @@ class FamilySocialSectionCore(ttk.Frame):
                     continue
 
                 if not is_multi and bool(dd.get("multi_bullets")):
+                    self._append_single_full_prefix_fragment(dd, dropdown_parts, _dropdown_dds)
                     block = _bullet_line_prefix(dd, True) + _wrap_long_bullet_tokens(dd, val.strip())
                     if _bullet_px_by_part_idx is not None:
                         bi = len(dropdown_parts)
@@ -1556,6 +1583,8 @@ class FamilySocialSectionCore(ttk.Frame):
                 val = _apply_narrative_tail_to_fragment(val, dd)
                 if is_multi:
                     self._append_multi_full_prefix_fragment(dd, dropdown_parts, _dropdown_dds)
+                else:
+                    self._append_single_full_prefix_fragment(dd, dropdown_parts, _dropdown_dds)
                 dropdown_parts.append(val)
                 _dropdown_dds.append(dd)
 
@@ -3886,6 +3915,34 @@ class FamilySocialSectionCore(ttk.Frame):
             pref_entry_mff.bind("<FocusOut>", _save_pref_mff)
             pref_entry_mff.bind("<Return>", _save_pref_mff)
 
+        elif bool(dd.get("single_full_prefix")):
+            dd["multi"] = False
+            dd.setdefault("prefix", "")
+            frame.configure(text=f"Dropdown {di + 1} — Single choice Full/Full")
+            type_row_sff = ttk.Frame(frame)
+            type_row_sff.pack(fill="x", padx=6, pady=(0, 4))
+            ttk.Label(
+                type_row_sff,
+                text="Type: Single choice Full/Full (optional prefix before selection).",
+            ).pack(side="left")
+
+            pref_row_sff = ttk.Frame(frame)
+            pref_row_sff.pack(fill="x", padx=6, pady=(0, 4))
+            ttk.Label(pref_row_sff, text="Prefix (for this dropdown):").pack(side="left")
+            pref_var_sff = tk.StringVar(value=str(dd.get("prefix") or ""))
+
+            def _save_pref_sff(_e=None, d=dd, v=pref_var_sff) -> None:
+                d["prefix"] = v.get()
+                self._persist_templates()
+                self._render_note_builder()
+                self._apply_builder_to_note()
+                self.on_change_callback()
+
+            pref_entry_sff = ttk.Entry(pref_row_sff, textvariable=pref_var_sff, width=48)
+            pref_entry_sff.pack(side="left", padx=6, fill="x", expand=True)
+            pref_entry_sff.bind("<FocusOut>", _save_pref_sff)
+            pref_entry_sff.bind("<Return>", _save_pref_sff)
+
         is_multi = bool(dd.get("multi"))
         mode_row = ttk.Frame(frame)
         mode_row.pack(fill="x", padx=6, pady=(0, 2))
@@ -3900,6 +3957,9 @@ class FamilySocialSectionCore(ttk.Frame):
             d["multi"] = not bool(d.get("multi"))
             if not d["multi"]:
                 d.pop("multi_full_prefix", None)
+                d.pop("prefix", None)
+            else:
+                d.pop("single_full_prefix", None)
                 d.pop("prefix", None)
             self._persist_templates()
             self._render_note_builder()
@@ -4050,6 +4110,8 @@ class FamilySocialSectionCore(ttk.Frame):
             prompt=(
                 "Choose how selections work for this template’s first dropdown.\n\n"
                 "• Single / Multiple behave as usual.\n"
+                "• Single choice Full/Full is single-select like Single choice with an optional "
+                "prefix line before its selection.\n"
                 "• Multiple choice Full/Full is multi-select like Multiple choice, but adds "
                 "an optional prefix line before its selections (same prefix behavior as Associated Multiple).\n"
                 "• Associated Multiple: the top dropdown is multi-select; each chosen item gains "
@@ -4082,6 +4144,15 @@ class FamilySocialSectionCore(ttk.Frame):
                 "builder_button_name": "DD1",
                 "multi": True,
                 "multi_full_prefix": True,
+                "prefix": "",
+            }
+        elif choice == "single_full_prefix":
+            first_dd = {
+                "label": "Option",
+                "items": ["First phrase", "Second phrase"],
+                "builder_button_name": "DD1",
+                "multi": False,
+                "single_full_prefix": True,
                 "prefix": "",
             }
         else:
@@ -4157,6 +4228,8 @@ class FamilySocialSectionCore(ttk.Frame):
             title="New dropdown — selection type",
             prompt=(
                 "Choose selection behavior for this new dropdown.\n\n"
+                "Single choice Full/Full is single-select like Single choice with an optional "
+                "prefix before its output.\n\n"
                 "Multiple choice Full/Full is multi-select like Multiple choice with an optional "
                 "prefix before its output.\n\n"
                 "Associated Multiple pairs each top-level choice with its own illuminated "
@@ -4188,6 +4261,15 @@ class FamilySocialSectionCore(ttk.Frame):
                 "builder_button_name": f"DD{len(tmpl.get('dropdowns') or []) + 1}",
                 "multi": True,
                 "multi_full_prefix": True,
+                "prefix": "",
+            }
+        elif choice == "single_full_prefix":
+            new_dd = {
+                "label": "New dropdown",
+                "items": ["A", "B"],
+                "builder_button_name": f"DD{len(tmpl.get('dropdowns') or []) + 1}",
+                "multi": False,
+                "single_full_prefix": True,
                 "prefix": "",
             }
         else:
