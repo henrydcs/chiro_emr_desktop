@@ -66,7 +66,7 @@ def _normalize_template_list(templates: list) -> list[dict]:
 
 def _default_sections() -> list[dict]:
     return [
-        {"id": sid, "heading": label, "templates": _deepcopy_templates()}
+        {"id": sid, "heading": label, "templates": _deepcopy_templates(), "omit_heading_print": False}
         for sid, label in _DEFAULT_BLOCK_SPECS
     ]
 
@@ -85,7 +85,12 @@ def _coerce_sections_loaded(raw_sections: list) -> list[dict]:
         tmpl = _normalize_template_list(list(s.get("templates") or []))
         if not tmpl:
             tmpl = _deepcopy_templates()
-        out.append({"id": sid, "heading": heading, "templates": tmpl})
+        omit_h = s.get("omit_heading_print")
+        if omit_h is None:
+            omit_h = False
+        elif not isinstance(omit_h, bool):
+            omit_h = bool(omit_h)
+        out.append({"id": sid, "heading": heading, "templates": tmpl, "omit_heading_print": omit_h})
     return out if out else _default_sections()
 
 
@@ -139,7 +144,7 @@ def _setup_family_social_notebook_style(master: tk.Misc) -> None:
 class FamilySocialHistoryPage(ttk.Frame):
     """
     HOI-style block row + one FamilySocialSectionCore per block (own textbox & builder).
-    Template JSON: { "file_version": 2, "sections": [ { id, heading, templates }, ... ] }
+    Template JSON: { "file_version": 2, "sections": [ { id, heading, templates, omit_heading_print? }, ... ] }
     """
 
     def __init__(
@@ -242,6 +247,9 @@ class FamilySocialHistoryPage(ttk.Frame):
         self._cores_by_id: dict[str, FamilySocialSectionCore] = {}
         self.frames: dict[str, ttk.Frame] = {}
         self._subsection_listbox: tk.Listbox | None = None
+        self._subsection_listbox_normal_fg: str = ""
+        self._btn_subsection_heading_toggle: ttk.Button | None = None
+        self._btn_subsection_heading_toggle_all: ttk.Button | None = None
 
         for sec in self.sections:
             self._mount_section_core(sec)
@@ -441,7 +449,13 @@ class FamilySocialHistoryPage(ttk.Frame):
         self._subsection_listbox.configure(yscrollcommand=sb.set)
         sb.configure(command=self._subsection_listbox.yview)
 
+        try:
+            self._subsection_listbox_normal_fg = self._subsection_listbox.cget("foreground") or "SystemWindowText"
+        except tk.TclError:
+            self._subsection_listbox_normal_fg = ""
+
         self._subsection_listbox.bind("<Double-Button-1>", self._on_subsection_listbox_double)
+        self._subsection_listbox.bind("<<ListboxSelect>>", lambda _e=None: self._sync_subsection_heading_controls())
 
         side = ttk.Frame(mid)
         side.pack(side="left", fill="y", padx=(14, 6))
@@ -455,16 +469,104 @@ class FamilySocialHistoryPage(ttk.Frame):
         ttk.Button(side, text="Move up", command=lambda: self._subsection_move(-1)).pack(fill="x", pady=2)
         ttk.Button(side, text="Move down", command=lambda: self._subsection_move(1)).pack(fill="x", pady=2)
         ttk.Button(side, text="Delete selected…", command=self._subsection_delete).pack(fill="x", pady=2)
+        self._btn_subsection_heading_toggle = ttk.Button(
+            side,
+            text="Do not print heading",
+            command=self._subsection_toggle_selected_heading_print,
+        )
+        self._btn_subsection_heading_toggle.pack(fill="x", pady=2)
+        self._btn_subsection_heading_toggle_all = ttk.Button(
+            side,
+            text="Do not print any headings",
+            command=self._subsection_toggle_all_heading_print,
+        )
+        self._btn_subsection_heading_toggle_all.pack(fill="x", pady=2)
 
         self._refresh_subsection_listbox()
+        self._sync_subsection_heading_controls()
 
     def _refresh_subsection_listbox(self) -> None:
         lb = self._subsection_listbox
         if lb is None:
             return
+        sel = lb.curselection()
+        sel_i = int(sel[0]) if sel else None
         lb.delete(0, tk.END)
-        for sec in self.sections:
+        normal_fg = self._subsection_listbox_normal_fg or lb.cget("foreground") or "black"
+        for i, sec in enumerate(self.sections):
             lb.insert(tk.END, sec.get("heading") or sec.get("id") or "")
+            try:
+                if sec.get("omit_heading_print"):
+                    lb.itemconfigure(i, foreground="#c00000")
+                else:
+                    lb.itemconfigure(i, foreground=normal_fg)
+            except tk.TclError:
+                pass
+        if sel_i is not None and 0 <= sel_i < len(self.sections):
+            try:
+                lb.selection_set(sel_i)
+            except tk.TclError:
+                pass
+
+    def _sync_subsection_heading_controls(self) -> None:
+        lb = self._subsection_listbox
+        btn_one = self._btn_subsection_heading_toggle
+        btn_all = self._btn_subsection_heading_toggle_all
+        if btn_all is not None:
+            all_omit = bool(self.sections) and all(bool(s.get("omit_heading_print")) for s in self.sections)
+            btn_all.configure(text="Re-print all headings" if all_omit else "Do not print any headings")
+        if btn_one is None:
+            return
+        sel = lb.curselection() if lb is not None else ()
+        if not sel:
+            btn_one.configure(text="Do not print heading", state="disabled")
+            return
+        btn_one.configure(state="normal")
+        sec = self.sections[int(sel[0])]
+        btn_one.configure(text="Re-print heading" if sec.get("omit_heading_print") else "Do not print heading")
+
+    def _subsection_toggle_selected_heading_print(self) -> None:
+        lb = self._subsection_listbox
+        if lb is None:
+            return
+        sel = lb.curselection()
+        if not sel:
+            messagebox.showinfo("Select a row", "Select a sub-section in the list first.")
+            return
+        i = int(sel[0])
+        sec = self.sections[i]
+        sec["omit_heading_print"] = not bool(sec.get("omit_heading_print"))
+        self._refresh_subsection_listbox()
+        lb.selection_set(i)
+        self._sync_subsection_heading_controls()
+        self._persist_templates_to_disk()
+        self._notify_preview_and_change()
+
+    def _subsection_toggle_all_heading_print(self) -> None:
+        if not self.sections:
+            return
+        all_omit = all(bool(s.get("omit_heading_print")) for s in self.sections)
+        want_omit = not all_omit
+        for s in self.sections:
+            s["omit_heading_print"] = want_omit
+        lb = self._subsection_listbox
+        sel = lb.curselection() if lb is not None else ()
+        sel_i = int(sel[0]) if sel else None
+        self._refresh_subsection_listbox()
+        if sel_i is not None and 0 <= sel_i < len(self.sections) and lb is not None:
+            lb.selection_set(sel_i)
+        self._sync_subsection_heading_controls()
+        self._persist_templates_to_disk()
+        self._notify_preview_and_change()
+
+    def _notify_preview_and_change(self) -> None:
+        app = self._app
+        if app is not None and hasattr(app, "request_live_preview_refresh"):
+            try:
+                app.request_live_preview_refresh()
+            except Exception:
+                pass
+        self.on_change_callback()
 
     def _on_subsection_listbox_double(self, _e=None) -> None:
         lb = self._subsection_listbox
@@ -490,7 +592,12 @@ class FamilySocialHistoryPage(ttk.Frame):
             return
         sid = self._alloc_section_id()
         self.sections.append(
-            {"id": sid, "heading": heading, "templates": _deepcopy_templates()}
+            {
+                "id": sid,
+                "heading": heading,
+                "templates": _deepcopy_templates(),
+                "omit_heading_print": False,
+            }
         )
         self._mount_section_core(self.sections[-1])
         self._rebuild_block_buttons()
@@ -504,6 +611,7 @@ class FamilySocialHistoryPage(ttk.Frame):
         except Exception:
             pass
         self._persist_templates_to_disk()
+        self._sync_subsection_heading_controls()
         self.on_change_callback()
 
     def _subsection_rename(self) -> None:
@@ -536,6 +644,7 @@ class FamilySocialHistoryPage(ttk.Frame):
         self._refresh_subsection_listbox()
         lb.selection_set(i)
         self._persist_templates_to_disk()
+        self._sync_subsection_heading_controls()
         self.on_change_callback()
 
     def _subsection_move(self, delta: int) -> None:
@@ -555,6 +664,7 @@ class FamilySocialHistoryPage(ttk.Frame):
         self._refresh_subsection_listbox()
         lb.selection_set(j)
         self._persist_templates_to_disk()
+        self._sync_subsection_heading_controls()
         self.on_change_callback()
 
     def _subsection_delete(self) -> None:
@@ -594,6 +704,7 @@ class FamilySocialHistoryPage(ttk.Frame):
         if self.nb.index(self.nb.select()) == 1:
             self._mount_canvas_for_active()
         self._persist_templates_to_disk()
+        self._sync_subsection_heading_controls()
         self.on_change_callback()
 
     def _destroy_block_ui(self, sid: str) -> None:
@@ -629,6 +740,7 @@ class FamilySocialHistoryPage(ttk.Frame):
                     "id": str(s["id"]),
                     "heading": str(s.get("heading") or ""),
                     "templates": copy.deepcopy(s.get("templates") or []),
+                    "omit_heading_print": bool(s.get("omit_heading_print")),
                 }
                 for s in self.sections
             ],
@@ -719,7 +831,7 @@ class FamilySocialHistoryPage(ttk.Frame):
             else:
                 runs.append(("\n\n", None, None))
             h = (sec.get("heading") or "").strip()
-            if h:
+            if h and not sec.get("omit_heading_print"):
                 runs.append((h + "\n", "LP_FS_SUBHEAD", None))
                 runs.append(("\n", None, None))
             runs.extend(content_runs)
@@ -738,6 +850,7 @@ class FamilySocialHistoryPage(ttk.Frame):
                 {
                     "id": sid,
                     "heading": sec.get("heading") or "",
+                    "omit_heading_print": bool(sec.get("omit_heading_print")),
                     "text": core.get_value(),
                     "rich_text": core.get_rich_value(),
                     "builder": inner,

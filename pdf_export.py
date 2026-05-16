@@ -3679,6 +3679,27 @@ def _fs_pdf_flowables_from_note_rich(
     return out
 
 
+def _fs_builder_block_omit_heading_print(bl: dict) -> bool:
+    """True when a FamilySocialHistoryPage block should not emit its sub-heading in PDF."""
+    if not isinstance(bl, dict):
+        return False
+    v = bl.get("omit_heading_print")
+    if isinstance(v, bool):
+        return v
+    if v is None:
+        return False
+    if isinstance(v, (int, float)):
+        return v != 0
+    if isinstance(v, str):
+        s = v.strip().lower()
+        if s in ("", "0", "false", "no", "off"):
+            return False
+        if s in ("1", "true", "yes", "on"):
+            return True
+        return bool(s)
+    return bool(v)
+
+
 def build_family_social_flowables(soap: dict, styles) -> list:
     """Heading2 main title; v2 builder uses Heading3 per block. Legacy: single body."""
     soap = soap or {}
@@ -3687,7 +3708,7 @@ def build_family_social_flowables(soap: dict, styles) -> list:
     out: list = []
     b = soap.get("family_social_builder")
     if isinstance(b, dict) and int(b.get("v") or 0) == 2:
-        nonempty: list[tuple[str, str, str]] = []
+        nonempty: list[tuple[str, str, str, bool]] = []
         for bl in b.get("blocks") or []:
             if not isinstance(bl, dict):
                 continue
@@ -3695,14 +3716,21 @@ def build_family_social_flowables(soap: dict, styles) -> list:
             if not text:
                 continue
             rich = (bl.get("rich_text") or "").strip()
-            nonempty.append(((bl.get("heading") or "").strip(), text, rich))
+            nonempty.append(
+                (
+                    (bl.get("heading") or "").strip(),
+                    text,
+                    rich,
+                    _fs_builder_block_omit_heading_print(bl),
+                )
+            )
         if not nonempty:
             return []
         out.append(Paragraph("<b>FAMILY / SOCIAL HISTORY</b>", styles["Heading2"]))
         out.append(Spacer(1, 0.08 * inch))
         fs_body = _get_family_social_body_style(styles)
-        for heading, text, rich in nonempty:
-            if heading:
+        for heading, text, rich, omit_heading in nonempty:
+            if heading and not omit_heading:
                 out.append(Paragraph(f"<b>{xml_escape(heading)}</b>", styles["Heading3"]))
                 out.append(Spacer(1, 0.04 * inch))
             if rich:
@@ -3750,7 +3778,7 @@ def build_subjectives_canvas_flowables(subj: dict, styles) -> list:
     builder = canvas.get("builder_state")
 
     if isinstance(builder, dict) and int(builder.get("v") or 0) == 2:
-        nonempty: list[tuple[str, str, str]] = []
+        nonempty: list[tuple[str, str, str, bool]] = []
         for bl in builder.get("blocks") or []:
             if not isinstance(bl, dict):
                 continue
@@ -3759,11 +3787,11 @@ def build_subjectives_canvas_flowables(subj: dict, styles) -> list:
                 continue
             heading = (bl.get("heading") or "").strip()
             rich = (bl.get("rich_text") or "").strip()
-            nonempty.append((heading, text, rich))
+            nonempty.append((heading, text, rich, _fs_builder_block_omit_heading_print(bl)))
 
         if nonempty:
-            for heading, text, rich in nonempty:
-                if heading:
+            for heading, text, rich, omit_heading in nonempty:
+                if heading and not omit_heading:
                     out.append(Paragraph(f"<b>{xml_escape(heading)}</b>", styles["Heading3"]))
                     out.append(Spacer(1, 0.04 * inch))
                 if rich:
