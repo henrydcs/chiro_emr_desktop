@@ -43,11 +43,15 @@ def _normalize_template_dd(dd: dict) -> None:
     dd.setdefault("multi", False)
     dd.setdefault("multi_bullets", False)
     dd.setdefault("associated_multi", False)
+    dd.setdefault("multi_full_prefix", False)
     if dd.get("associated_multi"):
         dd["multi"] = False
+        dd["multi_full_prefix"] = False
         dd.setdefault("associate_label", "Associated detail")
         if not isinstance(dd.get("associate_items"), list) or not dd.get("associate_items"):
             dd["associate_items"] = ["Option A", "Option B"]
+    elif dd.get("multi_full_prefix"):
+        dd["multi"] = True
     bst = dd.get("bullet_style")
     if bst is not None and (not isinstance(bst, str) or bst not in VALID_DROPDOWN_BULLET_STYLES):
         dd.pop("bullet_style", None)
