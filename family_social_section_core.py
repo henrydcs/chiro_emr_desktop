@@ -213,13 +213,8 @@ def _finalize_family_social_block(parts: list[str] | None) -> str:
 
 
 def _prefix_before_bullet_list(rp: str) -> str:
-    """Suffix ':' on the prefix when a tabbed bullet list follows; skip if ':' already present."""
-    s = (rp or "").rstrip()
-    if not s:
-        return s
-    if s.endswith(":"):
-        return s
-    return s + ":"
+    """Trim trailing whitespace from prefix text; punctuation is left to the template author."""
+    return (rp or "").rstrip()
 
 
 def _fmt_tag_name(bold: bool, italic: bool, underline: bool) -> str | None:
