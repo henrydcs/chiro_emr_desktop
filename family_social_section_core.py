@@ -886,8 +886,8 @@ class FamilySocialSectionCore(ttk.Frame):
             return None
         return sorted(int(x) for x in sel)
 
-    # Template cards are arranged in two columns in both the Note builder and
-    # Template editor canvas views.
+    # Template cards: Note builder and Template editor canvas use two columns when multiple
+    # templates exist; a single template spans the full width.
     _TEMPLATE_GRID_COLUMNS = 2
     _TEMPLATE_GRID_COLUMN_GAP_PX = 2
     _TEMPLATE_GRID_ROW_GAP_PX = 2
@@ -911,6 +911,37 @@ class FamilySocialSectionCore(ttk.Frame):
         try:
             canvas.itemconfigure(wid, width=event.width)
         except Exception:
+            pass
+
+    def _on_canvas_editor_canvas_configure(self, event: tk.Event) -> None:
+        """Match sentence-builder canvas: stretch embedded Template editor frame to canvas width."""
+        canvas = getattr(self, "canvas_editor_widget", None)
+        wid = getattr(self, "_canvas_editor_canvas_window_id", None)
+        if canvas is None or wid is None:
+            return
+        try:
+            if not canvas.winfo_exists():
+                return
+        except Exception:
+            return
+        try:
+            canvas.itemconfigure(wid, width=event.width)
+        except Exception:
+            pass
+
+    def _sync_canvas_editor_embed_width(self) -> None:
+        """After rebuilding cards, re-apply embed width if the canvas did not emit <Configure>."""
+        canvas = getattr(self, "canvas_editor_widget", None)
+        wid = getattr(self, "_canvas_editor_canvas_window_id", None)
+        if canvas is None or wid is None:
+            return
+        try:
+            if not canvas.winfo_exists():
+                return
+            w = int(canvas.winfo_width())
+            if w > 1:
+                canvas.itemconfigure(wid, width=w)
+        except (tk.TclError, ValueError, TypeError):
             pass
 
     def _sync_note_builder_scrollregion(self, _event: tk.Event | None = None) -> None:
@@ -2696,9 +2727,12 @@ class FamilySocialSectionCore(ttk.Frame):
 
         self._prefix_resolved_labels: list[ttk.Label] = []
 
-        cols = max(1, int(self._TEMPLATE_GRID_COLUMNS))
+        base_cols = max(1, int(self._TEMPLATE_GRID_COLUMNS))
+        cols = 1 if len(self.templates) <= 1 else base_cols
         for col in range(cols):
             self.note_scroll_frame.grid_columnconfigure(col, weight=1, uniform="note_template_cols")
+
+        prefix_wrap_px = 880 if cols == 1 else 420
 
         for idx, tmpl in enumerate(self.templates):
             row_idx = idx // cols
@@ -2733,7 +2767,7 @@ class FamilySocialSectionCore(ttk.Frame):
             ).pack(anchor="w", padx=8, pady=(4, 0))
 
             pv = self._resolve_vars(tmpl.get("prefix") or "")
-            pl = ttk.Label(card, text=f"Prefix (resolved): {pv}", wraplength=420)
+            pl = ttk.Label(card, text=f"Prefix (resolved): {pv}", wraplength=prefix_wrap_px)
             pl.pack(anchor="w", padx=8, pady=(6, 2))
             self._prefix_resolved_labels.append(pl)
 
@@ -3414,8 +3448,11 @@ class FamilySocialSectionCore(ttk.Frame):
         cv = tk.Canvas(outer, highlightthickness=0)
         sb = ttk.Scrollbar(outer, orient="vertical", command=cv.yview)
         self.canvas_scroll_frame = ttk.Frame(cv)
-        self.canvas_scroll_frame.bind("<Configure>", lambda e: cv.configure(scrollregion=cv.bbox("all")))
-        cv.create_window((0, 0), window=self.canvas_scroll_frame, anchor="nw")
+        self.canvas_scroll_frame.bind("<Configure>", lambda _e: cv.configure(scrollregion=cv.bbox("all")))
+        self._canvas_editor_canvas_window_id = cv.create_window(
+            (0, 0), window=self.canvas_scroll_frame, anchor="nw"
+        )
+        cv.bind("<Configure>", self._on_canvas_editor_canvas_configure)
         cv.configure(yscrollcommand=sb.set)
         cv.pack(side="left", fill="both", expand=True)
         sb.pack(side="right", fill="y")
@@ -3425,7 +3462,8 @@ class FamilySocialSectionCore(ttk.Frame):
         for w in self.canvas_scroll_frame.winfo_children():
             w.destroy()
 
-        cols = max(1, int(self._TEMPLATE_GRID_COLUMNS))
+        base_cols = max(1, int(self._TEMPLATE_GRID_COLUMNS))
+        cols = 1 if len(self.templates) <= 1 else base_cols
         for col in range(cols):
             self.canvas_scroll_frame.grid_columnconfigure(col, weight=1, uniform="canvas_template_cols")
 
@@ -3434,6 +3472,7 @@ class FamilySocialSectionCore(ttk.Frame):
 
         self.canvas_scroll_frame.update_idletasks()
         self.canvas_editor_widget.configure(scrollregion=self.canvas_editor_widget.bbox("all"))
+        self.after_idle(self._sync_canvas_editor_embed_width)
 
     def _build_template_editor_card(self, parent: ttk.Frame, tmpl: dict, idx: int, cols: int | None = None) -> None:
         col_count = max(1, int(cols or self._TEMPLATE_GRID_COLUMNS))
