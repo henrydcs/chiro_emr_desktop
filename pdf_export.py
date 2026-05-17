@@ -3811,10 +3811,9 @@ def _build_fs_assoc_plain_grid_table(rows: list[dict], base_style: object, style
             spaceAfter=0,
         )
         built.append((line, row_st))
-    for i, (line, row_st) in enumerate(built):
+    for line, row_st in built:
         out.append(_safe_rich_paragraph(line, row_st))
-        if i < len(built) - 1:
-            out.append(_fs_assoc_option_row_separator())
+        out.append(_fs_assoc_option_row_separator())
     return out
 
 
