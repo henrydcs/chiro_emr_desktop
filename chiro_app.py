@@ -630,13 +630,57 @@ class App(tk.Tk):
         if px <= 0:
             return ""
         try:
-            k = (id(txt), int(px))
+            k = (id(txt), "b", int(px))
         except Exception:
             return ""
         tnm = self._preview_bullet_wrap_by_key.get(k)
         if tnm is None:
             self._preview_bullet_wrap_tag_uid += 1
             tnm = f"LW_BWRAP_{self._preview_bullet_wrap_tag_uid}_{int(px)}"
+            try:
+                txt.tag_configure(tnm, lmargin1=0, lmargin2=int(px))
+            except tk.TclError:
+                return ""
+            self._preview_bullet_wrap_by_key[k] = tnm
+        return tnm
+
+    def _live_preview_column_tab_tag(self, txt: tk.Text, px: int) -> str:
+        if px <= 0:
+            return ""
+        try:
+            k = (id(txt), "t", int(px))
+        except Exception:
+            return ""
+        tnm = self._preview_bullet_wrap_by_key.get(k)
+        if tnm is None:
+            self._preview_bullet_wrap_tag_uid += 1
+            tnm = f"LW_COLTAB_{self._preview_bullet_wrap_tag_uid}_{int(px)}"
+            try:
+                txt.tag_configure(tnm, tabs=(f"{int(px)}p",))
+            except tk.TclError:
+                try:
+                    import tkinter.font as tkfont
+
+                    fn = tkfont.Font(font=txt.cget("font"))
+                    cw = max(1, int(fn.measure("0")))
+                    chars = max(1, (int(px) + cw - 1) // cw)
+                    txt.tag_configure(tnm, tabs=(f"{chars}c",))
+                except tk.TclError:
+                    return ""
+            self._preview_bullet_wrap_by_key[k] = tnm
+        return tnm
+
+    def _live_preview_column_value_wrap_tag(self, txt: tk.Text, px: int) -> str:
+        if px <= 0:
+            return ""
+        try:
+            k = (id(txt), "v", int(px))
+        except Exception:
+            return ""
+        tnm = self._preview_bullet_wrap_by_key.get(k)
+        if tnm is None:
+            self._preview_bullet_wrap_tag_uid += 1
+            tnm = f"LW_COLVAL_{self._preview_bullet_wrap_tag_uid}_{int(px)}"
             try:
                 txt.tag_configure(tnm, lmargin1=0, lmargin2=int(px))
             except tk.TclError:
@@ -880,17 +924,27 @@ class App(tk.Tk):
                     if not chunk:
                         continue
                     tag_list: list[str] = []
-                    if wrap_px is not None and wrap_px > 0:
-                        # Note builder measures with its own Tk font — preview proportional font
-                        # is wider for bold/emphasis segments; widen hanging indent slightly so
-                        # wrapped lines visually align under the detail body text.
-                        try:
-                            wadj = max(1, int(int(wrap_px) * 1.08 + 12))
-                        except (TypeError, ValueError):
-                            wadj = int(wrap_px)
-                        wtn = self._live_preview_bullet_wrap_tag(txt, wadj)
-                        if wtn:
-                            tag_list.append(wtn)
+                    if wrap_px is not None:
+                        if wrap_px < 0:
+                            wtn = self._live_preview_column_tab_tag(txt, -int(wrap_px))
+                            if wtn:
+                                tag_list.append(wtn)
+                        elif wrap_px >= 50_000_000:
+                            col_px = int(wrap_px) - 50_000_000
+                            wtn = self._live_preview_column_value_wrap_tag(txt, col_px)
+                            if wtn:
+                                tag_list.append(wtn)
+                        elif wrap_px > 0:
+                            # Note builder measures with its own Tk font — preview proportional font
+                            # is wider for bold/emphasis segments; widen hanging indent slightly so
+                            # wrapped lines visually align under the detail body text.
+                            try:
+                                wadj = max(1, int(int(wrap_px) * 1.08 + 12))
+                            except (TypeError, ValueError):
+                                wadj = int(wrap_px)
+                            wtn = self._live_preview_bullet_wrap_tag(txt, wadj)
+                            if wtn:
+                                tag_list.append(wtn)
                     if tag:
                         tag_list.append(tag)
                     if tag_list:

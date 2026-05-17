@@ -29,6 +29,9 @@ TEMPLATE_BAND_COLORS = ("#9D9D9D", "#C5C5C5")
 # Embedded in saved rich_text only — stripped before Tk formatting restore / Live Preview XML parse.
 _PDF_FS_GRID_COMMENT_RE = re.compile(r"<!--pdf_fs_grid:(.*?)-->", re.DOTALL)
 
+# wrap_px encodings for assoc per-primary plain aligned-column rows (edit box + live preview).
+_PLAIN_COL_VALUE_WRAP_FLAG = 50_000_000
+
 
 def _strip_pdf_fs_grid_comments(s: str | None) -> str:
     if not s:
@@ -288,6 +291,8 @@ def _finalize_family_social_block_annotated(
     for pi, (p, d) in enumerate(zip(pl, dl)):
         if bullet_wrap_by_part_idx is not None and pi in bullet_wrap_by_part_idx:
             bullet_flow_px = int(bullet_wrap_by_part_idx[pi])
+        else:
+            bullet_flow_px = None
         if p is None:
             continue
         s = str(p)
@@ -337,6 +342,31 @@ def _plain_grid_run_matches_export_row(
         and ch.rstrip() == str(er.get("h") or "").rstrip()
         and ch2.strip() == str(er.get("v") or "").strip()
     )
+
+
+def _plain_grid_runs_match_export_row(
+    runs_src: list[tuple[str, str | None, int | None]], i: int, er: dict
+) -> tuple[bool, int]:
+    """Match label + optional space-pad + value runs to one export row; return next index."""
+    if i >= len(runs_src) or not er:
+        return False, i
+    if runs_src[i][0].rstrip() != str(er.get("h") or "").rstrip():
+        return False, i
+    j = i + 1
+    while j < len(runs_src):
+        mid = runs_src[j][0]
+        if mid and not mid.strip():
+            j += 1
+            continue
+        if mid and all(c == " " for c in mid):
+            j += 1
+            continue
+        break
+    if j >= len(runs_src):
+        return False, i
+    if runs_src[j][0].strip() != str(er.get("v") or "").strip():
+        return False, i
+    return True, j + 1
 
 
 def _fmt_flags_dict(dd: dict, *, assoc: bool = False) -> dict[str, bool]:
@@ -495,6 +525,8 @@ class FamilySocialSectionCore(ttk.Frame):
         self._clear_token_copy_msg_after_id = None
         # Tk Text tag cache: indent px → tag name for wrapped bullet continuation (lmargin2).
         self._bullet_wrap_tag_by_px: dict[int, str] = {}
+        self._column_tab_tag_by_px: dict[int, str] = {}
+        self._column_val_wrap_tag_by_px: dict[int, str] = {}
 
         self._build_note_tab(self)
         self._mw_bound = False
@@ -1427,36 +1459,71 @@ class FamilySocialSectionCore(ttk.Frame):
         bold_fudge = max(14, hdr_m // 6)
         return hdr_m + sep_m + bold_fudge
 
-    def _assoc_plain_column_value_px(self, dd: dict, headers: list[str]) -> int:
-        """Left offset where no-bullet assoc detail text starts (aligned column)."""
+    def _assoc_plain_column_label_width_px(self, dd: dict, label: str) -> int:
+        """Rendered width of one primary label (with colon), in edit-box font pixels."""
         fmt = dd.get("text_format") or {}
-        max_hdr = 0
-        for raw in headers:
-            h = str(raw or "").strip()
-            if not h:
-                continue
-            if not h.endswith(":"):
-                h = f"{h}:"
-            hdr_m = self._measure_note_font_px(
-                h, bold=bool(fmt.get("bold")), italic=bool(fmt.get("italic"))
-            )
-            max_hdr = max(max_hdr, hdr_m)
-        gap_m = self._measure_note_font_px("  ", bold=False, italic=False)
-        bold_fudge = max(14, max_hdr // 6) if max_hdr else 14
-        return max_hdr + gap_m + bold_fudge
-
-    def _assoc_plain_column_label_prefix(self, dd: dict, hdr: str, target_px: int) -> str:
-        """Pad a primary label with spaces so the value column lines up across rows."""
-        fmt = dd.get("text_format") or {}
-        lbl = str(hdr or "").strip()
+        lbl = str(label or "").strip()
         if not lbl.endswith(":"):
             lbl = f"{lbl}:"
-        hdr_m = self._measure_note_font_px(
+        return self._measure_note_font_px(
             lbl, bold=bool(fmt.get("bold")), italic=bool(fmt.get("italic"))
         )
-        sp_m = max(1, self._measure_note_font_px(" ", bold=False, italic=False))
-        pad = max(0, int(target_px) - hdr_m)
-        return lbl + (" " * max(0, (pad + sp_m - 1) // sp_m))
+
+    def _assoc_plain_column_gap_px(self, dd: dict) -> int:
+        """A few spaces after the longest primary label before detail text (preview/PDF edit box)."""
+        sp = self._measure_note_font_px(" ", bold=False, italic=False)
+        return max(4, sp * 2)
+
+    def _assoc_plain_column_value_px(self, dd: dict, headers: list[str]) -> int:
+        """Pixel offset where every row's detail text begins (widest label + small gap)."""
+        max_hdr = 0
+        for raw in headers:
+            w = self._assoc_plain_column_label_width_px(dd, raw)
+            max_hdr = max(max_hdr, w)
+        return int(max_hdr + self._assoc_plain_column_gap_px(dd))
+
+    def _assoc_plain_column_label_pad(self, dd: dict, hlbl: str, col_px: int) -> str:
+        """Regular-width spaces after bold label so the detail column starts at col_px."""
+        lbl_w = self._assoc_plain_column_label_width_px(dd, hlbl)
+        gap = max(0, int(col_px) - lbl_w)
+        sp_w = max(1, self._measure_note_font_px(" ", bold=False, italic=False))
+        return " " * max(0, (gap + sp_w - 1) // sp_w)
+
+    def _assoc_plain_column_tab_tag(self, px: int) -> str:
+        """Tab stop at px from line start so every row's detail begins in one column."""
+        if px <= 0:
+            return ""
+        tnm = self._column_tab_tag_by_px.get(px)
+        if tnm is not None:
+            return tnm
+        tnm = f"fs_col_tab_{len(self._column_tab_tag_by_px)}_{int(px)}"
+        try:
+            self.text.tag_configure(tnm, tabs=(f"{int(px)}p",))
+        except tk.TclError:
+            try:
+                fn = tkfont.Font(font=self.text.cget("font"))
+                cw = max(1, int(fn.measure("0")))
+                chars = max(1, (int(px) + cw - 1) // cw)
+                self.text.tag_configure(tnm, tabs=(f"{chars}c",))
+            except tk.TclError:
+                return ""
+        self._column_tab_tag_by_px[px] = tnm
+        return tnm
+
+    def _assoc_plain_column_value_wrap_tag(self, px: int) -> str:
+        """Wrapped detail lines stay in the value column."""
+        if px <= 0:
+            return ""
+        tnm = self._column_val_wrap_tag_by_px.get(px)
+        if tnm is not None:
+            return tnm
+        tnm = f"fs_col_val_{len(self._column_val_wrap_tag_by_px)}_{int(px)}"
+        try:
+            self.text.tag_configure(tnm, lmargin1=0, lmargin2=int(px))
+        except tk.TclError:
+            return ""
+        self._column_val_wrap_tag_by_px[px] = tnm
+        return tnm
 
     def _simple_tab_bullet_wrap_indent_px(self, dd: dict) -> int:
         """Multi / single bullet lines: align wraps under text after tab + bullet glyph."""
@@ -1481,10 +1548,20 @@ class FamilySocialSectionCore(ttk.Frame):
     def _insert_builder_runs(self, runs: list[tuple[str, str | None, int | None]]) -> None:
         for chunk, tag, wrap_px in runs:
             tnames = []
-            if wrap_px is not None and wrap_px > 0:
-                wtag = self._bullet_wrap_tag_name(int(wrap_px))
-                if wtag:
-                    tnames.append(wtag)
+            if wrap_px is not None:
+                if wrap_px < 0:
+                    ttag = self._assoc_plain_column_tab_tag(-int(wrap_px))
+                    if ttag:
+                        tnames.append(ttag)
+                elif wrap_px >= _PLAIN_COL_VALUE_WRAP_FLAG:
+                    col_px = int(wrap_px) - _PLAIN_COL_VALUE_WRAP_FLAG
+                    wtag = self._assoc_plain_column_value_wrap_tag(col_px)
+                    if wtag:
+                        tnames.append(wtag)
+                elif wrap_px > 0:
+                    wtag = self._bullet_wrap_tag_name(int(wrap_px))
+                    if wtag:
+                        tnames.append(wtag)
             if tag:
                 tnames.append(tag)
             if tnames:
@@ -1703,15 +1780,17 @@ class FamilySocialSectionCore(ttk.Frame):
                             # Single line break between rows comes from the next row's line_pfx;
                             # omit trailing newline here so Live Preview rows aren't double-spaced.
                             if plain_pp_columns_dd:
-                                padded_lbl = self._assoc_plain_column_label_prefix(
+                                pad = self._assoc_plain_column_label_pad(
                                     dd, hlbl, plain_col_px
                                 )
-                                dropdown_parts[-1] = _ATTACH + padded_lbl
+                                if pad:
+                                    dropdown_parts.append(_ATTACH + pad)
+                                    _dropdown_dds.append(None)
                                 dropdown_parts.append(_ATTACH + detail)
                                 _dropdown_dds.append(_asc_proxy)
                                 if plain_col_px > 0:
                                     bullet_px_by_dropdown_idx[len(dropdown_parts) - 1] = (
-                                        plain_col_px
+                                        plain_col_px + _PLAIN_COL_VALUE_WRAP_FLAG
                                     )
                             else:
                                 dropdown_parts.append(_ATTACH + " " + detail)
@@ -1943,6 +2022,28 @@ class FamilySocialSectionCore(ttk.Frame):
                 for k in range(s, min(e, n)):
                     wrap_at[k] = px
 
+        for px, tag in list(self._column_tab_tag_by_px.items()):
+            try:
+                ranges = self.text.tag_ranges(tag)
+            except tk.TclError:
+                continue
+            for i in range(0, len(ranges), 2):
+                s = _tk_to_offset(str(ranges[i]))
+                e = _tk_to_offset(str(ranges[i + 1]))
+                for k in range(s, min(e, n)):
+                    wrap_at[k] = -int(px)
+
+        for px, tag in list(self._column_val_wrap_tag_by_px.items()):
+            try:
+                ranges = self.text.tag_ranges(tag)
+            except tk.TclError:
+                continue
+            for i in range(0, len(ranges), 2):
+                s = _tk_to_offset(str(ranges[i]))
+                e = _tk_to_offset(str(ranges[i + 1]))
+                for k in range(s, min(e, n)):
+                    wrap_at[k] = int(px) + _PLAIN_COL_VALUE_WRAP_FLAG
+
         # Group consecutive characters with the same (fmt_tag, wrap_px) into runs.
         runs: list[tuple[str, str | None, int | None]] = []
         i = 0
@@ -1952,7 +2053,8 @@ class FamilySocialSectionCore(ttk.Frame):
             j = i + 1
             while j < n and fmt_at[j] == cur_fmt and wrap_at[j] == cur_wrap:
                 j += 1
-            runs.append((full_text[i:j], cur_fmt, cur_wrap if cur_wrap > 0 else None))
+            wrap_out = cur_wrap if cur_wrap != 0 else None
+            runs.append((full_text[i:j], cur_fmt, wrap_out))
             i = j
         return runs
 
@@ -2023,33 +2125,31 @@ class FamilySocialSectionCore(ttk.Frame):
             ri = 0
             n = len(runs_src)
             while i < n:
-                if (
-                    ri < len(export_rows)
-                    and i + 1 < n
-                    and _plain_grid_run_matches_export_row(
-                        runs_src[i], runs_src[i + 1], export_rows[ri]
+                if ri < len(export_rows):
+                    matched, next_i = _plain_grid_runs_match_export_row(
+                        runs_src, i, export_rows[ri]
                     )
-                ):
-                    er = export_rows[ri]
-                    # PDF consumes markers into a Plan-style table; omit duplicate inline XML here.
-                    try:
-                        grid_obj: dict = {
-                            "h": er["h"],
-                            "v": er["v"],
-                            "hf": er["hf"],
-                            "vf": er["vf"],
-                        }
-                        if str(er.get("align") or "") == "columns":
-                            grid_obj["align"] = "columns"
-                        payload = base64.urlsafe_b64encode(
-                            json.dumps(grid_obj, separators=(",", ":")).encode("utf-8")
-                        ).decode("ascii")
-                        parts.append(f"<!--pdf_fs_grid:{payload}-->")
-                    except Exception:
-                        pass
-                    ri += 1
-                    i += 2
-                    continue
+                    if matched:
+                        er = export_rows[ri]
+                        # PDF consumes markers into a Plan-style table; omit duplicate inline XML here.
+                        try:
+                            grid_obj: dict = {
+                                "h": er["h"],
+                                "v": er["v"],
+                                "hf": er["hf"],
+                                "vf": er["vf"],
+                            }
+                            if str(er.get("align") or "") == "columns":
+                                grid_obj["align"] = "columns"
+                            payload = base64.urlsafe_b64encode(
+                                json.dumps(grid_obj, separators=(",", ":")).encode("utf-8")
+                            ).decode("ascii")
+                            parts.append(f"<!--pdf_fs_grid:{payload}-->")
+                        except Exception:
+                            pass
+                        ri += 1
+                        i = next_i
+                        continue
                 ch, tag, _px = runs_src[i]
                 parts.append(_wrap_run_safe(ch, tag))
                 i += 1
