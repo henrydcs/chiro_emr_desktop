@@ -3617,8 +3617,13 @@ def _build_fs_assoc_plain_grid_table(rows: list[dict], base_style: object) -> li
     B = base_style
     fs = getattr(B, "fontSize", 10) or 10
     fn = getattr(B, "fontName", "Helvetica") or "Helvetica"
-    # Single-spaced <br/> rows — tight gaps, no blank lines between options.
-    lead = fs
+    # Option rows only: use body leading (bullets inherit this); fs alone was too tight in PDF.
+    try:
+        lead = float(getattr(B, "leading", fs * 1.2) or (fs * 1.2))
+    except (TypeError, ValueError):
+        lead = fs * 1.2
+    if lead <= fs:
+        lead = fs * 1.2
     row_style = ParagraphStyle(
         "FSAssocPlainInlineBlock",
         parent=B,
