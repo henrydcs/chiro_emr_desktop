@@ -1380,14 +1380,19 @@ class FamilySocialSectionCore(ttk.Frame):
         dropdown_parts: list[str],
         dropdown_dds: list[dict | None],
     ) -> None:
-        """Emit resolved dropdown prefix before Multiple choice Full/Full output (matches Associated Multiple prefix rules)."""
+        """Emit resolved dropdown prefix before Multiple choice Full/Full output.
+
+        With Bullet Lines, a blank paragraph may precede the prefix when continuing prior content
+        (same as Associated Multiple prefix spacing). With Narrative / Comma / Period, fragments
+        stay in one paragraph—finalize joins with a single space like plain dropdown sentences.
+        """
         if not bool(dd.get("multi_full_prefix")) or not bool(dd.get("multi")):
             return
         dd_prefix_raw = self._resolve_vars(str(dd.get("prefix") or "")).strip()
         if not dd_prefix_raw:
             return
         dd_prefix_text = _prefix_before_bullet_list(dd_prefix_raw)
-        if dropdown_parts:
+        if dropdown_parts and bool(dd.get("multi_bullets")):
             dd_prefix_text = "\n\n" + dd_prefix_text
         dropdown_parts.append(dd_prefix_text)
         dropdown_dds.append(None)
@@ -1400,8 +1405,8 @@ class FamilySocialSectionCore(ttk.Frame):
     ) -> None:
         """Emit resolved dropdown prefix before Single choice Full/Full output.
 
-        Unlike Associated Multiple / Multiple Full/Full, does not insert a blank paragraph;
-        finalize joins this fragment with a single space like consecutive plain dropdown sentences.
+        Finalize joins this fragment with a single space like consecutive plain dropdown sentences
+        (no blank paragraph before the prefix). Bullet Lines output still follows unchanged bullet logic.
         """
         if bool(dd.get("multi")) or not bool(dd.get("single_full_prefix")):
             return
