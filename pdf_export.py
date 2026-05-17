@@ -1,6 +1,8 @@
 # pdf_export.py
 from __future__ import annotations
 
+import base64
+import json
 import os
 import re
 from xml.sax.saxutils import escape as xml_escape
@@ -42,8 +44,9 @@ _RE_REEXAM = re.compile(r"^\s*Re-Exam\s+\d+\s*$", re.IGNORECASE)
 _RE_ROF    = re.compile(r"^\s*Review of Findings\s+\d+\s*$", re.IGNORECASE)
 
 #from xml.sax.saxutils import escape as xml_escape
-from reportlab.platypus import Paragraph, Spacer
+from reportlab.platypus import Paragraph, Spacer, Flowable
 from reportlab.lib.units import inch
+
 
 def _as_paragraph(text: str, styles):
     t = (text or "").strip()
@@ -3559,6 +3562,122 @@ def _fs_pdf_flowables_from_note_plain(text: str, base_style: object, styles: obj
 _FS_RICH_TAG_STRIP = re.compile(r"<[^>]+>")
 _FS_RICH_BR_SPLIT = re.compile(r"<br\s*/?>")
 
+# Family/Social “Associated per primary” (no bullet lines): invisible markers in saved rich_text.
+_PDF_FS_GRID_COMMENT_RE = re.compile(r"<!--pdf_fs_grid:(.*?)-->", re.DOTALL)
+
+
+def _norm_fs_grid_fmt(flags: object) -> dict[str, bool]:
+    if not isinstance(flags, dict):
+        return {"b": False, "i": False, "u": False}
+    return {
+        "b": bool(flags.get("b")),
+        "i": bool(flags.get("i")),
+        "u": bool(flags.get("u")),
+    }
+
+
+def _decode_pdf_fs_grid_comment_payload(payload: str) -> dict | None:
+    raw = (payload or "").strip()
+    if not raw:
+        return None
+    try:
+        obj = json.loads(base64.urlsafe_b64decode(raw + "==").decode("utf-8"))
+    except Exception:
+        return None
+    if not isinstance(obj, dict):
+        return None
+    h = str(obj.get("h") or "").strip()
+    v = str(obj.get("v") or "").strip()
+    if not h or not v:
+        return None
+    return {
+        "h": h,
+        "v": v,
+        "hf": _norm_fs_grid_fmt(obj.get("hf")),
+        "vf": _norm_fs_grid_fmt(obj.get("vf")),
+    }
+
+
+def _fs_grid_cell_xml(text: str, flags: dict[str, bool]) -> str:
+    safe = xml_escape(text).replace("\n", "<br/>")
+    if flags.get("u"):
+        safe = f"<u>{safe}</u>"
+    if flags.get("i"):
+        safe = f"<i>{safe}</i>"
+    if flags.get("b"):
+        safe = f"<b>{safe}</b>"
+    return safe
+
+
+def _build_fs_assoc_plain_grid_table(rows: list[dict], base_style: object) -> list:
+    """Associated per primary (no bullets): inline rows like Live Preview — no gridlines."""
+    out: list = []
+    if not REPORTLAB_OK or not rows:
+        return out
+    B = base_style
+    fs = getattr(B, "fontSize", 10) or 10
+    fn = getattr(B, "fontName", "Helvetica") or "Helvetica"
+    # Single-spaced <br/> rows — tight gaps, no blank lines between options.
+    lead = fs + 0.25
+    row_style = ParagraphStyle(
+        "FSAssocPlainInlineBlock",
+        parent=B,
+        fontName=fn,
+        fontSize=fs,
+        leading=lead,
+        spaceBefore=0,
+        spaceAfter=0,
+    )
+    lines: list[str] = []
+    for row in rows:
+        if not isinstance(row, dict):
+            continue
+        h = str(row.get("h") or "").strip()
+        v = str(row.get("v") or "").strip()
+        if not h or not v:
+            continue
+        hf = _norm_fs_grid_fmt(row.get("hf"))
+        vf = _norm_fs_grid_fmt(row.get("vf"))
+        lines.append(_fs_grid_cell_xml(h, hf) + " " + _fs_grid_cell_xml(v, vf))
+    if not lines:
+        return out
+    out.append(Paragraph("<br/>".join(lines), row_style))
+    out.append(Spacer(1, 2))
+    return out
+
+
+def _fs_pdf_flowables_from_note_rich_with_fs_grid_tables(
+    rich: str, base_style: object, styles: object
+) -> list:
+    """Expand FS assoc plain-grid markers into compact inline Paragraphs (PDF mirrors Live Preview)."""
+    rich = rich or ""
+    if not rich.strip():
+        return []
+    out: list = []
+    pending: list[dict] = []
+    prev_end = 0
+
+    def flush_grid() -> None:
+        nonlocal pending
+        if pending:
+            out.extend(_build_fs_assoc_plain_grid_table(pending, base_style))
+            pending.clear()
+
+    for m in _PDF_FS_GRID_COMMENT_RE.finditer(rich):
+        head = rich[prev_end:m.start()]
+        row = _decode_pdf_fs_grid_comment_payload(m.group(1))
+        if head.strip():
+            flush_grid()
+            out.extend(_fs_pdf_flowables_from_note_rich(head, base_style, styles))
+        if row:
+            pending.append(row)
+        prev_end = m.end()
+    tail = rich[prev_end:]
+    flush_grid()
+    if tail.strip():
+        out.extend(_fs_pdf_flowables_from_note_rich(tail, base_style, styles))
+    return out
+
 
 def _fs_pdf_flowables_from_note_rich(
     rich: str, base_style: object, styles: object
@@ -3734,11 +3853,20 @@ def build_family_social_flowables(soap: dict, styles) -> list:
                 out.append(Paragraph(f"<b>{xml_escape(heading)}</b>", styles["Heading3"]))
                 out.append(Spacer(1, 0.04 * inch))
             if rich:
-                if _fs_block_has_pdf_bullets(text):
-                    for fl in _fs_pdf_flowables_from_note_rich(rich, fs_body, styles):
+                has_grid = bool(_PDF_FS_GRID_COMMENT_RE.search(rich))
+                has_bullets = _fs_block_has_pdf_bullets(text)
+                if has_bullets or has_grid:
+                    for fl in _fs_pdf_flowables_from_note_rich_with_fs_grid_tables(
+                        rich, fs_body, styles
+                    ):
                         out.append(fl)
                 else:
-                    out.append(_safe_rich_paragraph(_pdf_preserve_whitespace_in_rich(rich), fs_body))
+                    clean_rich = _PDF_FS_GRID_COMMENT_RE.sub("", rich)
+                    out.append(
+                        _safe_rich_paragraph(
+                            _pdf_preserve_whitespace_in_rich(clean_rich), fs_body
+                        )
+                    )
             else:
                 for fl in _fs_pdf_flowables_from_note_plain(text, fs_body, styles):
                     out.append(fl)
@@ -3795,11 +3923,20 @@ def build_subjectives_canvas_flowables(subj: dict, styles) -> list:
                     out.append(Paragraph(f"<b>{xml_escape(heading)}</b>", styles["Heading3"]))
                     out.append(Spacer(1, 0.04 * inch))
                 if rich:
-                    if _fs_block_has_pdf_bullets(text):
-                        for fl in _fs_pdf_flowables_from_note_rich(rich, body_style, styles):
+                    has_grid = bool(_PDF_FS_GRID_COMMENT_RE.search(rich))
+                    has_bullets = _fs_block_has_pdf_bullets(text)
+                    if has_bullets or has_grid:
+                        for fl in _fs_pdf_flowables_from_note_rich_with_fs_grid_tables(
+                            rich, body_style, styles
+                        ):
                             out.append(fl)
                     else:
-                        out.append(_safe_rich_paragraph(_pdf_preserve_whitespace_in_rich(rich), body_style))
+                        clean_rich = _PDF_FS_GRID_COMMENT_RE.sub("", rich)
+                        out.append(
+                            _safe_rich_paragraph(
+                                _pdf_preserve_whitespace_in_rich(clean_rich), body_style
+                            )
+                        )
                 else:
                     for fl in _fs_pdf_flowables_from_note_plain(text, body_style, styles):
                         out.append(fl)

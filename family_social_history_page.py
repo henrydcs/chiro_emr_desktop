@@ -43,15 +43,31 @@ def _normalize_template_dd(dd: dict) -> None:
     dd.setdefault("multi", False)
     dd.setdefault("multi_bullets", False)
     dd.setdefault("associated_multi", False)
+    dd.setdefault("associated_per_primary", False)
+    dd.setdefault("assoc_primary_use_bullets", True)
     dd.setdefault("multi_full_prefix", False)
     dd.setdefault("single_full_prefix", False)
     if dd.get("associated_multi"):
+        dd["associated_per_primary"] = False
         dd["multi"] = False
         dd["multi_full_prefix"] = False
         dd["single_full_prefix"] = False
         dd.setdefault("associate_label", "Associated detail")
         if not isinstance(dd.get("associate_items"), list) or not dd.get("associate_items"):
             dd["associate_items"] = ["Option A", "Option B"]
+    elif dd.get("associated_per_primary"):
+        dd["associated_multi"] = False
+        dd["multi"] = False
+        dd["multi_full_prefix"] = False
+        dd["single_full_prefix"] = False
+        dd.setdefault("associate_label", "Secondary options")
+        dd.setdefault("associate_items", [])
+        items = dd.get("items") or []
+        if isinstance(items, list):
+            ppa = dd.setdefault("per_primary_associates", [])
+            while len(ppa) < len(items):
+                ppa.append([])
+            del ppa[len(items):]
     elif dd.get("multi_full_prefix"):
         dd["multi"] = True
         dd["single_full_prefix"] = False

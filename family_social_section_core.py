@@ -1,6 +1,7 @@
 # family_social_section_core.py — One Family/Social sub-section (Note builder + template Canvas).
 from __future__ import annotations
 
+import base64
 import copy
 import json
 import os
@@ -24,6 +25,15 @@ _BUILDER_SLOT_DEFAULT = object()
 # Prepended to each builder dropdown (not stored in JSON). Selecting it drops that clause from output.
 OPTION_OMIT = "(Omit — exclude from sentence)"
 TEMPLATE_BAND_COLORS = ("#9D9D9D", "#C5C5C5")
+
+# Embedded in saved rich_text only — stripped before Tk formatting restore / Live Preview XML parse.
+_PDF_FS_GRID_COMMENT_RE = re.compile(r"<!--pdf_fs_grid:(.*?)-->", re.DOTALL)
+
+
+def _strip_pdf_fs_grid_comments(s: str | None) -> str:
+    if not s:
+        return ""
+    return _PDF_FS_GRID_COMMENT_RE.sub("", str(s))
 
 # Associated-dropdown slot colors (DD1, DD2, DD3, ...). DD1 starts orange by request.
 ASSOC_SLOT_DEFAULT_COLORS: tuple[tuple[str, str], ...] = (
@@ -77,6 +87,8 @@ def _effective_bullet_style_key(dd: dict) -> str:
         return st
     if dd.get("associated_multi"):
         return "hyphen"
+    if dd.get("associated_per_primary") and bool(dd.get("assoc_primary_use_bullets", True)):
+        return "hyphen"
     return "bullet"
 
 
@@ -89,6 +101,13 @@ def _bullet_line_prefix(dd: dict, first_line: bool) -> str:
     if first_line:
         return "\n\n\t" + suf
     return "\n\t" + suf
+
+
+def _associated_detail_row_prefix(dd: dict, first_line: bool, *, use_tab_bullets: bool) -> str:
+    """Associated dropdown rows: tab+bullet glyphs, or plain newlines only (Plan-of-care style)."""
+    if use_tab_bullets:
+        return _bullet_line_prefix(dd, first_line)
+    return "\n\n" if first_line else "\n"
 
 
 def _wrap_long_bullet_tokens(dd: dict, text: str, *, max_token_len: int = 42) -> str:
@@ -170,6 +189,19 @@ def _rstrip_trailing_newlines_only(s: str) -> str:
     return str(s).rstrip("\r\n")
 
 
+def _finalize_newline_gap_fragment(s: str) -> str:
+    """Normalize \\n-leading fragments for finalize joins.
+
+    `_rstrip_trailing_newlines_only` would erase fragments that are only newlines;
+    those carry intentional paragraph gaps and must survive into runs/output.
+    """
+    body = str(s)
+    if body.startswith("\n") and not body.strip("\r\n"):
+        # Preserve blank-line gaps: "\\n" vs "\\n\\n" etc.
+        return body.replace("\r\n", "\n").replace("\r", "\n")
+    return _rstrip_trailing_newlines_only(body)
+
+
 def _finalize_family_social_block(parts: list[str] | None) -> str:
     """Join prefix + dropdown fragments in a single pass.
 
@@ -193,7 +225,7 @@ def _finalize_family_social_block(parts: list[str] | None) -> str:
         if not s.strip() and not s.startswith("\n"):
             continue
         if s.startswith("\n"):
-            cleaned = _rstrip_trailing_newlines_only(s)
+            cleaned = _finalize_newline_gap_fragment(s)
             out = cleaned if first else (out + cleaned)
         elif s.startswith(_ATTACH):
             cleaned = s[len(_ATTACH):]
@@ -264,7 +296,7 @@ def _finalize_family_social_block_annotated(
         tag = _dd_fmt_tag(d)
         wrap_px = bullet_flow_px
         if s.startswith("\n"):
-            cleaned = _rstrip_trailing_newlines_only(s)
+            cleaned = _finalize_newline_gap_fragment(s)
             runs.append((cleaned if first else cleaned, tag, wrap_px))
         elif s.startswith(_ATTACH):
             cleaned = s[len(_ATTACH):]
@@ -291,6 +323,30 @@ def _finalize_family_social_block_annotated(
             runs[-1] = (last_t + ".", last_tag, last_px)
 
     return [(t, tag, px) for t, tag, px in runs if t]
+
+
+def _plain_grid_run_matches_export_row(
+    run_a: tuple[str, str | None, int | None],
+    run_b: tuple[str, str | None, int | None],
+    er: dict,
+) -> bool:
+    ch, _, _ = run_a
+    ch2, _, _ = run_b
+    return (
+        bool(er)
+        and ch.rstrip() == str(er.get("h") or "").rstrip()
+        and ch2.strip() == str(er.get("v") or "").strip()
+    )
+
+
+def _fmt_flags_dict(dd: dict, *, assoc: bool = False) -> dict[str, bool]:
+    key = "assoc_text_format" if assoc else "text_format"
+    fmt = dd.get(key) or {}
+    return {
+        "b": bool(fmt.get("bold")),
+        "i": bool(fmt.get("italic")),
+        "u": bool(fmt.get("underline")),
+    }
 
 
 def _join_with_oxford_and(items: list[str]) -> str:
@@ -474,7 +530,7 @@ class FamilySocialSectionCore(ttk.Frame):
         """
         Prompt for a new template/dropdown selection mode.
         Returns "single", "single_full_prefix", "multiple", "multiple_full_prefix",
-        "associated_multiple", or None if cancelled.
+        "associated_multiple", "associated_per_primary", or None if cancelled.
         """
         result: list[str | None] = [None]
         dlg = tk.Toplevel(self.winfo_toplevel())
@@ -520,6 +576,12 @@ class FamilySocialSectionCore(ttk.Frame):
             width=22,
             command=lambda: _pick("associated_multiple"),
         ).pack(side="top", pady=3)
+        ttk.Button(
+            bf,
+            text="Associated per primary",
+            width=22,
+            command=lambda: _pick("associated_per_primary"),
+        ).pack(side="top", pady=3)
         ttk.Button(bf, text="Cancel", width=14, command=_cancel).pack(side="top", pady=(8, 0))
         dlg.protocol("WM_DELETE_WINDOW", _cancel)
         dlg.wait_window(dlg)
@@ -540,9 +602,24 @@ class FamilySocialSectionCore(ttk.Frame):
             )
         return out
 
+    def _align_per_primary_associates(self, dd: dict) -> None:
+        """Ensure per_primary_associates length matches primary items (template edits)."""
+        if not dd.get("associated_per_primary"):
+            return
+        items = dd.get("items") or []
+        if not isinstance(items, list):
+            return
+        ppa = dd.setdefault("per_primary_associates", [])
+        while len(ppa) < len(items):
+            ppa.append([])
+        del ppa[len(items):]
+
     def _persist_templates(self) -> None:
         for t in self.templates:
             t.pop("_ghost_lbl", None)
+            for dd in t.get("dropdowns") or []:
+                if isinstance(dd, dict):
+                    self._align_per_primary_associates(dd)
         self._save_templates_file()
 
     # --- demographics & HOI sex (Type of Injury / MOI) ---
@@ -1340,6 +1417,16 @@ class FamilySocialSectionCore(ttk.Frame):
         bold_fudge = max(14, hdr_m // 6)
         return tab + suf_m + hdr_m + sep_m + bold_fudge
 
+    def _assoc_plain_wrap_indent_px(self, dd: dict, hdr: str, has_detail: bool) -> int:
+        """Hanging indent for associated-per-primary rows without tab/bullet prefix."""
+        fmt = dd.get("text_format") or {}
+        hdr_m = self._measure_note_font_px(
+            hdr, bold=bool(fmt.get("bold")), italic=bool(fmt.get("italic"))
+        )
+        sep_m = self._measure_note_font_px(": ", bold=False, italic=False) if has_detail else 0
+        bold_fudge = max(14, hdr_m // 6)
+        return hdr_m + sep_m + bold_fudge
+
     def _simple_tab_bullet_wrap_indent_px(self, dd: dict) -> int:
         """Multi / single bullet lines: align wraps under text after tab + bullet glyph."""
         suf = _bullet_tab_suffix(dd)
@@ -1443,7 +1530,9 @@ class FamilySocialSectionCore(ttk.Frame):
                 dd = dds[j] if j < len(dds) else {}
                 meta = meta_row[j] if j < len(meta_row) else {}
 
-                if isinstance(meta, dict) and meta.get("associated_multi"):
+                if isinstance(meta, dict) and (
+                    meta.get("associated_multi") or meta.get("associated_per_primary")
+                ):
                     abp_raw = meta.get("assoc_by_primary") or {}
                     abp: dict[int, set[int]] = {}
                     if isinstance(abp_raw, dict):
@@ -1472,18 +1561,30 @@ class FamilySocialSectionCore(ttk.Frame):
                     if not selected_primary:
                         continue
 
-                    alist = list(dd.get("associate_items") or [])
+                    use_tab_bullets = True
+                    if meta.get("associated_per_primary"):
+                        use_tab_bullets = bool(dd.get("assoc_primary_use_bullets", True))
+
+                    plain_pp_grid_dd = bool(
+                        meta.get("associated_per_primary") and not use_tab_bullets
+                    )
+
+                    shared_associates = list(dd.get("associate_items") or [])
                     # Proxy dicts so _dd_fmt_tag reads the correct key for each part.
                     _pri_proxy: dict = {"text_format": dd.get("text_format") or {}}
                     _asc_proxy: dict = {"text_format": dd.get("assoc_text_format") or {}}
                     first_bullet = True
                     any_bullet = False
+                    emitted_plain_pp = False
                     dd_prefix_raw = self._resolve_vars(str(dd.get("prefix") or "")).strip()
                     if dd_prefix_raw:
                         dd_prefix_text = _prefix_before_bullet_list(dd_prefix_raw)
                         if dropdown_parts:
                             # When an associated dropdown prefix follows prior content,
                             # start it as a new paragraph (blank line gap).
+                            dd_prefix_text = "\n\n" + dd_prefix_text
+                        elif plain_pp_grid_dd:
+                            # Plain grid: keep dropdown prefix out of the template-prefix paragraph.
                             dd_prefix_text = "\n\n" + dd_prefix_text
                         dropdown_parts.append(dd_prefix_text)
                         _dropdown_dds.append(None)
@@ -1492,35 +1593,87 @@ class FamilySocialSectionCore(ttk.Frame):
                     for pix, ptxt in enumerate(pitems):
                         if pix not in selected_primary:
                             continue
-                        hdr = self._resolve_vars(str(ptxt)).strip()
-                        if not hdr:
+                        if meta.get("associated_per_primary"):
+                            ppa = dd.get("per_primary_associates") or []
+                            alist = list(ppa[pix]) if 0 <= pix < len(ppa) else []
+                        else:
+                            alist = shared_associates
+                        hdr_raw = self._resolve_vars(str(ptxt)).strip()
+                        if not hdr_raw:
                             continue
-                        hdr = _wrap_long_bullet_tokens(dd, hdr)
+                        hdr = (
+                            _wrap_long_bullet_tokens(dd, hdr_raw)
+                            if use_tab_bullets
+                            else hdr_raw
+                        )
                         chosen_assoc = sorted(abp.get(pix, set()))
-                        detail_parts = [
-                            _wrap_long_bullet_tokens(dd, self._resolve_vars(str(alist[ai])).strip())
-                            for ai in chosen_assoc
-                            if 0 <= ai < len(alist) and self._resolve_vars(str(alist[ai])).strip()
-                        ]
+                        detail_parts = []
+                        for ai in chosen_assoc:
+                            if 0 <= ai < len(alist):
+                                frag = self._resolve_vars(str(alist[ai])).strip()
+                                if frag:
+                                    detail_parts.append(
+                                        _wrap_long_bullet_tokens(dd, frag)
+                                        if use_tab_bullets
+                                        else frag
+                                    )
                         detail = _join_with_oxford_and(detail_parts)
-                        # Line prefix (structural, no formatting)
-                        line_pfx = _bullet_line_prefix(dd, first_bullet)
+                        plain_pp_grid = plain_pp_grid_dd
+                        line_pfx = _associated_detail_row_prefix(
+                            dd, first_bullet, use_tab_bullets=use_tab_bullets
+                        )
+                        if plain_pp_grid and dd_prefix_raw and first_bullet:
+                            # Prefix already begins its own block; single newline before first row.
+                            line_pfx = "\n"
+                        if plain_pp_grid and not detail:
+                            # Match Plan-of-care PDF summary: omit rows with no value text.
+                            continue
                         if _bullet_px_by_part_idx is not None:
                             bi = len(dropdown_parts)
-                            bullet_px_by_dropdown_idx[bi] = self._assoc_bullet_wrap_indent_px(dd, hdr, bool(detail))
+                            if use_tab_bullets:
+                                bullet_px_by_dropdown_idx[bi] = self._assoc_bullet_wrap_indent_px(
+                                    dd, hdr, bool(detail)
+                                )
+                            elif detail and not plain_pp_grid:
+                                bullet_px_by_dropdown_idx[bi] = self._assoc_plain_wrap_indent_px(
+                                    dd, hdr, True
+                                )
                         dropdown_parts.append(line_pfx)
                         _dropdown_dds.append(None)
-                        # Header text (primary formatting)
-                        dropdown_parts.append(_ATTACH + hdr)
-                        _dropdown_dds.append(_pri_proxy)
-                        # Detail text (associated formatting), if any
-                        if detail:
-                            dropdown_parts.append(_ATTACH + ": ")
-                            _dropdown_dds.append(None)
-                            dropdown_parts.append(_ATTACH + detail)
+                        if plain_pp_grid:
+                            hlbl = hdr.strip()
+                            if not hlbl.endswith(":"):
+                                hlbl = f"{hlbl}:"
+                            self._fs_plain_grid_pdf_export_rows.append(
+                                {
+                                    "h": hlbl,
+                                    "v": detail.strip(),
+                                    "hf": _fmt_flags_dict(dd),
+                                    "vf": _fmt_flags_dict(dd, assoc=True),
+                                }
+                            )
+                            emitted_plain_pp = True
+                            dropdown_parts.append(_ATTACH + hlbl)
+                            _dropdown_dds.append(_pri_proxy)
+                            # Single line break between rows comes from the next row's line_pfx;
+                            # omit trailing newline here so Live Preview rows aren't double-spaced.
+                            dropdown_parts.append(_ATTACH + " " + detail)
                             _dropdown_dds.append(_asc_proxy)
+                        else:
+                            # Header text (primary formatting)
+                            dropdown_parts.append(_ATTACH + hdr)
+                            _dropdown_dds.append(_pri_proxy)
+                            # Detail text (associated formatting), if any
+                            if detail:
+                                dropdown_parts.append(_ATTACH + ": ")
+                                _dropdown_dds.append(None)
+                                dropdown_parts.append(_ATTACH + detail)
+                                _dropdown_dds.append(_asc_proxy)
                         first_bullet = False
                         any_bullet = True
+                    if emitted_plain_pp:
+                        dropdown_parts.append("\n")
+                        _dropdown_dds.append(None)
                     if not any_bullet:
                         continue
                     continue
@@ -1633,6 +1786,8 @@ class FamilySocialSectionCore(ttk.Frame):
         The plain text of all runs concatenated equals _compose_builder_text().
         Tags are derived from each dropdown's text_format flags.
         """
+        # Cleared once per annotated compose; PDF plain-grid markers match runs order.
+        self._fs_plain_grid_pdf_export_rows = []
         all_runs: list[tuple[str, str | None, int | None]] = []
         first_block = True
         for i, tmpl in enumerate(self.templates):
@@ -1778,12 +1933,19 @@ class FamilySocialSectionCore(ttk.Frame):
             safe = _xe(chunk).replace("\n\n", "<br/><br/>").replace("\n", "<br/>")
             if not tag:
                 return safe
+            if tag == "LP_LABEL_BOLD":
+                wrapped_segments: list[str] = []
+                for seg in safe.split("<br/>"):
+                    if seg:
+                        seg = f"<b>{seg}</b>"
+                    wrapped_segments.append(seg)
+                return "<br/>".join(wrapped_segments)
             b = "B" in tag
             it = "I" in tag
             u = "U" in tag
             if not (b or it or u):
                 return safe
-            wrapped_segments: list[str] = []
+            wrapped_segments = []
             for seg in safe.split("<br/>"):
                 if seg:
                     if u:
@@ -1795,6 +1957,47 @@ class FamilySocialSectionCore(ttk.Frame):
                 wrapped_segments.append(seg)
             return "<br/>".join(wrapped_segments)
 
+        def _rich_body_and_fs_grid_comments(
+            runs_src: list[tuple[str, str | None, int | None]],
+        ) -> str:
+            export_rows = list(getattr(self, "_fs_plain_grid_pdf_export_rows", []) or [])
+            parts: list[str] = []
+            i = 0
+            ri = 0
+            n = len(runs_src)
+            while i < n:
+                if (
+                    ri < len(export_rows)
+                    and i + 1 < n
+                    and _plain_grid_run_matches_export_row(
+                        runs_src[i], runs_src[i + 1], export_rows[ri]
+                    )
+                ):
+                    er = export_rows[ri]
+                    # PDF consumes markers into a Plan-style table; omit duplicate inline XML here.
+                    try:
+                        payload = base64.urlsafe_b64encode(
+                            json.dumps(
+                                {
+                                    "h": er["h"],
+                                    "v": er["v"],
+                                    "hf": er["hf"],
+                                    "vf": er["vf"],
+                                },
+                                separators=(",", ":"),
+                            ).encode("utf-8")
+                        ).decode("ascii")
+                        parts.append(f"<!--pdf_fs_grid:{payload}-->")
+                    except Exception:
+                        pass
+                    ri += 1
+                    i += 2
+                    continue
+                ch, tag, _px = runs_src[i]
+                parts.append(_wrap_run_safe(ch, tag))
+                i += 1
+            return "".join(parts)
+
         runs = self._compose_builder_annotated_runs()
         plain = "".join(t for t, _, _ in runs).strip()
         if plain != self.text.get("1.0", tk.END).strip() or self._user_has_formatted:
@@ -1804,7 +2007,7 @@ class FamilySocialSectionCore(ttk.Frame):
             if not widget_runs:
                 return ""
             return "".join(_wrap_run_safe(chunk, tag) for chunk, tag, _px in widget_runs)
-        return "".join(_wrap_run_safe(chunk, tag) for chunk, tag, _px in runs)
+        return _rich_body_and_fs_grid_comments(runs)
 
     def get_builder_state(self) -> dict:
         """Serializable dropdown selections for exam JSON.
@@ -1824,7 +2027,7 @@ class FamilySocialSectionCore(ttk.Frame):
                 meta = meta_row[j]
                 var = row[j]
                 items = list(meta.get("items") or [])
-                if meta.get("associated_multi"):
+                if meta.get("associated_multi") or meta.get("associated_per_primary"):
                     self._persist_assoc_column_widgets_into_meta(meta)
                     order = list(meta.get("primary_order") or [])
                     pss = meta.get("primary_selected_set")
@@ -1921,7 +2124,7 @@ class FamilySocialSectionCore(ttk.Frame):
                 items = list(meta.get("items") or [])
                 raw_slot = sels[j] if j < len(sels) else _BUILDER_SLOT_DEFAULT
 
-                if meta.get("associated_multi"):
+                if meta.get("associated_multi") or meta.get("associated_per_primary"):
                     self._persist_assoc_column_widgets_into_meta(meta)
                     pri_items = meta.get("primary_items") or list(dd.get("items") or [])
                     parsed_am: dict | None = None
@@ -1974,6 +2177,12 @@ class FamilySocialSectionCore(ttk.Frame):
                         abp_dst.clear()
                         for qi, pix in enumerate(po_list):
                             chosen = set(sub_entries[qi]) if qi < len(sub_entries) else set()
+                            if meta.get("associated_per_primary"):
+                                ppa_r = dd.get("per_primary_associates") or []
+                                cap = len(ppa_r[pix]) if 0 <= pix < len(ppa_r) else 0
+                                chosen = {
+                                    x for x in chosen if isinstance(x, int) and 0 <= x < cap
+                                }
                             abp_dst[pix] = set(chosen)
 
                     meta["highlight_primary_idx"] = po_list[-1] if po_list else None
@@ -2252,16 +2461,32 @@ class FamilySocialSectionCore(ttk.Frame):
     def _render_associated_multi_row(self, card: ttk.Frame, dd: dict, dd_slot_index: int = 0) -> tuple[tk.StringVar, dict]:
         """
         Build primary multi-select plus one illuminated paired list box per ordered primary pick.
+
+        Shared Associated Multiple (`associated_multi`) uses one secondary pool for every primary.
+        Associated per primary (`associated_per_primary`) binds a distinct secondary item list to each primary row.
         """
         dd.setdefault("associate_label", "Associated detail")
-        dd.setdefault("associate_items", ["Option A", "Option B"])
         primary_items: list[str] = list(dd.get("items") or [])
-        assoc_items_tm: list[str] = list(dd.get("associate_items") or [])
+        per_primary = bool(dd.get("associated_per_primary"))
+        if per_primary:
+            dd["associated_multi"] = False
+            dd["multi"] = False
+            dd.setdefault("assoc_primary_use_bullets", True)
+            dd.setdefault("associate_items", [])
+            ppa_root = dd.setdefault("per_primary_associates", [])
+            while len(ppa_root) < len(primary_items):
+                ppa_root.append([])
+            del ppa_root[len(primary_items):]
+            assoc_items_tm: list[str] = []
+        else:
+            dd.setdefault("associate_items", ["Option A", "Option B"])
+            assoc_items_tm = list(dd.get("associate_items") or [])
         var = tk.StringVar(value="")
         assoc_host = ttk.Frame(card)
 
         meta: dict = {
-            "associated_multi": True,
+            "associated_multi": not per_primary,
+            "associated_per_primary": per_primary,
             "multi": False,
             "dummy_var": var,
             "primary_items": primary_items,
@@ -2279,14 +2504,56 @@ class FamilySocialSectionCore(ttk.Frame):
         top_fr = ttk.Frame(card)
         top_fr.pack(fill="x")
 
-        pt = (dd_ref.get("label") or "Option") + " — select one or more (each choice adds its paired detail list below):"
+        if per_primary:
+            pt = (dd_ref.get("label") or "Option") + (
+                " — select one or more; each primary has its own secondary list:"
+            )
+            hint_txt = (
+                "Click to select  •  Ctrl+click to deselect  •  "
+                "each primary opens its own paired options column."
+            )
+        else:
+            pt = (dd_ref.get("label") or "Option") + (
+                " — select one or more (each choice adds its paired detail list below):"
+            )
+            hint_txt = "Click to select  •  Ctrl+click to deselect"
         ttk.Label(top_fr, text=pt).pack(anchor="w")
         ttk.Label(
             top_fr,
-            text="Click to select  •  Ctrl+click to deselect",
+            text=hint_txt,
             font=("Segoe UI", 8),
             foreground="gray",
         ).pack(anchor="w")
+
+        if per_primary:
+            lay_fr = ttk.Frame(top_fr)
+            lay_fr.pack(anchor="w", pady=(4, 2))
+            ttk.Label(lay_fr, text="Printed rows:").pack(side="left", padx=(0, 8))
+            lay_var = tk.StringVar(
+                value="bullets" if dd_ref.get("assoc_primary_use_bullets", True) else "plain"
+            )
+
+            def _save_assoc_layout() -> None:
+                dd_ref["assoc_primary_use_bullets"] = lay_var.get() == "bullets"
+                self._persist_templates()
+                self._render_note_builder()
+                self._apply_builder_to_note()
+                self.on_change_callback()
+
+            ttk.Radiobutton(
+                lay_fr,
+                text="Bullet lines",
+                variable=lay_var,
+                value="bullets",
+                command=_save_assoc_layout,
+            ).pack(side="left", padx=(0, 8))
+            ttk.Radiobutton(
+                lay_fr,
+                text="No bullet lines",
+                variable=lay_var,
+                value="plain",
+                command=_save_assoc_layout,
+            ).pack(side="left")
 
         # Resolve the enclosing scroll canvas now so we don't walk the widget
         # tree on every hover tick. Used below by the "Scroll to top" hint
@@ -2433,7 +2700,8 @@ class FamilySocialSectionCore(ttk.Frame):
 
             assoc_label_txt = dd_ref.get("associate_label") or "Associated detail"
             order_li: list[int] = list(meta["primary_order"])
-            aitems_live: list[str] = dd_ref.setdefault("associate_items", list(assoc_items_tm))
+            if not per_primary:
+                aitems_live: list[str] = dd_ref.setdefault("associate_items", list(assoc_items_tm))
 
             for pidx in order_li:
                 if pidx not in selected_set_primary or not (0 <= pidx < len(primary_items)):
@@ -2454,8 +2722,16 @@ class FamilySocialSectionCore(ttk.Frame):
 
                 work_set = meta["assoc_by_primary"].setdefault(pidx, set())
 
+                if per_primary:
+                    ppa_live = dd_ref.setdefault("per_primary_associates", [])
+                    while len(ppa_live) <= pidx:
+                        ppa_live.append([])
+                    opts_live = ppa_live[pidx]
+                else:
+                    opts_live = aitems_live
+
                 sub_search = tk.StringVar(value="")
-                vis_ast: list[int] = list(range(len(aitems_live)))
+                vis_ast: list[int] = list(range(len(opts_live)))
 
                 row1 = ttk.Frame(lf)
                 row1.pack(fill="x", padx=4, pady=(4, 2))
@@ -2464,12 +2740,12 @@ class FamilySocialSectionCore(ttk.Frame):
 
                 awrap = ttk.Frame(lf)
                 awrap.pack(fill="x", padx=4)
-                alb_h = min(max(len(aitems_live), 3), 8)
+                alb_h = min(max(len(opts_live), 3), 8)
                 alb = tk.Listbox(awrap, selectmode=tk.EXTENDED, height=alb_h, activestyle="dotbox", exportselection=False)
 
                 def _ref_ast(
                     _alb: tk.Listbox = alb,
-                    _opts: list[str] = aitems_live,
+                    _opts: list[str] = opts_live,
                     _vt: list[int] = vis_ast,
                     _sv: tk.StringVar = sub_search,
                     _wk: set[int] = work_set,
@@ -2517,7 +2793,7 @@ class FamilySocialSectionCore(ttk.Frame):
                 self._bind_listbox_mousewheel_local(alb)
 
                 def _add_assoc_item(
-                    _opts: list[str] = aitems_live,
+                    _opts: list[str] = opts_live,
                     _sv: tk.StringVar = sub_search,
                     __r=_ref_ast,
                     __syn=_sync_assoc,
@@ -2531,10 +2807,13 @@ class FamilySocialSectionCore(ttk.Frame):
                         _sv.set("")
                         __r()
                         return
-                    dd_ref.setdefault("associate_items", _opts).append(txt)
+                    if per_primary:
+                        _opts.append(txt)
+                    else:
+                        dd_ref.setdefault("associate_items", _opts)
+                        _opts.append(txt)
+                        meta["associate_items"] = list(dd_ref["associate_items"])
                     self._persist_templates()
-                    meta["associate_items"] = list(dd_ref["associate_items"])
-                    _opts.append(txt)
                     _wk.add(len(_opts) - 1)
                     _sv.set("")
                     __r()
@@ -2673,6 +2952,11 @@ class FamilySocialSectionCore(ttk.Frame):
             self._persist_templates()
             primary_items.append(txt)
             li = len(primary_items) - 1
+            if per_primary:
+                ppa_new = dd_ref.setdefault("per_primary_associates", [])
+                while len(ppa_new) <= li:
+                    ppa_new.append([])
+                del ppa_new[len(primary_items):]
             selected_set_primary.add(li)
             od = meta.get("primary_order")
             if isinstance(od, list):
@@ -2917,6 +3201,11 @@ class FamilySocialSectionCore(ttk.Frame):
                 dd_name = self._builder_dd_button_name(dd, di)
                 fr = ttk.LabelFrame(dd_host, text=f"Template {tmpl['id']} ({dd_name})")
                 dd_frames[di] = fr
+                if bool(dd.get("associated_per_primary")):
+                    var_am, meta_am = self._render_associated_multi_row(fr, dd, di)
+                    row_vars.append(var_am)
+                    meta_row.append(meta_am)
+                    continue
                 if bool(dd.get("associated_multi")):
                     var_am, meta_am = self._render_associated_multi_row(fr, dd, di)
                     row_vars.append(var_am)
@@ -3806,6 +4095,113 @@ class FamilySocialSectionCore(ttk.Frame):
         btn_name_entry.bind("<FocusOut>", _save_btn_name)
         btn_name_entry.bind("<Return>", _save_btn_name)
 
+        if bool(dd.get("associated_per_primary")):
+            frame.configure(text=f"Dropdown {di + 1} — Associated per primary")
+            dd["associated_multi"] = False
+            dd["multi"] = False
+            dd.setdefault("assoc_primary_use_bullets", True)
+            dd.setdefault("associate_label", "Secondary options")
+            dd.setdefault("associate_items", [])
+            dd.setdefault("items", [])
+            dd.setdefault("prefix", "")
+            self._align_per_primary_associates(dd)
+
+            type_app = ttk.Frame(frame)
+            type_app.pack(fill="x", padx=6, pady=(0, 4))
+            ttk.Label(
+                type_app,
+                text=(
+                    "Type: Associated per primary — each primary row has its own secondary item list."
+                ),
+                wraplength=620,
+            ).pack(side="left")
+
+            pref_row_app = ttk.Frame(frame)
+            pref_row_app.pack(fill="x", padx=6, pady=(0, 4))
+            ttk.Label(pref_row_app, text="Prefix (optional, before rows):").pack(side="left")
+            pref_var_app = tk.StringVar(value=str(dd.get("prefix") or ""))
+
+            def _save_pref_app(_e=None, d=dd, v=pref_var_app) -> None:
+                d["prefix"] = v.get()
+                self._persist_templates()
+                self._render_note_builder()
+                self._apply_builder_to_note()
+                self.on_change_callback()
+
+            pref_entry_app = ttk.Entry(pref_row_app, textvariable=pref_var_app, width=48)
+            pref_entry_app.pack(side="left", padx=6, fill="x", expand=True)
+            pref_entry_app.bind("<FocusOut>", _save_pref_app)
+            pref_entry_app.bind("<Return>", _save_pref_app)
+
+            cap_app = ttk.Frame(frame)
+            cap_app.pack(fill="x", padx=6, pady=(4, 2))
+            ttk.Label(cap_app, text="Secondary lists caption (shown in builder):").pack(side="left")
+            cap_var_app = tk.StringVar(value=str(dd.get("associate_label") or ""))
+
+            def _save_cap_app(_e=None, d=dd, v=cap_var_app) -> None:
+                d["associate_label"] = v.get()
+                self._persist_templates()
+                self._render_note_builder()
+                self._apply_builder_to_note()
+                self.on_change_callback()
+
+            cap_entry_app = ttk.Entry(cap_app, textvariable=cap_var_app, width=48)
+            cap_entry_app.pack(side="left", padx=6)
+            cap_entry_app.bind("<FocusOut>", _save_cap_app)
+            cap_entry_app.bind("<Return>", _save_cap_app)
+
+            lay_app = ttk.Frame(frame)
+            lay_app.pack(fill="x", padx=6, pady=(2, 4))
+            ttk.Label(lay_app, text="Printed rows:").pack(side="left", padx=(0, 8))
+            lay_sv_app = tk.StringVar(value="bullets" if dd.get("assoc_primary_use_bullets", True) else "plain")
+
+            def _save_layout_app(*_a) -> None:
+                dd["assoc_primary_use_bullets"] = lay_sv_app.get() == "bullets"
+                self._save_and_reload()
+
+            ttk.Radiobutton(
+                lay_app,
+                text="Bullet lines",
+                variable=lay_sv_app,
+                value="bullets",
+                command=_save_layout_app,
+            ).pack(side="left", padx=(0, 8))
+            ttk.Radiobutton(
+                lay_app,
+                text="No bullet lines",
+                variable=lay_sv_app,
+                value="plain",
+                command=_save_layout_app,
+            ).pack(side="left")
+
+            self._build_assoc_slot_color_editor(frame, dd)
+            self._canvas_item_list_editor_shell(frame, "Primary choices", dd["items"])
+            self._build_dd_format_row(
+                frame, dd,
+                fmt_key="text_format",
+                label_text="Primary items text style:",
+            )
+            prim_items_ref = dd["items"]
+            ppa_edit = dd.setdefault("per_primary_associates", [])
+            for ix_pp, lbl_pp in enumerate(list(prim_items_ref)):
+                while len(ppa_edit) <= ix_pp:
+                    ppa_edit.append([])
+                self._canvas_item_list_editor_shell(
+                    frame,
+                    f"Secondary choices for «{lbl_pp}»",
+                    ppa_edit[ix_pp],
+                )
+            self._build_dd_format_row(
+                frame, dd,
+                fmt_key="assoc_text_format",
+                label_text="Secondary items text style:",
+            )
+            self._build_dd_bullet_style_row(frame, dd)
+            ttk.Button(
+                frame, text="Remove dropdown", command=lambda t=tmpl, d=di: self._remove_dropdown(t, d)
+            ).pack(anchor="e", padx=6, pady=(0, 6))
+            return
+
         if bool(dd.get("associated_multi")):
             frame.configure(text=f"Dropdown {di + 1} — Associated Multiple")
             dd["multi"] = False
@@ -4116,7 +4512,9 @@ class FamilySocialSectionCore(ttk.Frame):
                 "an optional prefix line before its selections (same prefix behavior as Associated Multiple).\n"
                 "• Associated Multiple: the top dropdown is multi-select; each chosen item gains "
                 "its own illuminated second list so you pair details (shown as indented dash "
-                "lines below the prefix in the note, Live Preview, and PDF)."
+                "lines below the prefix in the note, Live Preview, and PDF).\n"
+                "• Associated per primary: each primary choice has its own separate secondary "
+                "list (ideal when detail options differ by primary)."
             ),
         )
         if choice is None:
@@ -4135,6 +4533,25 @@ class FamilySocialSectionCore(ttk.Frame):
                     "Lumbar spine",
                     "Head",
                     "Shoulder",
+                ],
+            }
+        elif choice == "associated_per_primary":
+            prim_seed = ["MRI", "X-Ray", "CT scan"]
+            first_dd = {
+                "label": "Primary options",
+                "items": prim_seed,
+                "builder_button_name": "DD1",
+                "associated_per_primary": True,
+                "associated_multi": False,
+                "multi": False,
+                "assoc_primary_use_bullets": True,
+                "prefix": "",
+                "associate_label": "Secondary options",
+                "associate_items": [],
+                "per_primary_associates": [
+                    ["Cervical spine", "Thoracic spine", "Lumbar spine"],
+                    ["Chest", "Abdomen"],
+                    ["Head", "Neck"],
                 ],
             }
         elif choice == "multiple_full_prefix":
@@ -4233,7 +4650,9 @@ class FamilySocialSectionCore(ttk.Frame):
                 "Multiple choice Full/Full is multi-select like Multiple choice with an optional "
                 "prefix before its output.\n\n"
                 "Associated Multiple pairs each top-level choice with its own illuminated "
-                "second list and prints indented dash lines in notes and PDFs."
+                "second list and prints indented dash lines in notes and PDFs.\n\n"
+                "Associated per primary gives each primary its own secondary item list "
+                "(detail choices can differ per primary) with optional bullet vs plain rows."
             ),
         )
         if choice is None:
@@ -4252,6 +4671,25 @@ class FamilySocialSectionCore(ttk.Frame):
                     "Lumbar spine",
                     "Head",
                     "Shoulder",
+                ],
+            }
+        elif choice == "associated_per_primary":
+            prim_seed = ["MRI", "X-Ray", "CT scan"]
+            new_dd = {
+                "label": "Primary options",
+                "items": prim_seed,
+                "builder_button_name": f"DD{len(tmpl.get('dropdowns') or []) + 1}",
+                "associated_per_primary": True,
+                "associated_multi": False,
+                "multi": False,
+                "assoc_primary_use_bullets": True,
+                "prefix": "",
+                "associate_label": "Secondary options",
+                "associate_items": [],
+                "per_primary_associates": [
+                    ["Cervical spine", "Thoracic spine", "Lumbar spine"],
+                    ["Chest", "Abdomen"],
+                    ["Head", "Neck"],
                 ],
             }
         elif choice == "multiple_full_prefix":
@@ -4317,7 +4755,7 @@ class FamilySocialSectionCore(ttk.Frame):
             self._apply_builder_state(builder_state if isinstance(builder_state, dict) else None)
         # Store the saved rich_text so _reapply_builder_text_formatting can restore
         # bold/italic/underline tags when the note was manually edited (builder output diverges).
-        self._loaded_rich_text: str = rich_text or ""
+        self._loaded_rich_text: str = _strip_pdf_fs_grid_comments(rich_text or "")
         # Deferred re-syncs ensure UI matches saved state even after later widget rebuilds
         # (e.g. associated-multiple columns) settle.
         self.after_idle(self._sync_skip_checkbuttons)
@@ -4335,6 +4773,8 @@ class FamilySocialSectionCore(ttk.Frame):
 
         if not rich_text:
             return
+
+        rich_text = _strip_pdf_fs_grid_comments(rich_text)
 
         # Tokenize into XML tag tokens and text-node tokens.
         _TOKEN = _re.compile(r'(<br\s*/?>|</?\s*[biu]\s*>)', _re.IGNORECASE)
