@@ -3239,6 +3239,54 @@ def _fs_pdf_prefix_width_pt(prefix_plain: str, font_name: str, font_size: float)
     return w * 1.06 + 2.4
 
 
+def _fs_pdf_label_font_name(font_name: str, hf: dict[str, bool]) -> str:
+    """Font registered for measuring / rendering an assoc plain-grid row label."""
+    bold = bool(hf.get("b"))
+    italic = bool(hf.get("i"))
+    if font_name in ("Vera", "Helvetica"):
+        fam = font_name
+        if bold and italic:
+            return f"{fam}-BoldItalic" if fam == "Vera" else "Helvetica-BoldOblique"
+        if bold:
+            return f"{fam}-Bold"
+        if italic:
+            return f"{fam}-Italic" if fam == "Vera" else "Helvetica-Oblique"
+        return fam
+    if bold:
+        try:
+            from reportlab.pdfbase import pdfmetrics
+
+            candidate = f"{font_name}-Bold"
+            if candidate in pdfmetrics.getRegisteredFontNames():
+                return candidate
+        except Exception:
+            pass
+    return font_name
+
+
+def _fs_pdf_assoc_plain_prefix_width_pt(hdr: str, hf: dict[str, bool], font_name: str, font_size: float) -> float:
+    """Width before the value body — matches `<b>Label:</b> ` + value (assoc per primary, plain PDF)."""
+    label = (hdr or "").strip()
+    if label.endswith(":"):
+        label_text = label[:-1]
+    else:
+        label_text = label
+    label_text = f"{label_text}:"
+    # Rendered as styled label + regular space + value (not one bold "Label: " run).
+    label_font = _fs_pdf_label_font_name(font_name, hf)
+    fs = font_size or 10
+    try:
+        from reportlab.pdfbase import pdfmetrics
+
+        w_label = float(pdfmetrics.stringWidth(label_text, label_font, fs))
+        w_space = float(pdfmetrics.stringWidth(" ", font_name, fs))
+        hang = w_label + w_space
+    except Exception:
+        hang = float(len(label_text + " ") * 0.52 * fs)
+    # Small slack only (bullet rows use 1.06+2.4; plain assoc needs tighter wrap alignment).
+    return hang * 1.01 + 0.6
+
+
 # Regex to split a rich XML string into tag tokens vs. text-node tokens.
 _FS_XML_TOKEN = re.compile(r"(<[^>]+>)")
 
@@ -3609,8 +3657,10 @@ def _fs_grid_cell_xml(text: str, flags: dict[str, bool]) -> str:
     return safe
 
 
-def _build_fs_assoc_plain_grid_table(rows: list[dict], base_style: object) -> list:
-    """Associated per primary (no bullets): inline rows like Live Preview — no gridlines."""
+def _build_fs_assoc_plain_grid_table(rows: list[dict], base_style: object, styles: object) -> list:
+    """Associated per primary (no bullets): one hanging Paragraph per option row (PDF only)."""
+    from reportlab.lib.styles import ParagraphStyle
+
     out: list = []
     if not REPORTLAB_OK or not rows:
         return out
@@ -3624,16 +3674,6 @@ def _build_fs_assoc_plain_grid_table(rows: list[dict], base_style: object) -> li
         lead = fs * 1.2
     if lead <= fs:
         lead = fs * 1.2
-    row_style = ParagraphStyle(
-        "FSAssocPlainInlineBlock",
-        parent=B,
-        fontName=fn,
-        fontSize=fs,
-        leading=lead,
-        spaceBefore=0,
-        spaceAfter=0,
-    )
-    lines: list[str] = []
     for row in rows:
         if not isinstance(row, dict):
             continue
@@ -3643,10 +3683,20 @@ def _build_fs_assoc_plain_grid_table(rows: list[dict], base_style: object) -> li
             continue
         hf = _norm_fs_grid_fmt(row.get("hf"))
         vf = _norm_fs_grid_fmt(row.get("vf"))
-        lines.append(_fs_grid_cell_xml(h, hf) + " " + _fs_grid_cell_xml(v, vf))
-    if not lines:
-        return out
-    out.append(Paragraph("<br/>".join(lines), row_style))
+        line = _fs_grid_cell_xml(h, hf) + " " + _fs_grid_cell_xml(v, vf)
+        hang_pt = _fs_pdf_assoc_plain_prefix_width_pt(h, hf, fn, fs)
+        hang_st = _fs_pdf_bullet_hang_style(base_style, hang_pt, styles, 0.0)
+        _FS_HANG_STYLE_SEQ[0] += 1
+        row_st = ParagraphStyle(
+            f"FSAssocPlainRow_{_FS_HANG_STYLE_SEQ[0]}",
+            parent=hang_st,
+            fontName=fn,
+            fontSize=fs,
+            leading=lead,
+            spaceBefore=0,
+            spaceAfter=0,
+        )
+        out.append(_safe_rich_paragraph(line, row_st))
     return out
 
 
@@ -3686,7 +3736,7 @@ def _fs_pdf_flowables_from_note_rich_with_fs_grid_tables(
                     one_line_gap = fs * 1.2
                 # Blank vertical gap between prefix narrative and assoc rows (PDF only).
                 out.append(Spacer(1, one_line_gap))
-            out.extend(_build_fs_assoc_plain_grid_table(pending, base_style))
+            out.extend(_build_fs_assoc_plain_grid_table(pending, base_style, styles))
             pending.clear()
 
     for m in _PDF_FS_GRID_COMMENT_RE.finditer(rich):
