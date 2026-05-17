@@ -1427,6 +1427,37 @@ class FamilySocialSectionCore(ttk.Frame):
         bold_fudge = max(14, hdr_m // 6)
         return hdr_m + sep_m + bold_fudge
 
+    def _assoc_plain_column_value_px(self, dd: dict, headers: list[str]) -> int:
+        """Left offset where no-bullet assoc detail text starts (aligned column)."""
+        fmt = dd.get("text_format") or {}
+        max_hdr = 0
+        for raw in headers:
+            h = str(raw or "").strip()
+            if not h:
+                continue
+            if not h.endswith(":"):
+                h = f"{h}:"
+            hdr_m = self._measure_note_font_px(
+                h, bold=bool(fmt.get("bold")), italic=bool(fmt.get("italic"))
+            )
+            max_hdr = max(max_hdr, hdr_m)
+        gap_m = self._measure_note_font_px("  ", bold=False, italic=False)
+        bold_fudge = max(14, max_hdr // 6) if max_hdr else 14
+        return max_hdr + gap_m + bold_fudge
+
+    def _assoc_plain_column_label_prefix(self, dd: dict, hdr: str, target_px: int) -> str:
+        """Pad a primary label with spaces so the value column lines up across rows."""
+        fmt = dd.get("text_format") or {}
+        lbl = str(hdr or "").strip()
+        if not lbl.endswith(":"):
+            lbl = f"{lbl}:"
+        hdr_m = self._measure_note_font_px(
+            lbl, bold=bool(fmt.get("bold")), italic=bool(fmt.get("italic"))
+        )
+        sp_m = max(1, self._measure_note_font_px(" ", bold=False, italic=False))
+        pad = max(0, int(target_px) - hdr_m)
+        return lbl + (" " * max(0, (pad + sp_m - 1) // sp_m))
+
     def _simple_tab_bullet_wrap_indent_px(self, dd: dict) -> int:
         """Multi / single bullet lines: align wraps under text after tab + bullet glyph."""
         suf = _bullet_tab_suffix(dd)
@@ -1568,6 +1599,19 @@ class FamilySocialSectionCore(ttk.Frame):
                     plain_pp_grid_dd = bool(
                         meta.get("associated_per_primary") and not use_tab_bullets
                     )
+                    plain_pp_columns_dd = bool(
+                        plain_pp_grid_dd and dd.get("assoc_primary_plain_columns", False)
+                    )
+                    plain_col_px = 0
+                    if plain_pp_columns_dd:
+                        col_hdrs: list[str] = []
+                        for pix, ptxt in enumerate(pitems):
+                            if pix not in selected_primary:
+                                continue
+                            hr = self._resolve_vars(str(ptxt)).strip()
+                            if hr:
+                                col_hdrs.append(hr)
+                        plain_col_px = self._assoc_plain_column_value_px(dd, col_hdrs)
 
                     shared_associates = list(dd.get("associate_items") or [])
                     # Proxy dicts so _dd_fmt_tag reads the correct key for each part.
@@ -1650,6 +1694,7 @@ class FamilySocialSectionCore(ttk.Frame):
                                     "v": detail.strip(),
                                     "hf": _fmt_flags_dict(dd),
                                     "vf": _fmt_flags_dict(dd, assoc=True),
+                                    "align": "columns" if plain_pp_columns_dd else "inline",
                                 }
                             )
                             emitted_plain_pp = True
@@ -1657,8 +1702,20 @@ class FamilySocialSectionCore(ttk.Frame):
                             _dropdown_dds.append(_pri_proxy)
                             # Single line break between rows comes from the next row's line_pfx;
                             # omit trailing newline here so Live Preview rows aren't double-spaced.
-                            dropdown_parts.append(_ATTACH + " " + detail)
-                            _dropdown_dds.append(_asc_proxy)
+                            if plain_pp_columns_dd:
+                                padded_lbl = self._assoc_plain_column_label_prefix(
+                                    dd, hlbl, plain_col_px
+                                )
+                                dropdown_parts[-1] = _ATTACH + padded_lbl
+                                dropdown_parts.append(_ATTACH + detail)
+                                _dropdown_dds.append(_asc_proxy)
+                                if plain_col_px > 0:
+                                    bullet_px_by_dropdown_idx[len(dropdown_parts) - 1] = (
+                                        plain_col_px
+                                    )
+                            else:
+                                dropdown_parts.append(_ATTACH + " " + detail)
+                                _dropdown_dds.append(_asc_proxy)
                         else:
                             # Header text (primary formatting)
                             dropdown_parts.append(_ATTACH + hdr)
@@ -1976,16 +2033,16 @@ class FamilySocialSectionCore(ttk.Frame):
                     er = export_rows[ri]
                     # PDF consumes markers into a Plan-style table; omit duplicate inline XML here.
                     try:
+                        grid_obj: dict = {
+                            "h": er["h"],
+                            "v": er["v"],
+                            "hf": er["hf"],
+                            "vf": er["vf"],
+                        }
+                        if str(er.get("align") or "") == "columns":
+                            grid_obj["align"] = "columns"
                         payload = base64.urlsafe_b64encode(
-                            json.dumps(
-                                {
-                                    "h": er["h"],
-                                    "v": er["v"],
-                                    "hf": er["hf"],
-                                    "vf": er["vf"],
-                                },
-                                separators=(",", ":"),
-                            ).encode("utf-8")
+                            json.dumps(grid_obj, separators=(",", ":")).encode("utf-8")
                         ).decode("ascii")
                         parts.append(f"<!--pdf_fs_grid:{payload}-->")
                     except Exception:
@@ -2472,6 +2529,7 @@ class FamilySocialSectionCore(ttk.Frame):
             dd["associated_multi"] = False
             dd["multi"] = False
             dd.setdefault("assoc_primary_use_bullets", True)
+            dd.setdefault("assoc_primary_plain_columns", False)
             dd.setdefault("associate_items", [])
             ppa_root = dd.setdefault("per_primary_associates", [])
             while len(ppa_root) < len(primary_items):
@@ -2554,6 +2612,44 @@ class FamilySocialSectionCore(ttk.Frame):
                 value="plain",
                 command=_save_assoc_layout,
             ).pack(side="left")
+
+            col_fr = ttk.Frame(top_fr)
+            col_var = tk.StringVar(
+                value="columns"
+                if dd_ref.get("assoc_primary_plain_columns", False)
+                else "inline"
+            )
+
+            def _save_assoc_col_layout() -> None:
+                dd_ref["assoc_primary_plain_columns"] = col_var.get() == "columns"
+                self._persist_templates()
+                self._render_note_builder()
+                self._apply_builder_to_note()
+                self.on_change_callback()
+
+            def _toggle_col_layout_opts(*_a: object) -> None:
+                if lay_var.get() == "plain":
+                    col_fr.pack(anchor="w", pady=(2, 0))
+                else:
+                    col_fr.pack_forget()
+
+            ttk.Label(col_fr, text="Detail alignment:").pack(side="left", padx=(0, 8))
+            ttk.Radiobutton(
+                col_fr,
+                text="After label",
+                variable=col_var,
+                value="inline",
+                command=_save_assoc_col_layout,
+            ).pack(side="left", padx=(0, 8))
+            ttk.Radiobutton(
+                col_fr,
+                text="Aligned column",
+                variable=col_var,
+                value="columns",
+                command=_save_assoc_col_layout,
+            ).pack(side="left")
+            lay_var.trace_add("write", lambda *_: _toggle_col_layout_opts())
+            _toggle_col_layout_opts()
 
         # Resolve the enclosing scroll canvas now so we don't walk the widget
         # tree on every hover tick. Used below by the "Scroll to top" hint
@@ -4100,6 +4196,7 @@ class FamilySocialSectionCore(ttk.Frame):
             dd["associated_multi"] = False
             dd["multi"] = False
             dd.setdefault("assoc_primary_use_bullets", True)
+            dd.setdefault("assoc_primary_plain_columns", False)
             dd.setdefault("associate_label", "Secondary options")
             dd.setdefault("associate_items", [])
             dd.setdefault("items", [])
@@ -4173,6 +4270,39 @@ class FamilySocialSectionCore(ttk.Frame):
                 value="plain",
                 command=_save_layout_app,
             ).pack(side="left")
+
+            col_app = ttk.Frame(frame)
+            col_sv_app = tk.StringVar(
+                value="columns" if dd.get("assoc_primary_plain_columns", False) else "inline"
+            )
+
+            def _save_col_layout_app(*_a: object) -> None:
+                dd["assoc_primary_plain_columns"] = col_sv_app.get() == "columns"
+                self._save_and_reload()
+
+            def _toggle_col_layout_app(*_a: object) -> None:
+                if lay_sv_app.get() == "plain":
+                    col_app.pack(fill="x", padx=6, pady=(0, 4))
+                else:
+                    col_app.pack_forget()
+
+            ttk.Label(col_app, text="Detail alignment:").pack(side="left", padx=(0, 8))
+            ttk.Radiobutton(
+                col_app,
+                text="After label",
+                variable=col_sv_app,
+                value="inline",
+                command=_save_col_layout_app,
+            ).pack(side="left", padx=(0, 8))
+            ttk.Radiobutton(
+                col_app,
+                text="Aligned column",
+                variable=col_sv_app,
+                value="columns",
+                command=_save_col_layout_app,
+            ).pack(side="left")
+            lay_sv_app.trace_add("write", lambda *_: _toggle_col_layout_app())
+            _toggle_col_layout_app()
 
             self._build_assoc_slot_color_editor(frame, dd)
             self._canvas_item_list_editor_shell(frame, "Primary choices", dd["items"])
@@ -4545,6 +4675,7 @@ class FamilySocialSectionCore(ttk.Frame):
                 "associated_multi": False,
                 "multi": False,
                 "assoc_primary_use_bullets": True,
+                "assoc_primary_plain_columns": False,
                 "prefix": "",
                 "associate_label": "Secondary options",
                 "associate_items": [],
@@ -4683,6 +4814,7 @@ class FamilySocialSectionCore(ttk.Frame):
                 "associated_multi": False,
                 "multi": False,
                 "assoc_primary_use_bullets": True,
+                "assoc_primary_plain_columns": False,
                 "prefix": "",
                 "associate_label": "Secondary options",
                 "associate_items": [],

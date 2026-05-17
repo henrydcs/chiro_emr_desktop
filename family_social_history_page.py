@@ -45,6 +45,7 @@ def _normalize_template_dd(dd: dict) -> None:
     dd.setdefault("associated_multi", False)
     dd.setdefault("associated_per_primary", False)
     dd.setdefault("assoc_primary_use_bullets", True)
+    dd.setdefault("assoc_primary_plain_columns", False)
     dd.setdefault("multi_full_prefix", False)
     dd.setdefault("single_full_prefix", False)
     if dd.get("associated_multi"):

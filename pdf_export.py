@@ -3724,11 +3724,15 @@ def _decode_pdf_fs_grid_comment_payload(payload: str) -> dict | None:
     v = str(obj.get("v") or "").strip()
     if not h or not v:
         return None
+    align = str(obj.get("align") or "inline").strip().lower()
+    if align not in ("inline", "columns"):
+        align = "inline"
     return {
         "h": h,
         "v": v,
         "hf": _norm_fs_grid_fmt(obj.get("hf")),
         "vf": _norm_fs_grid_fmt(obj.get("vf")),
+        "align": align,
     }
 
 
@@ -3768,6 +3772,105 @@ def _fs_grid_cell_xml(text: str, flags: dict[str, bool]) -> str:
     if flags.get("b"):
         safe = f"<b>{safe}</b>"
     return safe
+
+
+def _fs_assoc_plain_label_col_width_pt(
+    rows: list[dict], font_name: str, font_size: float
+) -> float:
+    """Width in points for the label column (widest primary label + pad)."""
+    fs = font_size or 10
+    max_w = 0.0
+    for row in rows:
+        if not isinstance(row, dict):
+            continue
+        h = str(row.get("h") or "").strip()
+        if not h:
+            continue
+        hf = _norm_fs_grid_fmt(row.get("hf"))
+        measure_font = _fs_pdf_label_font_name(font_name, hf)
+        try:
+            from reportlab.pdfbase import pdfmetrics
+
+            w = float(pdfmetrics.stringWidth(h, measure_font, fs))
+        except Exception:
+            w = float(len(h) * 0.52 * fs)
+        max_w = max(max_w, w)
+    return max(max_w + 8.0, 54.0)
+
+
+def _build_fs_assoc_plain_grid_columns_table(
+    rows: list[dict], base_style: object, styles: object
+) -> list:
+    """Assoc per-primary no bullets: label | value columns (Plan-style alignment)."""
+    from reportlab.lib.styles import ParagraphStyle
+
+    out: list = []
+    if not REPORTLAB_OK or not rows:
+        return out
+    B = base_style
+    fs = getattr(B, "fontSize", 10) or 10
+    fn = getattr(B, "fontName", "Helvetica") or "Helvetica"
+    try:
+        lead = float(getattr(B, "leading", fs * 1.2) or (fs * 1.2))
+    except (TypeError, ValueError):
+        lead = fs * 1.2
+    if lead <= fs:
+        lead = fs * 1.2
+    label_w_pt = _fs_assoc_plain_label_col_width_pt(rows, fn, fs)
+    total_w = 7.1 * inch
+    value_w_pt = max(total_w - label_w_pt, 2.0 * inch)
+    label_st = ParagraphStyle(
+        "FSAssocColLabel",
+        parent=B,
+        fontName=fn,
+        fontSize=fs,
+        leading=lead,
+        spaceBefore=0,
+        spaceAfter=0,
+    )
+    value_st = ParagraphStyle(
+        "FSAssocColValue",
+        parent=B,
+        fontName=fn,
+        fontSize=fs,
+        leading=lead,
+        spaceBefore=0,
+        spaceAfter=0,
+    )
+    grid_data: list[list] = []
+    for row in rows:
+        if not isinstance(row, dict):
+            continue
+        h = str(row.get("h") or "").strip()
+        v = str(row.get("v") or "").strip()
+        if not h or not v:
+            continue
+        hf = _norm_fs_grid_fmt(row.get("hf"))
+        vf = _norm_fs_grid_fmt(row.get("vf"))
+        grid_data.append(
+            [
+                _safe_rich_paragraph(_fs_grid_cell_xml(h, hf), label_st),
+                _safe_rich_paragraph(_fs_grid_cell_xml(v, vf), value_st),
+            ]
+        )
+    if not grid_data:
+        return out
+    t = Table(grid_data, colWidths=[label_w_pt, value_w_pt])
+    t.hAlign = "LEFT"
+    t.setStyle(
+        TableStyle(
+            [
+                ("VALIGN", (0, 0), (-1, -1), "TOP"),
+                ("LEFTPADDING", (0, 0), (-1, -1), 0),
+                ("RIGHTPADDING", (0, 0), (-1, -1), 0),
+                ("TOPPADDING", (0, 0), (-1, -1), 1),
+                ("BOTTOMPADDING", (0, 0), (-1, -1), 3),
+                ("LINEBELOW", (0, 0), (-1, -1), 0.25, colors.lightgrey),
+            ]
+        )
+    )
+    out.append(t)
+    return out
 
 
 def _build_fs_assoc_plain_grid_table(rows: list[dict], base_style: object, styles: object) -> list:
@@ -3853,7 +3956,13 @@ def _fs_pdf_flowables_from_note_rich_with_fs_grid_tables(
                     one_line_gap = fs * 1.2
                 # Blank vertical gap between prefix narrative and assoc rows (PDF only).
                 out.append(Spacer(1, one_line_gap))
-            out.extend(_build_fs_assoc_plain_grid_table(pending, base_style, styles))
+            use_columns = bool(pending) and str(pending[0].get("align") or "inline") == "columns"
+            if use_columns:
+                out.extend(
+                    _build_fs_assoc_plain_grid_columns_table(pending, base_style, styles)
+                )
+            else:
+                out.extend(_build_fs_assoc_plain_grid_table(pending, base_style, styles))
             pending.clear()
 
     for m in _PDF_FS_GRID_COMMENT_RE.finditer(rich):
