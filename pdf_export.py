@@ -3264,27 +3264,113 @@ def _fs_pdf_label_font_name(font_name: str, hf: dict[str, bool]) -> str:
     return font_name
 
 
-def _fs_pdf_assoc_plain_prefix_width_pt(hdr: str, hf: dict[str, bool], font_name: str, font_size: float) -> float:
-    """Width before the value body — matches `<b>Label:</b> ` + value (assoc per primary, plain PDF)."""
-    label = (hdr or "").strip()
-    if label.endswith(":"):
-        label_text = label[:-1]
-    else:
-        label_text = label
-    label_text = f"{label_text}:"
-    # Rendered as styled label + regular space + value (not one bold "Label: " run).
-    label_font = _fs_pdf_label_font_name(font_name, hf)
+def _fs_pdf_assoc_body_start_width_pt(
+    label: str,
+    hf: dict[str, bool],
+    font_name: str,
+    font_size: float,
+    *,
+    colon_in_label: bool,
+) -> float:
+    """Points before assoc value body (plain: `<b>Lbl:</b> `; bullet: `<b>Lbl</b>: `)."""
+    lbl = (label or "").strip()
     fs = font_size or 10
+    label_font = _fs_pdf_label_font_name(font_name, hf)
     try:
         from reportlab.pdfbase import pdfmetrics
 
-        w_label = float(pdfmetrics.stringWidth(label_text, label_font, fs))
-        w_space = float(pdfmetrics.stringWidth(" ", font_name, fs))
-        hang = w_label + w_space
+        if colon_in_label:
+            core = lbl[:-1] if lbl.endswith(":") else lbl
+            w_label = float(pdfmetrics.stringWidth(f"{core}:", label_font, fs))
+            w_tail = float(pdfmetrics.stringWidth(" ", font_name, fs))
+        else:
+            w_label = float(pdfmetrics.stringWidth(lbl, label_font, fs))
+            w_tail = float(pdfmetrics.stringWidth(": ", font_name, fs))
+        hang = w_label + w_tail
     except Exception:
-        hang = float(len(label_text + " ") * 0.52 * fs)
-    # Small slack only (bullet rows use 1.06+2.4; plain assoc needs tighter wrap alignment).
+        tail = " " if colon_in_label else ": "
+        core = lbl[:-1] if colon_in_label and lbl.endswith(":") else lbl
+        text = (f"{core}:" if colon_in_label else lbl) + tail
+        hang = float(len(text) * 0.52 * fs)
     return hang * 1.01 + 0.6
+
+
+def _fs_pdf_assoc_plain_prefix_width_pt(hdr: str, hf: dict[str, bool], font_name: str, font_size: float) -> float:
+    """Width before the value body — matches `<b>Label:</b> ` + value (assoc per primary, plain PDF)."""
+    return _fs_pdf_assoc_body_start_width_pt(hdr, hf, font_name, font_size, colon_in_label=True)
+
+
+def _fs_pdf_rich_assoc_label_flags(rich_line: str) -> dict[str, bool]:
+    """Format flags on the label segment before ': ' in an assoc builder bullet row."""
+    m = re.search(r"</b>\s*:", rich_line, re.IGNORECASE)
+    if not m:
+        m = re.search(r"</strong>\s*:", rich_line, re.IGNORECASE)
+    seg = rich_line[: m.start()] if m else rich_line
+    return {
+        "b": bool(re.search(r"<b\b", seg, re.IGNORECASE)),
+        "i": bool(re.search(r"<i\b", seg, re.IGNORECASE)),
+        "u": bool(re.search(r"<u\b", seg, re.IGNORECASE)),
+    }
+
+
+_FS_ASSOC_BULLET_PREFIX_RE = re.compile(
+    r"^(\t+)((?:[\-–•●○■□]+\s*)?)([^:]+):\s*$"
+)
+
+
+def _fs_pdf_assoc_bullet_hang_pt(
+    plain_line: str, rich_line: str | None, font_name: str, font_size: float
+) -> float | None:
+    """Hang width for tab+bullet assoc rows (`<b>Label</b>: value`) — PDF assoc per-primary bullets."""
+    if rich_line:
+        if not re.search(r"</b>\s*:|</strong>\s*:", rich_line, re.IGNORECASE):
+            return None
+    elif not plain_line.startswith("\t"):
+        return None
+
+    m = _FS_BULLET_HANG_LINE.match(plain_line)
+    if not m:
+        return None
+    pm = _FS_ASSOC_BULLET_PREFIX_RE.match(m.group(1))
+    if not pm:
+        return None
+    tabs, bullet, label = pm.group(1), pm.group(2) or "", pm.group(3).strip()
+    if not label:
+        return None
+
+    hf = _fs_pdf_rich_assoc_label_flags(rich_line) if rich_line else {"b": True, "i": False, "u": False}
+    fs = font_size or 10
+    tabbed = tabs.replace("\t", "        ")
+    label_font = _fs_pdf_label_font_name(font_name, hf)
+    try:
+        from reportlab.pdfbase import pdfmetrics
+
+        w_lead = float(pdfmetrics.stringWidth(tabbed + bullet, font_name, fs))
+        w_label = float(pdfmetrics.stringWidth(label, label_font, fs))
+        w_colon_space = float(pdfmetrics.stringWidth(": ", font_name, fs))
+        hang = w_lead + w_label + w_colon_space
+    except Exception:
+        return None
+    return hang * 1.01 + 0.6
+
+
+def _fs_pdf_bullet_hang_width_pt(
+    plain_line: str,
+    rich_line: str | None,
+    font_name: str,
+    font_size: float,
+) -> float:
+    """Prefix width for a hanging bullet line (assoc per-primary bullets use tighter measure)."""
+    assoc = _fs_pdf_assoc_bullet_hang_pt(plain_line, rich_line, font_name, font_size)
+    if assoc is not None:
+        return assoc
+    m = _FS_BULLET_HANG_LINE.match(plain_line)
+    if m:
+        prefix = m.group(1)
+    else:
+        m_nc = _FS_TAB_BULLET_NO_COLON_LINE.match(plain_line)
+        prefix = m_nc.group(1) if m_nc else plain_line
+    return _fs_pdf_prefix_width_pt(prefix, font_name, font_size)
 
 
 # Regex to split a rich XML string into tag tokens vs. text-node tokens.
@@ -3574,7 +3660,7 @@ def _fs_pdf_flowables_from_note_plain(text: str, base_style: object, styles: obj
                 out.append(Spacer(1, 0.12 * inch))
             prefix, body = m.group(1), m.group(2)
             display = prefix.replace("\t", "", 1) + body
-            hang = _fs_pdf_prefix_width_pt(prefix, font_name, font_size)
+            hang = _fs_pdf_bullet_hang_width_pt(line, None, font_name, font_size)
             tab_pt = (
                 _fs_pdf_tab_indent_pt(font_name, font_size) if is_tab_bullet else 0.0
             )
@@ -3590,7 +3676,7 @@ def _fs_pdf_flowables_from_note_plain(text: str, base_style: object, styles: obj
             prefix = m_nc.group(1)
             body = m_nc.group(2)
             display = prefix.replace("\t", "", 1) + body
-            hang = _fs_pdf_prefix_width_pt(prefix, font_name, font_size)
+            hang = _fs_pdf_bullet_hang_width_pt(line, None, font_name, font_size)
             tab_pt = _fs_pdf_tab_indent_pt(font_name, font_size)
             pending_bullet_hst = _fs_pdf_bullet_hang_style(base_style, hang, styles, tab_pt)
             pending_bullet_lines = [_pdf_preserve_whitespace(xml_escape(display)).replace("\n", "<br/>")]
@@ -3845,7 +3931,7 @@ def _fs_pdf_flowables_from_note_rich(
             # Display: drop the leading tab to match the plain-text version's
             # one-tab strip (the hang style supplies the indent visually).
             display_rich = rich_line[1:] if rich_line.startswith("\t") else rich_line
-            hang = _fs_pdf_prefix_width_pt(prefix_plain, font_name, font_size)
+            hang = _fs_pdf_bullet_hang_width_pt(plain_line, rich_line, font_name, font_size)
             tab_pt = (
                 _fs_pdf_tab_indent_pt(font_name, font_size) if is_tab_bullet else 0.0
             )
@@ -3860,7 +3946,7 @@ def _fs_pdf_flowables_from_note_rich(
                 out.append(Spacer(1, 0.12 * inch))
             prefix_plain = m_nc.group(1)
             display_rich = rich_line[1:] if rich_line.startswith("\t") else rich_line
-            hang = _fs_pdf_prefix_width_pt(prefix_plain, font_name, font_size)
+            hang = _fs_pdf_bullet_hang_width_pt(plain_line, rich_line, font_name, font_size)
             tab_pt = _fs_pdf_tab_indent_pt(font_name, font_size)
             pending_bullet_hst = _fs_pdf_bullet_hang_style(base_style, hang, styles, tab_pt)
             pending_bullet_lines = [_pdf_preserve_whitespace_in_rich(display_rich)]
