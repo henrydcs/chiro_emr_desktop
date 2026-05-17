@@ -3624,7 +3624,6 @@ def _fs_pdf_flowables_from_note_plain(text: str, base_style: object, styles: obj
         buf.clear()
 
     prev_was_tab_bullet = False
-    prev_was_assoc_option = False
     # pending_bullet: accumulates the current bullet paragraph's display lines so
     # that user-typed continuation lines (no \t prefix, typed right after a bullet
     # without a blank-line separator) are joined into the same Paragraph and
@@ -3646,14 +3645,10 @@ def _fs_pdf_flowables_from_note_plain(text: str, base_style: object, styles: obj
             flush_pending_bullet()
             buf.append("")
             prev_was_tab_bullet = False
-            prev_was_assoc_option = False
             continue
         m = _FS_BULLET_HANG_LINE.match(line)
         m_nc = None if m else _FS_TAB_BULLET_NO_COLON_LINE.match(line)
         if m:
-            is_assoc_option = _fs_pdf_is_assoc_per_primary_option_row(
-                line, None, font_name, font_size
-            )
             flush_pending_bullet()
             flush_buf()
             is_tab_bullet = line.startswith("\t")
@@ -3663,8 +3658,6 @@ def _fs_pdf_flowables_from_note_plain(text: str, base_style: object, styles: obj
             # and the bottom textbox spacing.
             if is_tab_bullet and not prev_was_tab_bullet and out:
                 out.append(Spacer(1, 0.12 * inch))
-            elif is_assoc_option and prev_was_assoc_option:
-                out.append(_fs_assoc_option_row_separator())
             prefix, body = m.group(1), m.group(2)
             display = prefix.replace("\t", "", 1) + body
             hang = _fs_pdf_bullet_hang_width_pt(line, None, font_name, font_size)
@@ -3672,11 +3665,8 @@ def _fs_pdf_flowables_from_note_plain(text: str, base_style: object, styles: obj
                 _fs_pdf_tab_indent_pt(font_name, font_size) if is_tab_bullet else 0.0
             )
             pending_bullet_hst = _fs_pdf_bullet_hang_style(base_style, hang, styles, tab_pt)
-            if is_assoc_option:
-                pending_bullet_hst = _fs_pdf_assoc_option_row_style(pending_bullet_hst)
             pending_bullet_lines = [_pdf_preserve_whitespace(xml_escape(display)).replace("\n", "<br/>")]
             prev_was_tab_bullet = is_tab_bullet
-            prev_was_assoc_option = is_assoc_option
         elif m_nc:
             # Tab-indented bullet with no associated option (no "Label:" colon).
             flush_pending_bullet()
@@ -3691,12 +3681,10 @@ def _fs_pdf_flowables_from_note_plain(text: str, base_style: object, styles: obj
             pending_bullet_hst = _fs_pdf_bullet_hang_style(base_style, hang, styles, tab_pt)
             pending_bullet_lines = [_pdf_preserve_whitespace(xml_escape(display)).replace("\n", "<br/>")]
             prev_was_tab_bullet = True
-            prev_was_assoc_option = False
         else:
             flush_pending_bullet()
             buf.append(line)
             prev_was_tab_bullet = False
-            prev_was_assoc_option = False
     flush_pending_bullet()
     flush_buf()
     return out
@@ -3758,7 +3746,7 @@ def _fs_pdf_assoc_option_row_style(parent_style: object) -> object:
 
 
 def _fs_assoc_option_row_separator() -> object:
-    """Faded rule between assoc option rows — equal space above/below (Plan-style, compact)."""
+    """Faded rule between assoc per-primary plain (no bullets) option rows only."""
     from reportlab.platypus import HRFlowable
 
     # Plan summary rows use ~4pt total pad around LINEBELOW (1 top + 3 bottom); split evenly here.
@@ -3769,13 +3757,6 @@ def _fs_assoc_option_row_separator() -> object:
         spaceBefore=2,
         spaceAfter=2,
     )
-
-
-def _fs_pdf_is_assoc_per_primary_option_row(
-    plain_line: str, rich_line: str | None, font_name: str, font_size: float
-) -> bool:
-    """True for tab+bullet assoc per-primary detail rows (`<b>Label</b>: value`)."""
-    return _fs_pdf_assoc_bullet_hang_pt(plain_line, rich_line, font_name, font_size) is not None
 
 
 def _fs_grid_cell_xml(text: str, flags: dict[str, bool]) -> str:
@@ -3943,7 +3924,6 @@ def _fs_pdf_flowables_from_note_rich(
         buf.clear()
 
     prev_was_tab_bullet = False
-    prev_was_assoc_option = False
     # pending_bullet: accumulates the current bullet paragraph's display lines so
     # that user-typed continuation lines (no \t prefix, typed right after a bullet
     # without a blank-line separator) are joined into the same Paragraph.
@@ -3966,14 +3946,10 @@ def _fs_pdf_flowables_from_note_rich(
             flush_pending_bullet()
             buf.append("")
             prev_was_tab_bullet = False
-            prev_was_assoc_option = False
             continue
         m = _FS_BULLET_HANG_LINE.match(plain_line)
         m_nc = None if m else _FS_TAB_BULLET_NO_COLON_LINE.match(plain_line)
         if m:
-            is_assoc_option = _fs_pdf_is_assoc_per_primary_option_row(
-                plain_line, rich_line, font_name, font_size
-            )
             flush_pending_bullet()
             flush_buf()
             is_tab_bullet = rich_line.startswith("\t") or plain_line.startswith("\t")
@@ -3983,8 +3959,6 @@ def _fs_pdf_flowables_from_note_rich(
             # and the bottom textbox spacing.
             if is_tab_bullet and not prev_was_tab_bullet and out:
                 out.append(Spacer(1, 0.12 * inch))
-            elif is_assoc_option and prev_was_assoc_option:
-                out.append(_fs_assoc_option_row_separator())
             prefix_plain = m.group(1)
             # Display: drop the leading tab to match the plain-text version's
             # one-tab strip (the hang style supplies the indent visually).
@@ -3994,11 +3968,8 @@ def _fs_pdf_flowables_from_note_rich(
                 _fs_pdf_tab_indent_pt(font_name, font_size) if is_tab_bullet else 0.0
             )
             pending_bullet_hst = _fs_pdf_bullet_hang_style(base_style, hang, styles, tab_pt)
-            if is_assoc_option:
-                pending_bullet_hst = _fs_pdf_assoc_option_row_style(pending_bullet_hst)
             pending_bullet_lines = [_pdf_preserve_whitespace_in_rich(display_rich)]
             prev_was_tab_bullet = is_tab_bullet
-            prev_was_assoc_option = is_assoc_option
         elif m_nc:
             # Tab-indented bullet with no associated option (no "Label:" colon).
             flush_pending_bullet()
@@ -4012,12 +3983,10 @@ def _fs_pdf_flowables_from_note_rich(
             pending_bullet_hst = _fs_pdf_bullet_hang_style(base_style, hang, styles, tab_pt)
             pending_bullet_lines = [_pdf_preserve_whitespace_in_rich(display_rich)]
             prev_was_tab_bullet = True
-            prev_was_assoc_option = False
         else:
             flush_pending_bullet()
             buf.append(rich_line)
             prev_was_tab_bullet = False
-            prev_was_assoc_option = False
     flush_pending_bullet()
     flush_buf()
     return out
