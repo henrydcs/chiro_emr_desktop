@@ -3618,7 +3618,7 @@ def _build_fs_assoc_plain_grid_table(rows: list[dict], base_style: object) -> li
     fs = getattr(B, "fontSize", 10) or 10
     fn = getattr(B, "fontName", "Helvetica") or "Helvetica"
     # Single-spaced <br/> rows — tight gaps, no blank lines between options.
-    lead = fs + 0.25
+    lead = fs
     row_style = ParagraphStyle(
         "FSAssocPlainInlineBlock",
         parent=B,
@@ -3642,8 +3642,20 @@ def _build_fs_assoc_plain_grid_table(rows: list[dict], base_style: object) -> li
     if not lines:
         return out
     out.append(Paragraph("<br/>".join(lines), row_style))
-    out.append(Spacer(1, 2))
     return out
+
+
+def _fs_pdf_head_segment_has_visible_text(segment: str) -> bool:
+    """True when a rich substring has visible content (not only <br/> / XML gaps).
+
+    Used so `<br/>`-only regions between consecutive `pdf_fs_grid` markers do not
+    trigger an early grid flush + spacer (which would split rows apart).
+    """
+    if not (segment or "").strip():
+        return False
+    plain = _FS_RICH_TAG_STRIP.sub("", segment)
+    plain = plain.replace("\u00a0", " ").replace("&nbsp;", " ")
+    return bool(plain.strip())
 
 
 def _fs_pdf_flowables_from_note_rich_with_fs_grid_tables(
@@ -3660,13 +3672,22 @@ def _fs_pdf_flowables_from_note_rich_with_fs_grid_tables(
     def flush_grid() -> None:
         nonlocal pending
         if pending:
+            if out:
+                fs = getattr(base_style, "fontSize", 10) or 10
+                ld = getattr(base_style, "leading", fs * 1.2)
+                try:
+                    one_line_gap = float(ld)
+                except (TypeError, ValueError):
+                    one_line_gap = fs * 1.2
+                # Blank vertical gap between prefix narrative and assoc rows (PDF only).
+                out.append(Spacer(1, one_line_gap))
             out.extend(_build_fs_assoc_plain_grid_table(pending, base_style))
             pending.clear()
 
     for m in _PDF_FS_GRID_COMMENT_RE.finditer(rich):
         head = rich[prev_end:m.start()]
         row = _decode_pdf_fs_grid_comment_payload(m.group(1))
-        if head.strip():
+        if _fs_pdf_head_segment_has_visible_text(head):
             flush_grid()
             out.extend(_fs_pdf_flowables_from_note_rich(head, base_style, styles))
         if row:
@@ -3674,7 +3695,7 @@ def _fs_pdf_flowables_from_note_rich_with_fs_grid_tables(
         prev_end = m.end()
     tail = rich[prev_end:]
     flush_grid()
-    if tail.strip():
+    if _fs_pdf_head_segment_has_visible_text(tail):
         out.extend(_fs_pdf_flowables_from_note_rich(tail, base_style, styles))
     return out
 
