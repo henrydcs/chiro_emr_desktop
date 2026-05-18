@@ -606,11 +606,12 @@ class App(tk.Tk):
         }
 
     @staticmethod
-    def _unpack_live_preview_run(run) -> tuple[str, str | None, int | None]:
-        """Accept (chunk, tag) or (chunk, tag, wrap_px) from any section."""
+    def _unpack_live_preview_run(run) -> tuple[str, str | None, int | None, str | None]:
+        """Accept (chunk, tag), (chunk, tag, wrap_px), or (chunk, tag, wrap_px, fg_hex)."""
         try:
             if isinstance(run, (tuple, list)) and len(run) >= 3:
                 ch, tg, wp = run[0], run[1], run[2]
+                fg = run[3] if len(run) >= 4 else None
                 wp_i: int | None
                 if wp is not None:
                     try:
@@ -619,12 +620,34 @@ class App(tk.Tk):
                         wp_i = None
                 else:
                     wp_i = None
-                return (ch or "", tg, wp_i)
+                fg_s = str(fg).strip() if fg else None
+                return (ch or "", tg, wp_i, fg_s)
             if isinstance(run, (tuple, list)) and len(run) >= 2:
-                return (run[0] or "", run[1], None)
+                fg = run[3] if len(run) >= 4 else None
+                fg_s = str(fg).strip() if fg else None
+                return (run[0] or "", run[1], None, fg_s)
         except Exception:
             pass
-        return ("", None, None)
+        return ("", None, None, None)
+
+    def _live_preview_fg_color_tag(self, txt: tk.Text, color_hex: str) -> str:
+        hx = (color_hex or "").strip()
+        if not hx:
+            return ""
+        try:
+            k = (id(txt), "fg", hx.upper())
+        except Exception:
+            return ""
+        tnm = self._preview_bullet_wrap_by_key.get(k)
+        if tnm is None:
+            self._preview_bullet_wrap_tag_uid += 1
+            tnm = f"LW_FGC_{self._preview_bullet_wrap_tag_uid}_{hx.lstrip('#')}"
+            try:
+                txt.tag_configure(tnm, foreground=hx)
+            except tk.TclError:
+                return ""
+            self._preview_bullet_wrap_by_key[k] = tnm
+        return tnm
 
     def _live_preview_bullet_wrap_tag(self, txt: tk.Text, px: int) -> str:
         if px <= 0:
@@ -902,8 +925,8 @@ class App(tk.Tk):
 
             # ✅ If content didn’t change, do NOTHING (prevents jitter)
             new_key = tuple(
-                (ch or "", tg or "", str(wp) if wp else "")
-                for ch, tg, wp in (self._unpack_live_preview_run(r) for r in runs)
+                (ch or "", tg or "", str(wp) if wp else "", fg or "")
+                for ch, tg, wp, fg in (self._unpack_live_preview_run(r) for r in runs)
             )
             if getattr(self, "_last_preview_key", None) == new_key:
                 return
@@ -920,10 +943,14 @@ class App(tk.Tk):
                 txt.delete("1.0", "end")
 
                 for raw in runs:
-                    chunk, tag, wrap_px = self._unpack_live_preview_run(raw)
+                    chunk, tag, wrap_px, fg_hex = self._unpack_live_preview_run(raw)
                     if not chunk:
                         continue
                     tag_list: list[str] = []
+                    if fg_hex:
+                        fgt = self._live_preview_fg_color_tag(txt, fg_hex)
+                        if fgt:
+                            tag_list.append(fgt)
                     if wrap_px is not None:
                         if wrap_px < 0:
                             wtn = self._live_preview_column_tab_tag(txt, -int(wrap_px))

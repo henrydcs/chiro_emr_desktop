@@ -291,7 +291,8 @@ def _finalize_family_social_block_annotated(
     dds: list["dict | None"],
     *,
     bullet_wrap_by_part_idx: dict[int, int] | None = None,
-) -> list[tuple[str, "str | None", "int | None"]]:
+    part_slots: "list[int | None] | None" = None,
+) -> list[tuple[str, "str | None", "int | None", "int | None"]]:
     """
     Mirror of _finalize_family_social_block but return (text_chunk, tag, bullet_wrap_px).
     bullet_wrap_px (when set) requests Tk hanging continuation indent for wrapped lines.
@@ -304,7 +305,7 @@ def _finalize_family_social_block_annotated(
     has_bullet = any(
         p is not None and str(p).startswith("\n") for p in pl
     )
-    runs: list[tuple[str, "str | None", "int | None"]] = []
+    runs: list[tuple[str, "str | None", "int | None", "int | None"]] = []
     first = True
     bullet_flow_px: int | None = None
     for pi, (p, d) in enumerate(zip(pl, dl)):
@@ -312,6 +313,9 @@ def _finalize_family_social_block_annotated(
             bullet_flow_px = int(bullet_wrap_by_part_idx[pi])
         else:
             bullet_flow_px = None
+        slot_j: int | None = None
+        if part_slots is not None and pi < len(part_slots):
+            slot_j = part_slots[pi]
         if p is None:
             continue
         s = str(p)
@@ -321,16 +325,16 @@ def _finalize_family_social_block_annotated(
         wrap_px = bullet_flow_px
         if s.startswith("\n"):
             cleaned = _finalize_newline_gap_fragment(s)
-            runs.append((cleaned if first else cleaned, tag, wrap_px))
+            runs.append((cleaned if first else cleaned, tag, wrap_px, slot_j))
         elif s.startswith(_ATTACH):
             cleaned = s[len(_ATTACH):]
-            runs.append((cleaned, tag, wrap_px))
+            runs.append((cleaned, tag, wrap_px, slot_j))
         else:
             cleaned = s.strip()
             if first:
-                runs.append((cleaned, tag, wrap_px))
+                runs.append((cleaned, tag, wrap_px, slot_j))
             else:
-                runs.append((" " + cleaned, tag, wrap_px))
+                runs.append((" " + cleaned, tag, wrap_px, slot_j))
         first = False
 
     if not runs:
@@ -338,15 +342,15 @@ def _finalize_family_social_block_annotated(
 
     # Strip any accidental leading space from the very first run.
     if runs[0][0].startswith(" "):
-        runs[0] = (runs[0][0].lstrip(), runs[0][1], runs[0][2])
+        runs[0] = (runs[0][0].lstrip(), runs[0][1], runs[0][2], runs[0][3])
 
     if not has_bullet:
         full = "".join(r[0] for r in runs).strip()
         if full and full[-1] not in ".!?" and full[-1] != ",":
-            last_t, last_tag, last_px = runs[-1]
-            runs[-1] = (last_t + ".", last_tag, last_px)
+            last_t, last_tag, last_px, last_slot = runs[-1]
+            runs[-1] = (last_t + ".", last_tag, last_px, last_slot)
 
-    return [(t, tag, px) for t, tag, px in runs if t]
+    return [(t, tag, px, slot) for t, tag, px, slot in runs if t]
 
 
 def _plain_grid_run_matches_export_row(
@@ -354,8 +358,8 @@ def _plain_grid_run_matches_export_row(
     run_b: tuple[str, str | None, int | None],
     er: dict,
 ) -> bool:
-    ch, _, _ = run_a
-    ch2, _, _ = run_b
+    ch = run_a[0]
+    ch2 = run_b[0]
     return (
         bool(er)
         and ch.rstrip() == str(er.get("h") or "").rstrip()
@@ -534,6 +538,8 @@ class FamilySocialSectionCore(ttk.Frame):
         self._visit_skip_by_tid: dict[int, bool] = {}
         # Note/Builder-only visual promotion target per template (does not affect print order).
         self._builder_dd_top_by_tid: dict[int, int] = {}
+        # Single Live Preview highlight target for this section: (template_id, dropdown_index).
+        self._builder_dd_preview_highlight: tuple[int, int] | None = None
         self._builder_dd_repack_by_tid: dict[int, object] = {}
         self._skip_checkbox_vars: dict[int, tk.BooleanVar] = {}
         self._clear_assoc_on_primary_clear = bool(clear_assoc_on_primary_clear)
@@ -1595,8 +1601,26 @@ class FamilySocialSectionCore(ttk.Frame):
         self._bullet_wrap_tag_by_px[px] = tnm
         return tnm
 
-    def _insert_builder_runs(self, runs: list[tuple[str, str | None, int | None]]) -> None:
-        for chunk, tag, wrap_px in runs:
+    @staticmethod
+    def _unpack_builder_run(run) -> tuple[str, str | None, int | None]:
+        """Text-widget runs are (chunk, tag, wrap_px); optional 4th is slot or preview fg."""
+        try:
+            if isinstance(run, (tuple, list)) and len(run) >= 3:
+                ch, tag, wp = run[0], run[1], run[2]
+                wp_i: int | None = None
+                if wp is not None:
+                    try:
+                        wp_i = int(wp)
+                    except (TypeError, ValueError):
+                        wp_i = None
+                return (ch or "", tag, wp_i)
+        except Exception:
+            pass
+        return ("", None, None)
+
+    def _insert_builder_runs(self, runs) -> None:
+        for run in runs:
+            chunk, tag, wrap_px = self._unpack_builder_run(run)
             tnames = []
             if wrap_px is not None:
                 if wrap_px < 0:
@@ -1624,6 +1648,8 @@ class FamilySocialSectionCore(ttk.Frame):
         dd: dict,
         dropdown_parts: list[str],
         dropdown_dds: list[dict | None],
+        dropdown_slots: list[int | None],
+        slot_j: int,
     ) -> None:
         """Emit resolved dropdown prefix before Multiple choice Full/Full output.
 
@@ -1641,12 +1667,15 @@ class FamilySocialSectionCore(ttk.Frame):
             dd_prefix_text = "\n\n" + dd_prefix_text
         dropdown_parts.append(dd_prefix_text)
         dropdown_dds.append(None)
+        dropdown_slots.append(slot_j)
 
     def _append_single_full_prefix_fragment(
         self,
         dd: dict,
         dropdown_parts: list[str],
         dropdown_dds: list[dict | None],
+        dropdown_slots: list[int | None],
+        slot_j: int,
     ) -> None:
         """Emit resolved dropdown prefix before Single choice Full/Full output.
 
@@ -1661,6 +1690,7 @@ class FamilySocialSectionCore(ttk.Frame):
         dd_prefix_text = _prefix_before_bullet_list(dd_prefix_raw)
         dropdown_parts.append(dd_prefix_text)
         dropdown_dds.append(None)
+        dropdown_slots.append(slot_j)
 
     def _compose_parts_for_template(
         self,
@@ -1668,6 +1698,7 @@ class FamilySocialSectionCore(ttk.Frame):
         tmpl: dict,
         _dd_out: "list[dict | None] | None" = None,
         _bullet_px_by_part_idx: dict[int, int] | None = None,
+        _slot_out: "list[int | None] | None" = None,
         *,
         for_display: bool = False,
     ) -> list[str]:
@@ -1679,6 +1710,7 @@ class FamilySocialSectionCore(ttk.Frame):
         to each returned part, enabling per-fragment formatting annotation.
         """
         _dropdown_dds: list[dict | None] = []
+        _dropdown_slots: list[int | None] = []
         rp = (self._resolve_vars(tmpl.get("prefix") or "") or "").strip()
         dropdown_parts: list[str] = []
         # Before merging with rp, dropdown index -> continuation-indent px for that bullet paragraph.
@@ -1686,6 +1718,8 @@ class FamilySocialSectionCore(ttk.Frame):
         dds = tmpl.get("dropdowns") or []
         meta_row = self._note_builder_meta[i] if i < len(self._note_builder_meta) else []
         prev_ended_assoc_plain_pp = False
+        # DD1 associated types use template prefix; skip it when DD1 emits no detail rows.
+        first_assoc_dropdown_emitted = False
         if i < len(self.note_combo_vars):
             for j, var in enumerate(self.note_combo_vars[i]):
                 dd = dds[j] if j < len(dds) else {}
@@ -1750,25 +1784,13 @@ class FamilySocialSectionCore(ttk.Frame):
                     first_bullet = True
                     any_bullet = False
                     emitted_plain_pp = False
+                    emitted_assoc_detail = False
                     # DD1 uses the template-level prefix only; optional dd prefix is for DD2+.
                     if meta.get("associated_per_primary") and j == 0:
                         dd_prefix_raw = ""
                     else:
                         dd_prefix_raw = self._resolve_vars(str(dd.get("prefix") or "")).strip()
-                    if dd_prefix_raw:
-                        dd_prefix_text = _prefix_before_bullet_list(dd_prefix_raw)
-                        if dropdown_parts:
-                            # PDF: tight gap after plain grid; Edit/Live Preview: match template-prefix spacing.
-                            if prev_ended_assoc_plain_pp:
-                                gap = "\n\n" if for_display else "\n"
-                            else:
-                                gap = "\n\n"
-                            dd_prefix_text = gap + dd_prefix_text
-                        elif plain_pp_grid_dd:
-                            # Plain grid: keep dropdown prefix out of the template-prefix paragraph.
-                            dd_prefix_text = "\n\n" + dd_prefix_text
-                        dropdown_parts.append(dd_prefix_text)
-                        _dropdown_dds.append(None)
+                    assoc_part_start = len(dropdown_parts)
                     # Output order follows the Primary options layout (source of truth),
                     # not the associated-column visual order.
                     for pix, ptxt in enumerate(pitems):
@@ -1799,6 +1821,8 @@ class FamilySocialSectionCore(ttk.Frame):
                                         else frag
                                     )
                         detail = _join_with_oxford_and(detail_parts)
+                        if detail.strip():
+                            emitted_assoc_detail = True
                         plain_pp_grid = plain_pp_grid_dd
                         line_pfx = _associated_detail_row_prefix(
                             dd, first_bullet, use_tab_bullets=use_tab_bullets
@@ -1821,6 +1845,7 @@ class FamilySocialSectionCore(ttk.Frame):
                                 )
                         dropdown_parts.append(line_pfx)
                         _dropdown_dds.append(None)
+                        _dropdown_slots.append(j)
                         if plain_pp_grid:
                             hlbl = hdr.strip()
                             if not hlbl.endswith(":"):
@@ -1837,6 +1862,7 @@ class FamilySocialSectionCore(ttk.Frame):
                             emitted_plain_pp = True
                             dropdown_parts.append(_ATTACH + hlbl)
                             _dropdown_dds.append(_pri_proxy)
+                            _dropdown_slots.append(j)
                             # Single line break between rows comes from the next row's line_pfx;
                             # omit trailing newline here so Live Preview rows aren't double-spaced.
                             if plain_pp_columns_dd:
@@ -1846,8 +1872,10 @@ class FamilySocialSectionCore(ttk.Frame):
                                 if pad:
                                     dropdown_parts.append(_ATTACH + pad)
                                     _dropdown_dds.append(None)
+                                    _dropdown_slots.append(j)
                                 dropdown_parts.append(_ATTACH + detail)
                                 _dropdown_dds.append(_asc_proxy)
+                                _dropdown_slots.append(j)
                                 if plain_col_px > 0:
                                     bullet_px_by_dropdown_idx[len(dropdown_parts) - 1] = (
                                         plain_col_px + _PLAIN_COL_VALUE_WRAP_FLAG
@@ -1855,18 +1883,45 @@ class FamilySocialSectionCore(ttk.Frame):
                             else:
                                 dropdown_parts.append(_ATTACH + " " + detail)
                                 _dropdown_dds.append(_asc_proxy)
+                                _dropdown_slots.append(j)
                         else:
                             # Header text (primary formatting)
                             dropdown_parts.append(_ATTACH + hdr)
                             _dropdown_dds.append(_pri_proxy)
+                            _dropdown_slots.append(j)
                             # Detail text (associated formatting), if any
                             if detail:
                                 dropdown_parts.append(_ATTACH + ": ")
                                 _dropdown_dds.append(None)
+                                _dropdown_slots.append(j)
                                 dropdown_parts.append(_ATTACH + detail)
                                 _dropdown_dds.append(_asc_proxy)
+                                _dropdown_slots.append(j)
                         first_bullet = False
                         any_bullet = True
+                    if j == 0:
+                        first_assoc_dropdown_emitted = bool(
+                            any_bullet and emitted_assoc_detail
+                        )
+                    if any_bullet and dd_prefix_raw and emitted_assoc_detail:
+                        dd_prefix_text = _prefix_before_bullet_list(dd_prefix_raw)
+                        if assoc_part_start > 0 or dropdown_parts:
+                            if prev_ended_assoc_plain_pp:
+                                gap = "\n\n" if for_display else "\n"
+                            else:
+                                gap = "\n\n"
+                            dd_prefix_text = gap + dd_prefix_text
+                        elif plain_pp_grid_dd:
+                            dd_prefix_text = "\n\n" + dd_prefix_text
+                        dropdown_parts.insert(assoc_part_start, dd_prefix_text)
+                        _dropdown_dds.insert(assoc_part_start, None)
+                        _dropdown_slots.insert(assoc_part_start, j)
+                        if bullet_px_by_dropdown_idx:
+                            shifted: dict[int, int] = {}
+                            for bi, px in bullet_px_by_dropdown_idx.items():
+                                shifted[bi + 1 if bi >= assoc_part_start else bi] = px
+                            bullet_px_by_dropdown_idx.clear()
+                            bullet_px_by_dropdown_idx.update(shifted)
                     if emitted_plain_pp:
                         next_assoc_pp_prefix = ""
                         if j + 1 < len(dds):
@@ -1878,6 +1933,7 @@ class FamilySocialSectionCore(ttk.Frame):
                         if not next_assoc_pp_prefix:
                             dropdown_parts.append("\n")
                             _dropdown_dds.append(None)
+                            _dropdown_slots.append(j)
                         prev_ended_assoc_plain_pp = True
                     else:
                         prev_ended_assoc_plain_pp = False
@@ -1913,18 +1969,24 @@ class FamilySocialSectionCore(ttk.Frame):
                             if _bullet_px_by_part_idx is not None:
                                 bi = len(dropdown_parts)
                                 bullet_px_by_dropdown_idx[bi] = self._simple_tab_bullet_wrap_indent_px(dd)
-                            self._append_multi_full_prefix_fragment(dd, dropdown_parts, _dropdown_dds)
+                            self._append_multi_full_prefix_fragment(
+                                dd, dropdown_parts, _dropdown_dds, _dropdown_slots, j
+                            )
                             dropdown_parts.append(block)
                             _dropdown_dds.append(dd)
+                            _dropdown_slots.append(j)
                             appended = True
                     if appended:
                         continue
                     val_fb = self._resolve_vars(var.get() or "").strip()
                     if not val_fb or _is_omit_phrase(val_fb):
                         continue
-                    self._append_multi_full_prefix_fragment(dd, dropdown_parts, _dropdown_dds)
+                    self._append_multi_full_prefix_fragment(
+                        dd, dropdown_parts, _dropdown_dds, _dropdown_slots, j
+                    )
                     dropdown_parts.append(val_fb)
                     _dropdown_dds.append(dd)
+                    _dropdown_slots.append(j)
                     continue
 
                 val = self._resolve_vars(var.get() or "").strip()
@@ -1932,44 +1994,64 @@ class FamilySocialSectionCore(ttk.Frame):
                     continue
 
                 if not is_multi and bool(dd.get("multi_bullets")):
-                    self._append_single_full_prefix_fragment(dd, dropdown_parts, _dropdown_dds)
+                    self._append_single_full_prefix_fragment(
+                        dd, dropdown_parts, _dropdown_dds, _dropdown_slots, j
+                    )
                     block = _bullet_line_prefix(dd, True) + _wrap_long_bullet_tokens(dd, val.strip())
                     if _bullet_px_by_part_idx is not None:
                         bi = len(dropdown_parts)
                         bullet_px_by_dropdown_idx[bi] = self._simple_tab_bullet_wrap_indent_px(dd)
                     dropdown_parts.append(block)
                     _dropdown_dds.append(dd)
+                    _dropdown_slots.append(j)
                     continue
 
                 val = _apply_narrative_tail_to_fragment(val, dd)
                 if is_multi:
-                    self._append_multi_full_prefix_fragment(dd, dropdown_parts, _dropdown_dds)
+                    self._append_multi_full_prefix_fragment(
+                        dd, dropdown_parts, _dropdown_dds, _dropdown_slots, j
+                    )
                 else:
-                    self._append_single_full_prefix_fragment(dd, dropdown_parts, _dropdown_dds)
+                    self._append_single_full_prefix_fragment(
+                        dd, dropdown_parts, _dropdown_dds, _dropdown_slots, j
+                    )
                 dropdown_parts.append(val)
                 _dropdown_dds.append(dd)
+                _dropdown_slots.append(j)
 
         if i < len(self.note_combo_vars) and len(self.note_combo_vars[i]) > 0 and not dropdown_parts:
             return []
 
         has_bullet_fragment = any(str(p).startswith("\n") for p in dropdown_parts if p)
         rp_for_parts = _prefix_before_bullet_list(rp) if (rp and has_bullet_fragment) else rp
+        first_dd = dds[0] if dds else {}
+        first_dd_is_assoc = bool(
+            first_dd.get("associated_multi") or first_dd.get("associated_per_primary")
+        )
+        include_template_prefix = bool(rp_for_parts)
+        if include_template_prefix and first_dd_is_assoc and not first_assoc_dropdown_emitted:
+            include_template_prefix = False
 
         parts: list[str] = []
         parts_dds: list[dict | None] = []
+        parts_slots: list[int | None] = []
         rp_offset = 0
-        if rp_for_parts:
+        if include_template_prefix:
             parts.append(rp_for_parts)
             parts_dds.append(None)
+            parts_slots.append(None)
             rp_offset = 1
         for bi, px in bullet_px_by_dropdown_idx.items():
             if _bullet_px_by_part_idx is not None:
                 _bullet_px_by_part_idx[rp_offset + bi] = px
         parts.extend(dropdown_parts)
         parts_dds.extend(_dropdown_dds)
+        parts_slots.extend(_dropdown_slots)
 
         if _dd_out is not None:
             _dd_out.extend(parts_dds)
+        if _slot_out is not None:
+            _slot_out.extend(parts_slots)
         return parts
 
     def _compose_builder_text(self) -> str:
@@ -2010,25 +2092,32 @@ class FamilySocialSectionCore(ttk.Frame):
             if self._visit_skip_by_tid.get(tid, False):
                 continue
             dd_out: list[dict | None] = []
+            slot_out: list[int | None] = []
             bullet_px: dict[int, int] = {}
             parts = self._compose_parts_for_template(
                 i,
                 tmpl,
                 _dd_out=dd_out,
                 _bullet_px_by_part_idx=bullet_px,
+                _slot_out=slot_out,
                 for_display=for_display,
             )
             if not parts:
                 continue
             while len(dd_out) < len(parts):
                 dd_out.append(None)
+            while len(slot_out) < len(parts):
+                slot_out.append(None)
             runs = _finalize_family_social_block_annotated(
                 parts,
                 dd_out[: len(parts)],
                 bullet_wrap_by_part_idx=bullet_px or None,
+                part_slots=slot_out[: len(parts)],
             )
             if not runs:
                 continue
+            if for_display:
+                runs = self._live_preview_colorize_active_dd_runs(tmpl, runs)
             if not first_block:
                 all_runs.append(("\n\n", None, None))
             all_runs.extend(runs)
@@ -2136,15 +2225,41 @@ class FamilySocialSectionCore(ttk.Frame):
             i = j
         return runs
 
-    def get_live_preview_annotated_runs(self) -> list[tuple[str, "str | None", "int | None"]]:
+    def _live_preview_colorize_active_dd_runs(
+        self,
+        tmpl: dict,
+        runs: list[tuple[str, "str | None", "int | None", "int | None"]],
+    ) -> list[tuple[str, "str | None", "int | None", "str | None"]]:
+        """Tint runs for the one active quick-switch DD (Live Preview only)."""
+        dds = list(tmpl.get("dropdowns") or [])
+        if len(dds) <= 1:
+            return [(t, tag, px, None) for t, tag, px, _slot in runs]
+        hl = self._builder_dd_preview_highlight
+        if not hl:
+            return [(t, tag, px, None) for t, tag, px, _slot in runs]
+        highlight_tid, active = hl
+        if int(tmpl["id"]) != int(highlight_tid):
+            return [(t, tag, px, None) for t, tag, px, _slot in runs]
+        if active < 0 or active >= len(dds):
+            return [(t, tag, px, None) for t, tag, px, _slot in runs]
+        color = self._assoc_slot_color_for_dd(dds[active], active)
+        out: list[tuple[str, "str | None", "int | None", "str | None"]] = []
+        for t, tag, px, slot_j in runs:
+            fg: str | None = None
+            if slot_j == active or (slot_j is None and active == 0):
+                fg = color
+            out.append((t, tag, px, fg))
+        return out
+
+    def get_live_preview_annotated_runs(self) -> list[tuple[str, "str | None", "int | None", "str | None"]]:
         """
-        Return (text_chunk, tag, bullet_wrap_px) tuples suitable for the Live Preview text widget.
+        Return (text_chunk, tag, bullet_wrap_px, optional_fg_hex) tuples for Live Preview.
         Uses builder-annotated runs when the current note text matches the builder
         output; falls back to reading formatting directly from the text widget tags
         when the user has manually edited.
         """
         runs = self._compose_builder_annotated_runs(for_display=True)
-        plain = "".join(t for t, _, _ in runs).strip()
+        plain = "".join(t for t, *_ in runs).strip()
         if plain != self.text.get("1.0", tk.END).strip() or self._user_has_formatted:
             widget_runs = self._runs_from_text_widget()
             return widget_runs if widget_runs else []
@@ -2228,13 +2343,13 @@ class FamilySocialSectionCore(ttk.Frame):
                         ri += 1
                         i = next_i
                         continue
-                ch, tag, _px = runs_src[i]
+                ch, tag, _px, *_slot = runs_src[i]
                 parts.append(_wrap_run_safe(ch, tag))
                 i += 1
             return "".join(parts)
 
         display_plain = "".join(
-            t for t, _, _ in self._compose_builder_annotated_runs(for_display=True)
+            t for t, *_ in self._compose_builder_annotated_runs(for_display=True)
         ).strip()
         if display_plain != self.text.get("1.0", tk.END).strip() or self._user_has_formatted:
             # Builder output diverged, or user applied manual formatting — read
@@ -3999,15 +4114,18 @@ class FamilySocialSectionCore(ttk.Frame):
     def _on_template_dd_quick_switch(self, tid: int, di: int) -> None:
         """Promote a dropdown to top position in Note/Builder for one template only."""
         self._builder_dd_top_by_tid[int(tid)] = int(di)
+        self._builder_dd_preview_highlight = (int(tid), int(di))
         repack_cb = self._builder_dd_repack_by_tid.get(int(tid))
         if callable(repack_cb):
             try:
                 repack_cb()
+                self.on_change_callback()
                 return
             except Exception:
                 pass
         # Fallback if callback is stale (e.g., after an unexpected widget teardown).
         self._render_note_builder()
+        self.on_change_callback()
 
     def _build_prefix_token_bank(self, parent: ttk.Widget) -> None:
         """
@@ -4944,11 +5062,21 @@ class FamilySocialSectionCore(ttk.Frame):
             new_i = old_to_new.get(int(old_i))
             if new_i is not None and isinstance(top_di, int):
                 self._builder_dd_top_by_tid[new_i] = top_di
+        hl = self._builder_dd_preview_highlight
+        if hl is not None:
+            new_tid = old_to_new.get(int(hl[0]))
+            if new_tid is not None:
+                self._builder_dd_preview_highlight = (new_tid, int(hl[1]))
+            else:
+                self._builder_dd_preview_highlight = None
 
     def _delete_template(self, tmpl: dict) -> None:
         if messagebox.askyesno("Delete template", f"Delete template {tmpl['id']}?"):
-            self._visit_skip_by_tid.pop(int(tmpl["id"]), None)
-            self._builder_dd_top_by_tid.pop(int(tmpl["id"]), None)
+            tid = int(tmpl["id"])
+            self._visit_skip_by_tid.pop(tid, None)
+            self._builder_dd_top_by_tid.pop(tid, None)
+            if self._builder_dd_preview_highlight and self._builder_dd_preview_highlight[0] == tid:
+                self._builder_dd_preview_highlight = None
             # Mutate list in place — self.templates aliases section["templates"]; assigning
             # a new list would break persistence (orchestrator saves section dicts).
             self.templates[:] = [t for t in self.templates if t["id"] != tmpl["id"]]
@@ -5164,7 +5292,7 @@ class FamilySocialSectionCore(ttk.Frame):
             return
         if not runs:
             return
-        plain = "".join(t for t, _, _ in runs)
+        plain = "".join(self._unpack_builder_run(r)[0] for r in runs)
         try:
             current = self.text.get("1.0", tk.END)
         except tk.TclError:
@@ -5187,6 +5315,7 @@ class FamilySocialSectionCore(ttk.Frame):
 
     def reset(self) -> None:
         self._visit_skip_by_tid.clear()
+        self._builder_dd_preview_highlight = None
         self.note_combo_vars = []
         self._note_builder_meta = []
         self.text.delete("1.0", tk.END)
