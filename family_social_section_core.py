@@ -541,6 +541,7 @@ class FamilySocialSectionCore(ttk.Frame):
         # Single Live Preview highlight target for this section: (template_id, dropdown_index).
         self._builder_dd_preview_highlight: tuple[int, int] | None = None
         self._builder_dd_repack_by_tid: dict[int, object] = {}
+        self._builder_dd_switch_refresh_by_tid: dict[int, object] = {}
         self._skip_checkbox_vars: dict[int, tk.BooleanVar] = {}
         self._clear_assoc_on_primary_clear = bool(clear_assoc_on_primary_clear)
         if token_feedback_var is not None:
@@ -3457,6 +3458,7 @@ class FamilySocialSectionCore(ttk.Frame):
         self._note_builder_meta = []
         self._skip_checkbox_vars = {}
         self._builder_dd_repack_by_tid = {}
+        self._builder_dd_switch_refresh_by_tid = {}
 
         self._prefix_resolved_labels: list[ttk.Label] = []
 
@@ -3556,9 +3558,10 @@ class FamilySocialSectionCore(ttk.Frame):
                 else:
                     switch_row.pack(fill="x", padx=6, pady=(2, 2))
                 ttk.Label(switch_row, text="Quick dropdown buttons:").pack(side="left", padx=(0, 4))
+                hl = self._builder_dd_preview_highlight
                 for di, dd in enumerate(_dds):
                     btn_name = self._builder_dd_button_name(dd, di)
-                    is_active = di == top_di
+                    is_active = hl is not None and hl == (_tid, di)
                     if is_active:
                         btn_name = f"[{btn_name}]"
                     slot_color = self._assoc_slot_color_for_dd(dd, di)
@@ -3593,6 +3596,7 @@ class FamilySocialSectionCore(ttk.Frame):
                         fr2.pack(fill="x", pady=3)
                 _refresh_fn()
             self._builder_dd_repack_by_tid[tid] = _repack_dropdown_blocks
+            self._builder_dd_switch_refresh_by_tid[tid] = _refresh_embedded_switch_row
 
             for di, dd in enumerate(dds):
                 items = list(dd.get("items") or [])
@@ -4111,6 +4115,15 @@ class FamilySocialSectionCore(ttk.Frame):
 
         self.after_idle(_refresh_after_color_change)
 
+    def _refresh_all_dd_quick_switch_rows(self) -> None:
+        """Rebuild quick-switch button rows so only the global active DD is styled."""
+        for cb in self._builder_dd_switch_refresh_by_tid.values():
+            if callable(cb):
+                try:
+                    cb()
+                except Exception:
+                    pass
+
     def _on_template_dd_quick_switch(self, tid: int, di: int) -> None:
         """Promote a dropdown to top position in Note/Builder for one template only."""
         self._builder_dd_top_by_tid[int(tid)] = int(di)
@@ -4119,12 +4132,9 @@ class FamilySocialSectionCore(ttk.Frame):
         if callable(repack_cb):
             try:
                 repack_cb()
-                self.on_change_callback()
-                return
             except Exception:
                 pass
-        # Fallback if callback is stale (e.g., after an unexpected widget teardown).
-        self._render_note_builder()
+        self._refresh_all_dd_quick_switch_rows()
         self.on_change_callback()
 
     def _build_prefix_token_bank(self, parent: ttk.Widget) -> None:
