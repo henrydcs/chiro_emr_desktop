@@ -72,6 +72,11 @@ _BULLET_STYLE_TAB_SUFFIX: dict[str, str] = {
 
 VALID_DROPDOWN_BULLET_STYLES: frozenset[str] = frozenset(_BULLET_STYLE_TAB_SUFFIX.keys())
 
+# Longest-first matching for manual Return continuation in the note textbox.
+_BULLET_TAB_SUFFIXES_SORTED: tuple[str, ...] = tuple(
+    sorted(set(_BULLET_STYLE_TAB_SUFFIX.values()), key=len, reverse=True)
+)
+
 _BULLET_STYLE_CHOICES: tuple[tuple[str, str], ...] = (
     ("none", "None (no icon, indented lines)"),
     ("round_circle", "Round circle ○"),
@@ -104,6 +109,20 @@ def _bullet_line_prefix(dd: dict, first_line: bool) -> str:
     if first_line:
         return "\n\n\t" + suf
     return "\n\t" + suf
+
+
+def _parse_tab_bullet_line(line: str) -> tuple[str, str] | None:
+    """If *line* is a tab-indented bullet row, return (bullet_suffix, body)."""
+    if not line or not line.startswith("\t"):
+        return None
+    rest = line[1:]
+    for suf in _BULLET_TAB_SUFFIXES_SORTED:
+        if rest.startswith(suf):
+            return suf, rest[len(suf):]
+    m = re.match(r"^(\s+)(.*)$", rest, re.DOTALL)
+    if m and not m.group(1).strip():
+        return m.group(1), m.group(2)
+    return None
 
 
 def _associated_detail_row_prefix(dd: dict, first_line: bool, *, use_tab_bullets: bool) -> str:
@@ -863,6 +882,8 @@ class FamilySocialSectionCore(ttk.Frame):
         self.text = tk.Text(self._note_editor_text_layer, width=110, height=12, wrap="word")
         self.text.pack(fill="x", expand=False, padx=0, pady=(0, 8))
         self.text.bind("<KeyRelease>", lambda e: self._on_note_text_changed())
+        self.text.bind("<KeyPress-Return>", self._on_note_return_key)
+        self.text.bind("<KeyPress-KP_Enter>", self._on_note_return_key)
         # Save selection when focus leaves the text widget so the format buttons
         # can still access it (clicking a button shifts focus away from the widget).
         self.text.bind("<FocusOut>", self._on_text_focus_out)
@@ -1219,6 +1240,35 @@ class FamilySocialSectionCore(ttk.Frame):
 
     def _on_note_text_changed(self) -> None:
         self.on_change_callback()
+
+    def _on_note_return_key(self, event=None) -> str | None:
+        """Continue tab-bullet rows on Return at EOL; plain newline on empty bullet row."""
+        if event is not None and (event.state & 0x1):
+            return None
+        try:
+            insert_idx = self.text.index("insert")
+            line_num = insert_idx.split(".")[0]
+            line_start = f"{line_num}.0"
+            line_end = f"{line_num}.end"
+            line = self.text.get(line_start, line_end)
+        except tk.TclError:
+            return None
+
+        parsed = _parse_tab_bullet_line(line)
+        if parsed is None:
+            return None
+        if not self.text.compare(insert_idx, ">=", line_end):
+            return None
+
+        bullet_suffix, body = parsed
+        if body.strip():
+            cont = "\n\t" + bullet_suffix
+        else:
+            cont = "\n"
+        self.text.insert(insert_idx, cont)
+        self.text.mark_set("insert", f"{insert_idx}+{len(cont)}c")
+        self._on_note_text_changed()
+        return "break"
 
     def _on_text_focus_out(self, event=None) -> None:
         """Save the current text-widget selection so the B/I/U buttons can
