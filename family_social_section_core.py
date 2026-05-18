@@ -1683,6 +1683,7 @@ class FamilySocialSectionCore(ttk.Frame):
         bullet_px_by_dropdown_idx: dict[int, int] = {}
         dds = tmpl.get("dropdowns") or []
         meta_row = self._note_builder_meta[i] if i < len(self._note_builder_meta) else []
+        prev_ended_assoc_plain_pp = False
         if i < len(self.note_combo_vars):
             for j, var in enumerate(self.note_combo_vars[i]):
                 dd = dds[j] if j < len(dds) else {}
@@ -1755,9 +1756,9 @@ class FamilySocialSectionCore(ttk.Frame):
                     if dd_prefix_raw:
                         dd_prefix_text = _prefix_before_bullet_list(dd_prefix_raw)
                         if dropdown_parts:
-                            # When an associated dropdown prefix follows prior content,
-                            # start it as a new paragraph (blank line gap).
-                            dd_prefix_text = "\n\n" + dd_prefix_text
+                            # Tighter gap when DD2+ prefix follows a plain (no bullets) grid block.
+                            gap = "\n" if prev_ended_assoc_plain_pp else "\n\n"
+                            dd_prefix_text = gap + dd_prefix_text
                         elif plain_pp_grid_dd:
                             # Plain grid: keep dropdown prefix out of the template-prefix paragraph.
                             dd_prefix_text = "\n\n" + dd_prefix_text
@@ -1862,12 +1863,24 @@ class FamilySocialSectionCore(ttk.Frame):
                         first_bullet = False
                         any_bullet = True
                     if emitted_plain_pp:
-                        dropdown_parts.append("\n")
-                        _dropdown_dds.append(None)
+                        next_assoc_pp_prefix = ""
+                        if j + 1 < len(dds):
+                            nd = dds[j + 1] or {}
+                            if nd.get("associated_per_primary") and j + 1 > 0:
+                                next_assoc_pp_prefix = (
+                                    self._resolve_vars(str(nd.get("prefix") or "")).strip()
+                                )
+                        if not next_assoc_pp_prefix:
+                            dropdown_parts.append("\n")
+                            _dropdown_dds.append(None)
+                        prev_ended_assoc_plain_pp = True
+                    else:
+                        prev_ended_assoc_plain_pp = False
                     if not any_bullet:
                         continue
                     continue
 
+                prev_ended_assoc_plain_pp = False
                 is_multi = bool(dd.get("multi"))
                 if is_multi and bool(dd.get("multi_bullets")) and j < len(meta_row):
                     meta = meta_row[j]
