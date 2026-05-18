@@ -827,15 +827,16 @@ class FamilySocialSectionCore(ttk.Frame):
         ).pack(side="left", padx=(8, 0))
 
         self._note_editor_stack = ttk.Frame(note_inner)
-        self._note_editor_stack.pack(fill="x", expand=False, padx=10, pady=(0, 6))
+        self._note_editor_stack.pack(fill="both", expand=True, padx=10, pady=(0, 6))
         self._note_editor_builder_layer = ttk.Frame(self._note_editor_stack)
         self._note_editor_text_layer = ttk.Frame(self._note_editor_stack)
         self._note_editor_builder_layer.grid(row=0, column=0, sticky="nsew")
         self._note_editor_text_layer.grid(row=0, column=0, sticky="nsew")
+        self._note_editor_stack.grid_rowconfigure(0, weight=1)
         self._note_editor_stack.grid_columnconfigure(0, weight=1)
 
         builder_outer = ttk.LabelFrame(self._note_editor_builder_layer, text="Sentence builder")
-        builder_outer.pack(fill="x", expand=False, pady=(0, 0))
+        builder_outer.pack(fill="both", expand=True, pady=(0, 0))
         self._note_builder_outer = builder_outer
 
         canvas = tk.Canvas(builder_outer, highlightthickness=0, height=440)
@@ -1039,7 +1040,10 @@ class FamilySocialSectionCore(ttk.Frame):
 
     # Extra pixels below the last builder row so the scrollbar range fully clears
     # the last dropdown (ttk layout + canvas embedding often clips the bottom otherwise).
-    _NOTE_BUILDER_BOTTOM_SPACER_PX = 28
+    _NOTE_BUILDER_BOTTOM_SPACER_PX = 72
+    # On scaled Windows laptops, bbox("all") can still undershoot reqheight briefly;
+    # add this much to scrollregion.bottom so scrollbar / wheel can expose the tail.
+    _NOTE_BUILDER_SCROLLREGION_BOTTOM_EXTRA_PX = 120
 
     def _on_note_builder_canvas_configure(self, event: tk.Event) -> None:
         """Keep the embedded frame width in sync with the canvas interior width."""
@@ -1106,7 +1110,21 @@ class FamilySocialSectionCore(ttk.Frame):
         if not bbox:
             return
         try:
-            canvas.configure(scrollregion=bbox)
+            x0, y0, x1, y2 = bbox
+            try:
+                frame = getattr(self, "note_scroll_frame", None)
+                if frame is not None:
+                    fh = int(frame.winfo_reqheight())
+                    # Ensure scroll height is at least the embedded frame wants (DPI scaling quirks).
+                    y2 = max(y2, y0 + fh)
+            except (tk.TclError, ValueError, TypeError):
+                pass
+            extra = getattr(
+                type(self),
+                "_NOTE_BUILDER_SCROLLREGION_BOTTOM_EXTRA_PX",
+                0,
+            )
+            canvas.configure(scrollregion=(x0, y0, x1, int(y2) + int(extra)))
         except Exception:
             pass
 
