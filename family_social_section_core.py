@@ -1668,6 +1668,8 @@ class FamilySocialSectionCore(ttk.Frame):
         tmpl: dict,
         _dd_out: "list[dict | None] | None" = None,
         _bullet_px_by_part_idx: dict[int, int] | None = None,
+        *,
+        for_display: bool = False,
     ) -> list[str]:
         """
         Build prefix + non-Omit dropdown fragments. If this template has at least one
@@ -1756,8 +1758,11 @@ class FamilySocialSectionCore(ttk.Frame):
                     if dd_prefix_raw:
                         dd_prefix_text = _prefix_before_bullet_list(dd_prefix_raw)
                         if dropdown_parts:
-                            # Tighter gap when DD2+ prefix follows a plain (no bullets) grid block.
-                            gap = "\n" if prev_ended_assoc_plain_pp else "\n\n"
+                            # PDF: tight gap after plain grid; Edit/Live Preview: match template-prefix spacing.
+                            if prev_ended_assoc_plain_pp:
+                                gap = "\n\n" if for_display else "\n"
+                            else:
+                                gap = "\n\n"
                             dd_prefix_text = gap + dd_prefix_text
                         elif plain_pp_grid_dd:
                             # Plain grid: keep dropdown prefix out of the template-prefix paragraph.
@@ -1799,8 +1804,8 @@ class FamilySocialSectionCore(ttk.Frame):
                             dd, first_bullet, use_tab_bullets=use_tab_bullets
                         )
                         if plain_pp_grid and dd_prefix_raw and first_bullet:
-                            # Prefix already begins its own block; single newline before first row.
-                            line_pfx = "\n"
+                            # Prefix already begins its own block; newline(s) before first row.
+                            line_pfx = "\n\n" if for_display else "\n"
                         if plain_pp_grid and not detail:
                             # Match Plan-of-care PDF summary: omit rows with no value text.
                             continue
@@ -1983,11 +1988,16 @@ class FamilySocialSectionCore(ttk.Frame):
                 blocks.append(sent)
         return "\n\n".join(blocks).strip()
 
-    def _compose_builder_annotated_runs(self) -> list[tuple[str, "str | None", "int | None"]]:
+    def _compose_builder_annotated_runs(
+        self, *, for_display: bool = False
+    ) -> list[tuple[str, "str | None", "int | None"]]:
         """
         Produce (text_chunk, tag_name_or_None, bullet_wrap_px_or_None) tuples for the full composed output.
         The plain text of all runs concatenated equals _compose_builder_text().
         Tags are derived from each dropdown's text_format flags.
+
+        for_display=True widens vertical gaps around optional assoc-per-primary prefixes
+        in the Edit Textbox and Live Preview only; PDF export uses for_display=False.
         """
         # Cleared once per annotated compose; PDF plain-grid markers match runs order.
         self._fs_plain_grid_pdf_export_rows = []
@@ -2006,6 +2016,7 @@ class FamilySocialSectionCore(ttk.Frame):
                 tmpl,
                 _dd_out=dd_out,
                 _bullet_px_by_part_idx=bullet_px,
+                for_display=for_display,
             )
             if not parts:
                 continue
@@ -2132,7 +2143,7 @@ class FamilySocialSectionCore(ttk.Frame):
         output; falls back to reading formatting directly from the text widget tags
         when the user has manually edited.
         """
-        runs = self._compose_builder_annotated_runs()
+        runs = self._compose_builder_annotated_runs(for_display=True)
         plain = "".join(t for t, _, _ in runs).strip()
         if plain != self.text.get("1.0", tk.END).strip() or self._user_has_formatted:
             widget_runs = self._runs_from_text_widget()
@@ -2222,15 +2233,17 @@ class FamilySocialSectionCore(ttk.Frame):
                 i += 1
             return "".join(parts)
 
-        runs = self._compose_builder_annotated_runs()
-        plain = "".join(t for t, _, _ in runs).strip()
-        if plain != self.text.get("1.0", tk.END).strip() or self._user_has_formatted:
+        display_plain = "".join(
+            t for t, _, _ in self._compose_builder_annotated_runs(for_display=True)
+        ).strip()
+        if display_plain != self.text.get("1.0", tk.END).strip() or self._user_has_formatted:
             # Builder output diverged, or user applied manual formatting — read
             # formatting directly from the text widget.
             widget_runs = self._runs_from_text_widget()
             if not widget_runs:
                 return ""
             return "".join(_wrap_run_safe(chunk, tag) for chunk, tag, _px in widget_runs)
+        runs = self._compose_builder_annotated_runs(for_display=False)
         return _rich_body_and_fs_grid_comments(runs)
 
     def get_builder_state(self) -> dict:
@@ -2543,7 +2556,7 @@ class FamilySocialSectionCore(ttk.Frame):
                 return
         except tk.TclError:
             return
-        runs = self._compose_builder_annotated_runs()
+        runs = self._compose_builder_annotated_runs(for_display=True)
         self.text.delete("1.0", tk.END)
         self._insert_builder_runs(runs)
         self._user_has_formatted = False   # builder rewrote the text; reset flag
@@ -5139,7 +5152,7 @@ class FamilySocialSectionCore(ttk.Frame):
         manually edited (builder output diverges), falls back to the saved rich_text so
         formatting survives app restarts."""
         try:
-            runs = self._compose_builder_annotated_runs()
+            runs = self._compose_builder_annotated_runs(for_display=True)
         except Exception:
             return
         if not runs:
