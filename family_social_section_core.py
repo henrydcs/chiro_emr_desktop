@@ -3443,16 +3443,23 @@ class FamilySocialSectionCore(ttk.Frame):
                 ttk.Label(switch_row, text="Quick dropdown buttons:").pack(side="left", padx=(0, 4))
                 for di, dd in enumerate(_dds):
                     btn_name = self._builder_dd_button_name(dd, di)
-                    if di == top_di:
+                    is_active = di == top_di
+                    if is_active:
                         btn_name = f"[{btn_name}]"
-                    tk.Button(
-                        switch_row,
-                        text=btn_name,
-                        font=("Segoe UI", 8),
-                        padx=5,
-                        pady=1,
-                        command=lambda _di=di, _tid2=_tid: self._on_template_dd_quick_switch(_tid2, _di),
-                    ).pack(side="left", padx=(0, 4))
+                    slot_color = self._assoc_slot_color_for_dd(dd, di)
+                    btn_kw: dict = {
+                        "text": btn_name,
+                        "font": ("Segoe UI", 8, "bold") if is_active else ("Segoe UI", 8),
+                        "padx": 5,
+                        "pady": 1,
+                        "command": lambda _di=di, _tid2=_tid: self._on_template_dd_quick_switch(
+                            _tid2, _di
+                        ),
+                    }
+                    if is_active:
+                        btn_kw["fg"] = slot_color
+                        btn_kw["activeforeground"] = slot_color
+                    tk.Button(switch_row, **btn_kw).pack(side="left", padx=(0, 4))
                 _active_switch_row[0] = switch_row
 
             def _repack_dropdown_blocks(
