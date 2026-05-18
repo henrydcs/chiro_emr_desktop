@@ -1747,7 +1747,11 @@ class FamilySocialSectionCore(ttk.Frame):
                     first_bullet = True
                     any_bullet = False
                     emitted_plain_pp = False
-                    dd_prefix_raw = self._resolve_vars(str(dd.get("prefix") or "")).strip()
+                    # DD1 uses the template-level prefix only; optional dd prefix is for DD2+.
+                    if meta.get("associated_per_primary") and j == 0:
+                        dd_prefix_raw = ""
+                    else:
+                        dd_prefix_raw = self._resolve_vars(str(dd.get("prefix") or "")).strip()
                     if dd_prefix_raw:
                         dd_prefix_text = _prefix_before_bullet_list(dd_prefix_raw)
                         if dropdown_parts:
@@ -4363,22 +4367,25 @@ class FamilySocialSectionCore(ttk.Frame):
                 wraplength=620,
             ).pack(side="left")
 
-            pref_row_app = ttk.Frame(frame)
-            pref_row_app.pack(fill="x", padx=6, pady=(0, 4))
-            ttk.Label(pref_row_app, text="Prefix (optional, before rows):").pack(side="left")
-            pref_var_app = tk.StringVar(value=str(dd.get("prefix") or ""))
+            if di > 0:
+                pref_row_app = ttk.Frame(frame)
+                pref_row_app.pack(fill="x", padx=6, pady=(0, 4))
+                ttk.Label(pref_row_app, text="Prefix (optional, before rows):").pack(side="left")
+                pref_var_app = tk.StringVar(value=str(dd.get("prefix") or ""))
 
-            def _save_pref_app(_e=None, d=dd, v=pref_var_app) -> None:
-                d["prefix"] = v.get()
-                self._persist_templates()
-                self._render_note_builder()
-                self._apply_builder_to_note()
-                self.on_change_callback()
+                def _save_pref_app(_e=None, d=dd, v=pref_var_app) -> None:
+                    d["prefix"] = v.get()
+                    self._persist_templates()
+                    self._render_note_builder()
+                    self._apply_builder_to_note()
+                    self.on_change_callback()
 
-            pref_entry_app = ttk.Entry(pref_row_app, textvariable=pref_var_app, width=48)
-            pref_entry_app.pack(side="left", padx=6, fill="x", expand=True)
-            pref_entry_app.bind("<FocusOut>", _save_pref_app)
-            pref_entry_app.bind("<Return>", _save_pref_app)
+                pref_entry_app = ttk.Entry(pref_row_app, textvariable=pref_var_app, width=48)
+                pref_entry_app.pack(side="left", padx=6, fill="x", expand=True)
+                pref_entry_app.bind("<FocusOut>", _save_pref_app)
+                pref_entry_app.bind("<Return>", _save_pref_app)
+            else:
+                dd["prefix"] = ""
 
             cap_app = ttk.Frame(frame)
             cap_app.pack(fill="x", padx=6, pady=(4, 2))
