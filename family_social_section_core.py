@@ -765,14 +765,48 @@ class FamilySocialSectionCore(ttk.Frame):
         except (KeyError, ValueError, IndexError):
             return text or ""
 
+    def _active_builder_dd_index(self, tid: int, dd_count: int) -> int:
+        if dd_count <= 0:
+            return 0
+        hl = self._builder_dd_preview_highlight
+        if hl is not None and int(hl[0]) == int(tid):
+            di = int(hl[1])
+            if 0 <= di < dd_count:
+                return di
+        pinned = self._builder_dd_top_by_tid.get(int(tid))
+        if isinstance(pinned, int) and 0 <= pinned < dd_count:
+            return pinned
+        return 0
+
+    def _note_builder_prefix_preview(self, tmpl: dict, tid: int) -> tuple[str, str | None]:
+        """Resolved prefix text and optional DD slot color for the Note & builder preview row."""
+        dds = list(tmpl.get("dropdowns") or [])
+        di = self._active_builder_dd_index(tid, len(dds))
+        dd = dds[di] if 0 <= di < len(dds) else {}
+        if not self._is_note_builder_multiple_choice_dd(dd):
+            pv = self._resolve_vars(tmpl.get("prefix") or "")
+            return f"Prefix (resolved): {pv}", None
+        if bool(dd.get("multi_full_prefix")) or str(dd.get("prefix") or "").strip():
+            raw = str(dd.get("prefix") or "")
+        else:
+            raw = str(tmpl.get("prefix") or "")
+        pv = self._resolve_vars(raw)
+        return pv, self._assoc_slot_color_for_dd(dd, di)
+
     def _refresh_resolved_prefix_labels(self) -> None:
         labels = getattr(self, "_prefix_resolved_labels", None) or []
         for i, tmpl in enumerate(self.templates):
             if i >= len(labels):
                 break
-            pv = self._resolve_vars(tmpl.get("prefix") or "")
+            text, fg = self._note_builder_prefix_preview(tmpl, int(tmpl["id"]))
             try:
-                labels[i].configure(text=f"Prefix (resolved): {pv}")
+                kw: dict = {"text": text}
+                if fg:
+                    kw["fg"] = fg
+                    kw["font"] = ("Segoe UI", 9, "bold")
+                else:
+                    kw["font"] = ("Segoe UI", 9)
+                labels[i].configure(**kw)
             except Exception:
                 pass
 
@@ -797,19 +831,10 @@ class FamilySocialSectionCore(ttk.Frame):
         note_inner = ttk.Frame(parent)
         note_inner.pack(fill="both", expand=True)
 
-        demo_row = ttk.Frame(note_inner)
-        demo_row.pack(fill="x", padx=10, pady=(4, 2))
-        ttk.Label(
-            demo_row,
-            text="Dropdown selections update the note, Live Preview, and PDF automatically. Edit the textbox for one-off wording.",
-            foreground="gray",
-        ).pack(side="left")
-
         self.age_hint_var = tk.StringVar(value="")
-        ttk.Label(demo_row, textvariable=self.age_hint_var, foreground="gray").pack(side="left", padx=(12, 0))
 
         ctl = ttk.Frame(note_inner)
-        ctl.pack(fill="x", padx=10, pady=(0, 4))
+        ctl.pack(fill="x", padx=10, pady=(4, 4))
         ttk.Button(
             ctl,
             text="Revert note to builder (discard manual edits in textbox)",
@@ -835,7 +860,7 @@ class FamilySocialSectionCore(ttk.Frame):
         self._note_editor_stack.grid_rowconfigure(0, weight=1)
         self._note_editor_stack.grid_columnconfigure(0, weight=1)
 
-        builder_outer = ttk.LabelFrame(self._note_editor_builder_layer, text="Sentence builder")
+        builder_outer = ttk.Frame(self._note_editor_builder_layer)
         builder_outer.pack(fill="both", expand=True, pady=(0, 0))
         self._note_builder_outer = builder_outer
 
@@ -1764,14 +1789,6 @@ class FamilySocialSectionCore(ttk.Frame):
                     pss_raw = meta.get("primary_selected_set")
                     if isinstance(pss_raw, set):
                         selected_primary = {int(x) for x in pss_raw if isinstance(x, int)}
-                    else:
-                        # Back-compat fallback for older meta: infer selected primaries
-                        # from display-order list if the selected-set is unavailable.
-                        selected_primary = {
-                            int(x)
-                            for x in (meta.get("primary_order") or [])
-                            if isinstance(x, int)
-                        }
                     if not selected_primary:
                         continue
 
@@ -1804,6 +1821,7 @@ class FamilySocialSectionCore(ttk.Frame):
                     any_bullet = False
                     emitted_plain_pp = False
                     emitted_assoc_detail = False
+                    primary_row_emitted = False
                     # DD1 uses the template-level prefix only; optional dd prefix is for DD2+.
                     if meta.get("associated_per_primary") and j == 0:
                         dd_prefix_raw = ""
@@ -1852,6 +1870,7 @@ class FamilySocialSectionCore(ttk.Frame):
                         if plain_pp_grid and not detail:
                             # Match Plan-of-care PDF summary: omit rows with no value text.
                             continue
+                        primary_row_emitted = True
                         if _bullet_px_by_part_idx is not None:
                             bi = len(dropdown_parts)
                             if use_tab_bullets:
@@ -1922,7 +1941,14 @@ class FamilySocialSectionCore(ttk.Frame):
                         first_assoc_dropdown_emitted = bool(
                             any_bullet and emitted_assoc_detail
                         )
-                    if any_bullet and dd_prefix_raw and emitted_assoc_detail:
+                    # DD2+ option prefix: at least one primary row; DD1 dd-prefix keeps assoc-detail rule.
+                    emit_dd_option_prefix = bool(
+                        any_bullet
+                        and dd_prefix_raw
+                        and primary_row_emitted
+                        and (j > 0 or emitted_assoc_detail)
+                    )
+                    if emit_dd_option_prefix:
                         dd_prefix_text = _prefix_before_bullet_list(dd_prefix_raw)
                         if assoc_part_start > 0 or dropdown_parts:
                             if prev_ended_assoc_plain_pp:
@@ -3502,9 +3528,6 @@ class FamilySocialSectionCore(ttk.Frame):
                 pady=(2, self._TEMPLATE_GRID_ROW_GAP_PX),
             )
 
-            card = ttk.LabelFrame(band, text=f"Template {tmpl['id']}")
-            card.pack(fill="x", padx=5, pady=5)
-
             tid = int(tmpl["id"])
             skip_v = tk.BooleanVar(value=self._visit_skip_by_tid.get(tid, False))
             self._skip_checkbox_vars[tid] = skip_v
@@ -3512,15 +3535,31 @@ class FamilySocialSectionCore(ttk.Frame):
             def _skip_cmd(t: int = tid, v: tk.BooleanVar = skip_v) -> None:
                 self._visit_skip_toggled(t, v)
 
+            card_hdr = ttk.Frame(band)
+            ttk.Label(card_hdr, text=f"Template {tmpl['id']}").pack(side="left")
             ttk.Checkbutton(
-                card,
+                card_hdr,
                 text="Skip this block for this visit (exclude from builder / note)",
                 variable=skip_v,
                 command=_skip_cmd,
-            ).pack(anchor="w", padx=8, pady=(4, 0))
+            ).pack(side="right", padx=(8, 0))
 
-            pv = self._resolve_vars(tmpl.get("prefix") or "")
-            pl = ttk.Label(card, text=f"Prefix (resolved): {pv}", wraplength=prefix_wrap_px)
+            card = ttk.LabelFrame(band, labelwidget=card_hdr)
+            card.pack(fill="x", padx=5, pady=5)
+
+            pv_text, pv_fg = self._note_builder_prefix_preview(tmpl, tid)
+            pl_kw: dict = {
+                "text": pv_text,
+                "wraplength": prefix_wrap_px,
+                "justify": "left",
+                "anchor": "w",
+            }
+            if pv_fg:
+                pl_kw["font"] = ("Segoe UI", 9, "bold")
+                pl_kw["fg"] = pv_fg
+            else:
+                pl_kw["font"] = ("Segoe UI", 9)
+            pl = tk.Label(card, **pl_kw)
             pl.pack(anchor="w", padx=8, pady=(6, 2))
             self._prefix_resolved_labels.append(pl)
 
@@ -3529,7 +3568,7 @@ class FamilySocialSectionCore(ttk.Frame):
             dds = list(tmpl.get("dropdowns") or [])
             dd_host = ttk.Frame(card)
             dd_host.pack(fill="x", padx=8, pady=(2, 4))
-            dd_frames: dict[int, ttk.LabelFrame] = {}
+            dd_frames: dict[int, ttk.Frame] = {}
 
             top_idx = self._builder_dd_top_by_tid.get(tid)
             if not isinstance(top_idx, int) or top_idx < 0 or top_idx >= len(dds):
@@ -3550,13 +3589,17 @@ class FamilySocialSectionCore(ttk.Frame):
                 _tid: int = tid,
                 _dds: list[dict] = dds,
                 _active_switch_row: list[ttk.Frame | None] = active_switch_row,
-                _dd_frames: dict[int, ttk.LabelFrame] = dd_frames,
+                _dd_frames: dict[int, ttk.Frame] = dd_frames,
                 _display_order_fn=_display_order_for_template,
             ) -> None:
                 old_row = _active_switch_row[0]
                 if old_row is not None:
                     try:
-                        old_row.destroy()
+                        if getattr(old_row, "_mc_dd_switch_persistent", False):
+                            for w in old_row.winfo_children():
+                                w.destroy()
+                        else:
+                            old_row.destroy()
                     except Exception:
                         pass
                     _active_switch_row[0] = None
@@ -3569,13 +3612,22 @@ class FamilySocialSectionCore(ttk.Frame):
                 top_fr = _dd_frames.get(top_di)
                 if top_fr is None:
                     return
-                switch_row = ttk.Frame(top_fr)
-                kids = top_fr.winfo_children()
-                if kids:
-                    switch_row.pack(fill="x", padx=6, pady=(2, 2), before=kids[0])
+                top_dd = _dds[top_di]
+                mc_switch_host = (
+                    getattr(top_fr, "_mc_dd_switch_host", None)
+                    if self._is_note_builder_multiple_choice_dd(top_dd)
+                    else None
+                )
+                if mc_switch_host is not None:
+                    switch_row = mc_switch_host
                 else:
-                    switch_row.pack(fill="x", padx=6, pady=(2, 2))
-                ttk.Label(switch_row, text="Quick dropdown buttons:").pack(side="left", padx=(0, 4))
+                    switch_row = ttk.Frame(top_fr)
+                    kids = top_fr.winfo_children()
+                    if kids:
+                        switch_row.pack(fill="x", padx=6, pady=(2, 2), before=kids[0])
+                    else:
+                        switch_row.pack(fill="x", padx=6, pady=(2, 2))
+                    ttk.Label(switch_row, text="Quick dropdown buttons:").pack(side="left", padx=(0, 4))
                 hl = self._builder_dd_preview_highlight
                 for di, dd in enumerate(_dds):
                     btn_name = self._builder_dd_button_name(dd, di)
@@ -3601,7 +3653,7 @@ class FamilySocialSectionCore(ttk.Frame):
             def _repack_dropdown_blocks(
                 _tid: int = tid,
                 _dd_host: ttk.Frame = dd_host,
-                _dd_frames: dict[int, ttk.LabelFrame] = dd_frames,
+                _dd_frames: dict[int, ttk.Frame] = dd_frames,
                 _display_order_fn=_display_order_for_template,
                 _refresh_fn=_refresh_embedded_switch_row,
             ) -> None:
@@ -3618,8 +3670,11 @@ class FamilySocialSectionCore(ttk.Frame):
 
             for di, dd in enumerate(dds):
                 items = list(dd.get("items") or [])
-                dd_name = self._builder_dd_button_name(dd, di)
-                fr = ttk.LabelFrame(dd_host, text=f"Template {tmpl['id']} ({dd_name})")
+                if self._is_note_builder_multiple_choice_dd(dd):
+                    fr = ttk.Frame(dd_host)
+                else:
+                    dd_name = self._builder_dd_button_name(dd, di)
+                    fr = ttk.LabelFrame(dd_host, text=f"Template {tmpl['id']} ({dd_name})")
                 dd_frames[di] = fr
                 if bool(dd.get("associated_per_primary")):
                     var_am, meta_am = self._render_associated_multi_row(fr, dd, di)
@@ -3633,51 +3688,54 @@ class FamilySocialSectionCore(ttk.Frame):
                     continue
                 is_multi = bool(dd.get("multi"))
                 dd.setdefault("multi_bullets", False)
-                fmt_row = ttk.Frame(fr)
-                fmt_row.pack(anchor="w", fill="x", pady=(0, 4))
-                ttk.Label(fmt_row, text="Output format:").pack(side="left", padx=(0, 8))
                 _fmt_var = tk.StringVar(value=_format_output_radio_value(dd))
+                is_mc = self._is_note_builder_multiple_choice_dd(dd)
+                if not is_mc:
+                    fmt_row = ttk.Frame(fr)
+                    fmt_row.pack(anchor="w", fill="x", pady=(0, 4))
+                    ttk.Label(fmt_row, text="Output format:").pack(side="left", padx=(0, 8))
 
-                def _on_output_format(_d=dd, _fv=_fmt_var) -> None:
-                    _apply_output_format_radio(_d, _fv.get())
-                    self._persist_templates()
-                    self._apply_builder_to_note()
-                    self.on_change_callback()
+                    def _on_output_format(_d=dd, _fv=_fmt_var) -> None:
+                        _apply_output_format_radio(_d, _fv.get())
+                        self._persist_templates()
+                        self._apply_builder_to_note()
+                        self.on_change_callback()
 
-                ttk.Radiobutton(
-                    fmt_row,
-                    text="Narrative",
-                    variable=_fmt_var,
-                    value="narrative",
-                    command=_on_output_format,
-                ).pack(side="left", padx=(0, 8))
-                ttk.Radiobutton(
-                    fmt_row,
-                    text="Bullet lines",
-                    variable=_fmt_var,
-                    value="bullets",
-                    command=_on_output_format,
-                ).pack(side="left", padx=(0, 8))
-                ttk.Radiobutton(
-                    fmt_row,
-                    text="Comma",
-                    variable=_fmt_var,
-                    value="comma",
-                    command=_on_output_format,
-                ).pack(side="left", padx=(0, 8))
-                ttk.Radiobutton(
-                    fmt_row,
-                    text="Period",
-                    variable=_fmt_var,
-                    value="period",
-                    command=_on_output_format,
-                ).pack(side="left")
+                    ttk.Radiobutton(
+                        fmt_row,
+                        text="Narrative",
+                        variable=_fmt_var,
+                        value="narrative",
+                        command=_on_output_format,
+                    ).pack(side="left", padx=(0, 8))
+                    ttk.Radiobutton(
+                        fmt_row,
+                        text="Bullet lines",
+                        variable=_fmt_var,
+                        value="bullets",
+                        command=_on_output_format,
+                    ).pack(side="left", padx=(0, 8))
+                    ttk.Radiobutton(
+                        fmt_row,
+                        text="Comma",
+                        variable=_fmt_var,
+                        value="comma",
+                        command=_on_output_format,
+                    ).pack(side="left", padx=(0, 8))
+                    ttk.Radiobutton(
+                        fmt_row,
+                        text="Period",
+                        variable=_fmt_var,
+                        value="period",
+                        command=_on_output_format,
+                    ).pack(side="left")
 
                 title = dd.get("label") or "Option"
-                ttk.Label(
-                    fr,
-                    text=(title + ("" if not is_multi else " — select one or more")) + ":",
-                ).pack(anchor="w")
+                if not (is_multi and self._is_note_builder_multiple_choice_dd(dd)):
+                    ttk.Label(
+                        fr,
+                        text=(title + ("" if not is_multi else " — select one or more")) + ":",
+                    ).pack(anchor="w")
                 if is_multi:
                     var = tk.StringVar(value="")
 
@@ -3800,7 +3858,15 @@ class FamilySocialSectionCore(ttk.Frame):
 
                     ttk.Button(sf, text="+ Add to List", command=_add_to_list_multi).pack(side="left")
 
-                    ttk.Button(fr, text="Clear selection", command=_clear_multi).pack(anchor="w", pady=(2, 0))
+                    clear_row = ttk.Frame(fr)
+                    clear_row.pack(anchor="w", pady=(2, 0))
+                    ttk.Button(clear_row, text="Clear selection", command=_clear_multi).pack(
+                        side="left"
+                    )
+                    mc_dd_switch_host = ttk.Frame(clear_row)
+                    mc_dd_switch_host.pack(side="left", padx=(8, 0))
+                    mc_dd_switch_host._mc_dd_switch_persistent = True  # type: ignore[attr-defined]
+                    fr._mc_dd_switch_host = mc_dd_switch_host  # type: ignore[attr-defined]
                     ttk.Label(
                         fr,
                         text="Tip: Ctrl- or Shift-click to select multiple rows.",
@@ -3887,6 +3953,13 @@ class FamilySocialSectionCore(ttk.Frame):
             self._clear_token_copy_msg_after_id = None
 
         self._clear_token_copy_msg_after_id = self.after(6000, _clear_msg)
+
+    @staticmethod
+    def _is_note_builder_multiple_choice_dd(dd: dict) -> bool:
+        """Multiple choice / Multiple choice Full/Full in Note & builder (not associated types)."""
+        return bool(dd.get("multi")) and not bool(dd.get("associated_multi")) and not bool(
+            dd.get("associated_per_primary")
+        )
 
     @staticmethod
     def _builder_dd_button_name(dd: dict, di: int) -> str:
@@ -4153,6 +4226,7 @@ class FamilySocialSectionCore(ttk.Frame):
             except Exception:
                 pass
         self._refresh_all_dd_quick_switch_rows()
+        self._refresh_resolved_prefix_labels()
         self.on_change_callback()
 
     def _build_prefix_token_bank(self, parent: ttk.Widget) -> None:
@@ -4430,6 +4504,8 @@ class FamilySocialSectionCore(ttk.Frame):
         dd: dict,
         fmt_key: str = "text_format",
         label_text: str = "Output text style:",
+        *,
+        include_output_format: bool = False,
     ) -> None:
         """Render Bold / Italic / Underline checkboxes for a dropdown in the Canvas editor.
         fmt_key selects which dict key holds the format flags (e.g. 'assoc_text_format')."""
@@ -4459,6 +4535,47 @@ class FamilySocialSectionCore(ttk.Frame):
         ttk.Checkbutton(fr, text="Bold",      variable=bold_var, command=_save_fmt).pack(side="left", padx=(0, 8))
         ttk.Checkbutton(fr, text="Italic",    variable=ital_var, command=_save_fmt).pack(side="left", padx=(0, 8))
         ttk.Checkbutton(fr, text="Underline", variable=unde_var, command=_save_fmt).pack(side="left")
+
+        if include_output_format and self._is_note_builder_multiple_choice_dd(dd):
+            dd.setdefault("multi_bullets", False)
+            ttk.Label(fr, text="Output format:").pack(side="left", padx=(16, 8))
+            out_fmt_var = tk.StringVar(value=_format_output_radio_value(dd))
+
+            def _on_output_format(_d=dd, _fv=out_fmt_var) -> None:
+                _apply_output_format_radio(_d, _fv.get())
+                self._persist_templates()
+                self._render_note_builder()
+                self._apply_builder_to_note()
+                self.on_change_callback()
+
+            ttk.Radiobutton(
+                fr,
+                text="Narrative",
+                variable=out_fmt_var,
+                value="narrative",
+                command=_on_output_format,
+            ).pack(side="left", padx=(0, 8))
+            ttk.Radiobutton(
+                fr,
+                text="Bullet lines",
+                variable=out_fmt_var,
+                value="bullets",
+                command=_on_output_format,
+            ).pack(side="left", padx=(0, 8))
+            ttk.Radiobutton(
+                fr,
+                text="Comma",
+                variable=out_fmt_var,
+                value="comma",
+                command=_on_output_format,
+            ).pack(side="left", padx=(0, 8))
+            ttk.Radiobutton(
+                fr,
+                text="Period",
+                variable=out_fmt_var,
+                value="period",
+                command=_on_output_format,
+            ).pack(side="left")
 
     def _build_dd_bullet_style_row(self, parent: ttk.Frame, dd: dict) -> None:
         """Combobox for bullet icon when output uses bullet lines or associated-multi rows."""
@@ -4831,7 +4948,11 @@ class FamilySocialSectionCore(ttk.Frame):
 
         ttk.Button(mode_row, text="Switch single / multiple", command=_flip_mode).pack(side="right")
 
-        self._build_dd_format_row(frame, dd)
+        self._build_dd_format_row(
+            frame,
+            dd,
+            include_output_format=self._is_note_builder_multiple_choice_dd(dd),
+        )
         self._build_dd_bullet_style_row(frame, dd)
         ttk.Button(
             frame, text="Remove dropdown", command=lambda t=tmpl, d=di: self._remove_dropdown(t, d)
