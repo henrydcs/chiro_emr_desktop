@@ -199,8 +199,9 @@ class FamilySocialHistoryPage(ttk.Frame):
 
         outer = ttk.Frame(self)
         outer.pack(fill="both", expand=True)
-        header = ttk.Frame(outer)
-        header.pack(fill="x", padx=10, pady=(8, 4))
+        self._builder_compact_header = ttk.Frame(outer)
+        self._builder_compact_header.pack(fill="x", padx=10, pady=(8, 4))
+        header = self._builder_compact_header
         ttk.Label(header, text=title).pack(side="left", anchor="w")
         self._skip_section_var = tk.BooleanVar(value=False)
         self._skip_all_templates_var = tk.BooleanVar(value=False)
@@ -224,7 +225,16 @@ class FamilySocialHistoryPage(ttk.Frame):
 
         top = ttk.Frame(outer)
         top.pack(fill="x", padx=10, pady=(0, 6))
-        ttk.Label(top, text="Family/Social Blocks:").pack(anchor="w")
+        self._blocks_top = top
+        blocks_hdr = ttk.Frame(top)
+        blocks_hdr.pack(fill="x")
+        ttk.Label(blocks_hdr, text="Family/Social Blocks:").pack(side="left", anchor="w")
+        self._builder_compact_btn = ttk.Button(
+            blocks_hdr,
+            text="Collapse layout ▲",
+            command=self._toggle_builder_compact_layout,
+        )
+        self._builder_compact_btn.pack(side="right", padx=(8, 0))
 
         scroll_wrap = ttk.Frame(top)
         scroll_wrap.pack(fill="x", expand=True)
@@ -379,6 +389,28 @@ class FamilySocialHistoryPage(ttk.Frame):
 
     def set_section_skipped(self, skipped: bool) -> None:
         self._skip_section_var.set(bool(skipped))
+
+    def _toggle_builder_compact_layout(self) -> None:
+        app = self._app
+        if app is not None and hasattr(app, "toggle_builder_compact_mode"):
+            app.toggle_builder_compact_mode()
+            return
+        compact = not getattr(self, "_local_builder_compact", False)
+        self.apply_builder_compact_visibility(compact)
+
+    def apply_builder_compact_visibility(self, compact: bool) -> None:
+        self._local_builder_compact = compact
+        btn = getattr(self, "_builder_compact_btn", None)
+        if btn is not None:
+            btn.configure(text="Expand layout ▼" if compact else "Collapse layout ▲")
+        header = getattr(self, "_builder_compact_header", None)
+        if header is None:
+            return
+        if compact:
+            if header.winfo_ismapped():
+                header.pack_forget()
+        elif not header.winfo_ismapped():
+            header.pack(fill="x", padx=10, pady=(8, 4), before=self._blocks_top)
 
     def _on_family_social_blocks_inner_configure(self, _event=None) -> None:
         self._sync_family_social_blocks_scroll()

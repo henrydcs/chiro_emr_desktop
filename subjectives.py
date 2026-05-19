@@ -608,6 +608,7 @@ class SubjectivesPage(ttk.Frame):
         # touch this area; it has its own Reset (inherited from the inner page).
         canvas_top = ttk.Frame(self._subjectives_canvas_frame)
         canvas_top.pack(fill="x", padx=10, pady=(10, 6))
+        self._builder_compact_chrome = canvas_top
         ttk.Button(
             canvas_top,
             text="Back to Block Subjectives",

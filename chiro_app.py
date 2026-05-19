@@ -341,6 +341,7 @@ class App(tk.Tk):
 
         self.header_visible = tk.BooleanVar(value=True)
         self.demo_visible = tk.BooleanVar(value=True)
+        self.builder_compact_var = tk.BooleanVar(value=False)
         self.demo_summary_var = tk.StringVar(value="")
 
         # Patient vars (shared across all exams)
@@ -2199,6 +2200,84 @@ class App(tk.Tk):
             self.demo_toggle_btn.configure(text="Show Demographics")
 
         self._refresh_demo_summary()
+
+    def toggle_builder_compact_mode(self) -> None:
+        self.builder_compact_var.set(not self.builder_compact_var.get())
+        self._apply_builder_compact_visibility()
+
+    def _family_social_builder_pages(self) -> list:
+        pages = []
+        for attr in (
+            "family_social_page",
+        ):
+            page = getattr(self, attr, None)
+            if page is not None:
+                pages.append(page)
+        subjectives_page = getattr(self, "subjectives_page", None)
+        if subjectives_page is not None and hasattr(subjectives_page, "canvas_page"):
+            pages.append(subjectives_page.canvas_page)
+        hoi_page = getattr(self, "hoi_page", None)
+        if hoi_page is not None and hasattr(hoi_page, "hoi_canvas_page"):
+            pages.append(hoi_page.hoi_canvas_page)
+        objectives_page = getattr(self, "objectives_page", None)
+        if objectives_page is not None and hasattr(objectives_page, "objectives_canvas_page"):
+            pages.append(objectives_page.objectives_canvas_page)
+        return pages
+
+    def _apply_builder_compact_chrome_frames(self, compact: bool) -> None:
+        for parent_attr in ("subjectives_page", "hoi_page", "objectives_page"):
+            parent = getattr(self, parent_attr, None)
+            if parent is None:
+                continue
+            chrome = getattr(parent, "_builder_compact_chrome", None)
+            canvas_page = None
+            if parent_attr == "subjectives_page":
+                canvas_page = getattr(parent, "canvas_page", None)
+            elif parent_attr == "hoi_page":
+                canvas_page = getattr(parent, "hoi_canvas_page", None)
+            elif parent_attr == "objectives_page":
+                canvas_page = getattr(parent, "objectives_canvas_page", None)
+            if chrome is None:
+                continue
+            if compact:
+                if chrome.winfo_ismapped():
+                    chrome.pack_forget()
+            elif not chrome.winfo_ismapped() and canvas_page is not None:
+                chrome.pack(fill="x", padx=10, pady=(10, 6), before=canvas_page)
+
+    def _apply_builder_compact_visibility(self) -> None:
+        compact = self.builder_compact_var.get()
+        padx = 10
+
+        if compact:
+            if self.clinic_frame.winfo_ismapped():
+                self.clinic_frame.pack_forget()
+            if self.header_separator.winfo_ismapped():
+                self.header_separator.pack_forget()
+            if self.exam_accent.winfo_ismapped():
+                self.exam_accent.pack_forget()
+            if self.demo_wrap.winfo_ismapped():
+                self.demo_wrap.pack_forget()
+            if self.exam_nav.winfo_ismapped():
+                self.exam_nav.pack_forget()
+            if self.soap_nav.winfo_ismapped():
+                self.soap_nav.pack_forget()
+        else:
+            # Pack bottom-up so each `before=` anchor is already packed.
+            if not self.soap_nav.winfo_ismapped():
+                self.soap_nav.pack(fill="x", before=self.content)
+            if not self.exam_nav.winfo_ismapped():
+                self.exam_nav.pack(fill="x", padx=padx, pady=(6, 0), before=self.soap_nav)
+            if not self.demo_wrap.winfo_ismapped():
+                self.demo_wrap.pack(fill="x", padx=padx, pady=(padx, 0), before=self.exam_nav)
+            self._apply_header_visibility()
+            self._apply_demographics_visibility()
+
+        self._apply_builder_compact_chrome_frames(compact)
+
+        for page in self._family_social_builder_pages():
+            if hasattr(page, "apply_builder_compact_visibility"):
+                page.apply_builder_compact_visibility(compact)
     
     
     
@@ -3676,10 +3755,10 @@ class App(tk.Tk):
         self.exam_accent.pack(fill="x", pady=(4, 6))       
 
         # --- Patient info (collapsible + 1-line summary) ---
-        demo_wrap = ttk.Frame(left_root)
-        demo_wrap.pack(fill="x", padx=padx, pady=(padx, 0))
+        self.demo_wrap = ttk.Frame(left_root)
+        self.demo_wrap.pack(fill="x", padx=padx, pady=(padx, 0))
 
-        demo_top = ttk.Frame(demo_wrap)
+        demo_top = ttk.Frame(self.demo_wrap)
         demo_top.pack(fill="x")
 
         ttk.Label(demo_top, text="Demographics:", font=("Segoe UI", 10, "bold")).pack(side="left")
@@ -3743,7 +3822,7 @@ class App(tk.Tk):
             _ent.bind("<Down>", self._on_patient_search_down)
         
         # One-line summary row (shown only when collapsed)
-        self.demo_summary_row = ttk.Frame(demo_wrap)
+        self.demo_summary_row = ttk.Frame(self.demo_wrap)
         # (do NOT pack here; visibility controlled by _apply_demographics_visibility)
         ttk.Label(
             self.demo_summary_row,
@@ -3752,7 +3831,7 @@ class App(tk.Tk):
         ).pack(side="left", fill="x", expand=True)
 
         # The full demographics form (your existing label frame)
-        self.info_frame = ttk.LabelFrame(demo_wrap, text="Patient / Case Info (shared across all exams)")
+        self.info_frame = ttk.LabelFrame(self.demo_wrap, text="Patient / Case Info (shared across all exams)")
         self.info_frame.pack(fill="x")  # visibility controlled later
 
         # --- Exam nav ---
@@ -3801,9 +3880,9 @@ class App(tk.Tk):
         self._build_referral_toggle_row(info, row=4, padx=padx)
 
         # --- Section nav (now inside left pane) ---
-        soap_nav = ttk.Frame(left_root)
-        soap_nav.pack(fill="x")
-        ttk.Label(soap_nav, text="Section:").pack(side="left", padx=(0, 8))
+        self.soap_nav = ttk.Frame(left_root)
+        self.soap_nav.pack(fill="x")
+        ttk.Label(self.soap_nav, text="Section:").pack(side="left", padx=(0, 8))
 
         # Build nav list but inject Family/Social History between Subjectives and Objectives
         nav_pages = []
@@ -3821,7 +3900,7 @@ class App(tk.Tk):
 
         self.page_buttons: dict[str, ttk.Button] = {}
         for page in nav_pages:
-            b = ttk.Button(soap_nav, text=page, command=lambda p=page: self.show_page(p))
+            b = ttk.Button(self.soap_nav, text=page, command=lambda p=page: self.show_page(p))
             b.pack(side="left", padx=4)
             self.page_buttons[page] = b
 
@@ -4056,6 +4135,9 @@ class App(tk.Tk):
     def show_page(self, page_name: str, *, scroll_live_preview: bool = True):
         if page_name not in self.pages:
             return
+        if self.builder_compact_var.get():
+            self.builder_compact_var.set(False)
+            self._apply_builder_compact_visibility()
         self.current_page.set(page_name)
         self.pages[page_name].tkraise()
         self._refresh_page_button_styles()

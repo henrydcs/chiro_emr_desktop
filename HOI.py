@@ -1730,6 +1730,7 @@ class HOIPage(ttk.Frame):
 
         canvas_top = ttk.Frame(self._hoi_canvas_frame)
         canvas_top.pack(fill="x", padx=10, pady=(10, 6))
+        self._builder_compact_chrome = canvas_top
         ttk.Button(canvas_top, text="Back to HOI", command=self._go_hoi_main).pack(side="left")
         ttk.Button(
             canvas_top,
