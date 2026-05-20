@@ -783,15 +783,22 @@ class FamilySocialSectionCore(ttk.Frame):
         dds = list(tmpl.get("dropdowns") or [])
         di = self._active_builder_dd_index(tid, len(dds))
         dd = dds[di] if 0 <= di < len(dds) else {}
-        if not self._is_note_builder_multiple_choice_dd(dd):
-            pv = self._resolve_vars(tmpl.get("prefix") or "")
-            return f"Prefix (resolved): {pv}", None
-        if bool(dd.get("multi_full_prefix")) or str(dd.get("prefix") or "").strip():
-            raw = str(dd.get("prefix") or "")
-        else:
-            raw = str(tmpl.get("prefix") or "")
-        pv = self._resolve_vars(raw)
-        return pv, self._assoc_slot_color_for_dd(dd, di)
+        if self._is_note_builder_multiple_choice_dd(dd):
+            if bool(dd.get("multi_full_prefix")) or str(dd.get("prefix") or "").strip():
+                raw = str(dd.get("prefix") or "")
+            else:
+                raw = str(tmpl.get("prefix") or "")
+            pv = self._resolve_vars(raw)
+            return pv, self._assoc_slot_color_for_dd(dd, di)
+        if bool(dd.get("associated_multi")):
+            if di > 0 and str(dd.get("prefix") or "").strip():
+                raw = str(dd.get("prefix") or "")
+            else:
+                raw = str(tmpl.get("prefix") or "")
+            pv = self._resolve_vars(raw)
+            return pv, self._assoc_slot_color_for_dd(dd, di)
+        pv = self._resolve_vars(tmpl.get("prefix") or "")
+        return f"Prefix (resolved): {pv}", None
 
     def _refresh_resolved_prefix_labels(self) -> None:
         labels = getattr(self, "_prefix_resolved_labels", None) or []
@@ -1823,7 +1830,9 @@ class FamilySocialSectionCore(ttk.Frame):
                     emitted_assoc_detail = False
                     primary_row_emitted = False
                     # DD1 uses the template-level prefix only; optional dd prefix is for DD2+.
-                    if meta.get("associated_per_primary") and j == 0:
+                    if j == 0 and (
+                        meta.get("associated_per_primary") or meta.get("associated_multi")
+                    ):
                         dd_prefix_raw = ""
                     else:
                         dd_prefix_raw = self._resolve_vars(str(dd.get("prefix") or "")).strip()
@@ -2915,13 +2924,13 @@ class FamilySocialSectionCore(ttk.Frame):
                 " — select one or more (each choice adds its paired detail list below):"
             )
             hint_txt = "Click to select  •  Ctrl+click to deselect"
-        ttk.Label(top_fr, text=pt).pack(anchor="w")
+        ttk.Label(top_fr, text=pt).pack(anchor="w", pady=(0, 0))
         ttk.Label(
             top_fr,
             text=hint_txt,
             font=("Segoe UI", 8),
             foreground="gray",
-        ).pack(anchor="w")
+        ).pack(anchor="w", pady=(0, 0))
 
         if per_primary:
             lay_fr = ttk.Frame(top_fr)
@@ -3002,7 +3011,7 @@ class FamilySocialSectionCore(ttk.Frame):
         visible_pri: list[int] = list(range(len(primary_items)))
 
         sf = ttk.Frame(top_fr)
-        sf.pack(fill="x", pady=(4, 2))
+        sf.pack(fill="x", pady=(0, 2) if not per_primary else (4, 2))
         ttk.Label(sf, text="Search:").pack(side="left")
         ttk.Entry(sf, textvariable=search_var).pack(side="left", fill="x", expand=True, padx=(4, 4))
 
@@ -3440,6 +3449,11 @@ class FamilySocialSectionCore(ttk.Frame):
         btn_row = ttk.Frame(top_fr)
         btn_row.pack(anchor="w", pady=(2, 0))
         ttk.Button(btn_row, text="Clear primary selections", command=_clear_primary).pack(side="left")
+        if not per_primary:
+            am_dd_switch_host = ttk.Frame(btn_row)
+            am_dd_switch_host.pack(side="left", padx=(8, 0))
+            am_dd_switch_host._mc_dd_switch_persistent = True  # type: ignore[attr-defined]
+            card._am_dd_switch_host = am_dd_switch_host  # type: ignore[attr-defined]
 
         if target_canvas is not None:
             scroll_btn = tk.Button(
@@ -3547,6 +3561,9 @@ class FamilySocialSectionCore(ttk.Frame):
             card = ttk.LabelFrame(band, labelwidget=card_hdr)
             card.pack(fill="x", padx=5, pady=5)
 
+            dds = list(tmpl.get("dropdowns") or [])
+            active_di = self._active_builder_dd_index(tid, len(dds))
+            active_dd = dds[active_di] if 0 <= active_di < len(dds) else {}
             pv_text, pv_fg = self._note_builder_prefix_preview(tmpl, tid)
             pl_kw: dict = {
                 "text": pv_text,
@@ -3560,12 +3577,15 @@ class FamilySocialSectionCore(ttk.Frame):
             else:
                 pl_kw["font"] = ("Segoe UI", 9)
             pl = tk.Label(card, **pl_kw)
-            pl.pack(anchor="w", padx=8, pady=(6, 2))
+            pl.pack(
+                anchor="w",
+                padx=8,
+                pady=(2, 0) if bool(active_dd.get("associated_multi")) else (6, 2),
+            )
             self._prefix_resolved_labels.append(pl)
 
             row_vars: list[tk.StringVar] = []
             meta_row: list[dict] = []
-            dds = list(tmpl.get("dropdowns") or [])
             dd_host = ttk.Frame(card)
             dd_host.pack(fill="x", padx=8, pady=(2, 4))
             dd_frames: dict[int, ttk.Frame] = {}
@@ -3613,11 +3633,12 @@ class FamilySocialSectionCore(ttk.Frame):
                 if top_fr is None:
                     return
                 top_dd = _dds[top_di]
-                mc_switch_host = (
-                    getattr(top_fr, "_mc_dd_switch_host", None)
-                    if self._is_note_builder_multiple_choice_dd(top_dd)
-                    else None
-                )
+                if self._is_note_builder_multiple_choice_dd(top_dd):
+                    mc_switch_host = getattr(top_fr, "_mc_dd_switch_host", None)
+                elif bool(top_dd.get("associated_multi")):
+                    mc_switch_host = getattr(top_fr, "_am_dd_switch_host", None)
+                else:
+                    mc_switch_host = None
                 if mc_switch_host is not None:
                     switch_row = mc_switch_host
                 else:
@@ -3670,7 +3691,7 @@ class FamilySocialSectionCore(ttk.Frame):
 
             for di, dd in enumerate(dds):
                 items = list(dd.get("items") or [])
-                if self._is_note_builder_multiple_choice_dd(dd):
+                if self._is_note_builder_multiple_choice_dd(dd) or bool(dd.get("associated_multi")):
                     fr = ttk.Frame(dd_host)
                 else:
                     dd_name = self._builder_dd_button_name(dd, di)
@@ -4812,22 +4833,25 @@ class FamilySocialSectionCore(ttk.Frame):
 
             ttk.Button(type_row, text="Convert to plain multiple…", command=_convert_am_to_plain).pack(side="right")
 
-            pref_row = ttk.Frame(frame)
-            pref_row.pack(fill="x", padx=6, pady=(0, 4))
-            ttk.Label(pref_row, text="Prefix (for this associated dropdown):").pack(side="left")
-            pref_var = tk.StringVar(value=str(dd.get("prefix") or ""))
+            if di > 0:
+                pref_row = ttk.Frame(frame)
+                pref_row.pack(fill="x", padx=6, pady=(0, 4))
+                ttk.Label(pref_row, text="Prefix (optional, before rows):").pack(side="left")
+                pref_var = tk.StringVar(value=str(dd.get("prefix") or ""))
 
-            def _save_pref(_e=None, d=dd, v=pref_var) -> None:
-                d["prefix"] = v.get()
-                self._persist_templates()
-                self._render_note_builder()
-                self._apply_builder_to_note()
-                self.on_change_callback()
+                def _save_pref(_e=None, d=dd, v=pref_var) -> None:
+                    d["prefix"] = v.get()
+                    self._persist_templates()
+                    self._render_note_builder()
+                    self._apply_builder_to_note()
+                    self.on_change_callback()
 
-            pref_entry = ttk.Entry(pref_row, textvariable=pref_var, width=48)
-            pref_entry.pack(side="left", padx=6, fill="x", expand=True)
-            pref_entry.bind("<FocusOut>", _save_pref)
-            pref_entry.bind("<Return>", _save_pref)
+                pref_entry = ttk.Entry(pref_row, textvariable=pref_var, width=48)
+                pref_entry.pack(side="left", padx=6, fill="x", expand=True)
+                pref_entry.bind("<FocusOut>", _save_pref)
+                pref_entry.bind("<Return>", _save_pref)
+            else:
+                dd["prefix"] = ""
 
             al_pair = ttk.Frame(frame)
             al_pair.pack(fill="x", padx=6, pady=(4, 2))
@@ -5261,7 +5285,7 @@ class FamilySocialSectionCore(ttk.Frame):
                 "items": ["MRI", "X-Ray", "CT scan"],
                 "builder_button_name": f"DD{len(tmpl.get('dropdowns') or []) + 1}",
                 "associated_multi": True,
-                "prefix": str(tmpl.get("prefix") or ""),
+                "prefix": "",
                 "associate_label": "Body region / detail",
                 "associate_items": [
                     "Cervical spine",
