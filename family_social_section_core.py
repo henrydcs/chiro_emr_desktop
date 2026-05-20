@@ -2911,90 +2911,6 @@ class FamilySocialSectionCore(ttk.Frame):
         top_fr = ttk.Frame(card)
         top_fr.pack(fill="x")
 
-        if per_primary:
-            pt = (dd_ref.get("label") or "Option") + (
-                " — select one or more; each primary has its own secondary list:"
-            )
-            hint_txt = (
-                "Click to select  •  Ctrl+click to deselect  •  "
-                "each primary opens its own paired options column."
-            )
-            ttk.Label(top_fr, text=pt).pack(anchor="w", pady=(0, 0))
-            ttk.Label(
-                top_fr,
-                text=hint_txt,
-                font=("Segoe UI", 8),
-                foreground="gray",
-            ).pack(anchor="w", pady=(0, 0))
-
-        if per_primary:
-            lay_fr = ttk.Frame(top_fr)
-            lay_fr.pack(anchor="w", pady=(4, 2))
-            ttk.Label(lay_fr, text="Printed rows:").pack(side="left", padx=(0, 8))
-            lay_var = tk.StringVar(
-                value="bullets" if dd_ref.get("assoc_primary_use_bullets", True) else "plain"
-            )
-
-            def _save_assoc_layout() -> None:
-                dd_ref["assoc_primary_use_bullets"] = lay_var.get() == "bullets"
-                self._persist_templates()
-                self._render_note_builder()
-                self._apply_builder_to_note()
-                self.on_change_callback()
-
-            ttk.Radiobutton(
-                lay_fr,
-                text="Bullet lines",
-                variable=lay_var,
-                value="bullets",
-                command=_save_assoc_layout,
-            ).pack(side="left", padx=(0, 8))
-            ttk.Radiobutton(
-                lay_fr,
-                text="No bullet lines",
-                variable=lay_var,
-                value="plain",
-                command=_save_assoc_layout,
-            ).pack(side="left")
-
-            col_fr = ttk.Frame(top_fr)
-            col_var = tk.StringVar(
-                value="columns"
-                if dd_ref.get("assoc_primary_plain_columns", False)
-                else "inline"
-            )
-
-            def _save_assoc_col_layout() -> None:
-                dd_ref["assoc_primary_plain_columns"] = col_var.get() == "columns"
-                self._persist_templates()
-                self._render_note_builder()
-                self._apply_builder_to_note()
-                self.on_change_callback()
-
-            def _toggle_col_layout_opts(*_a: object) -> None:
-                if lay_var.get() == "plain":
-                    col_fr.pack(anchor="w", pady=(2, 0))
-                else:
-                    col_fr.pack_forget()
-
-            ttk.Label(col_fr, text="Detail alignment:").pack(side="left", padx=(0, 8))
-            ttk.Radiobutton(
-                col_fr,
-                text="After label",
-                variable=col_var,
-                value="inline",
-                command=_save_assoc_col_layout,
-            ).pack(side="left", padx=(0, 8))
-            ttk.Radiobutton(
-                col_fr,
-                text="Aligned column",
-                variable=col_var,
-                value="columns",
-                command=_save_assoc_col_layout,
-            ).pack(side="left")
-            lay_var.trace_add("write", lambda *_: _toggle_col_layout_opts())
-            _toggle_col_layout_opts()
-
         # Resolve the enclosing scroll canvas now so we don't walk the widget
         # tree on every hover tick. Used below by the "Scroll to top" hint
         # button (created next to "Clear primary selections" further down).
@@ -3006,7 +2922,7 @@ class FamilySocialSectionCore(ttk.Frame):
         visible_pri: list[int] = list(range(len(primary_items)))
 
         sf = ttk.Frame(top_fr)
-        sf.pack(fill="x", pady=(0, 2) if not per_primary else (4, 2))
+        sf.pack(fill="x", pady=(0, 2))
         ttk.Label(sf, text="Search:").pack(side="left")
         ttk.Entry(sf, textvariable=search_var).pack(side="left", fill="x", expand=True, padx=(4, 4))
 
@@ -3686,7 +3602,11 @@ class FamilySocialSectionCore(ttk.Frame):
 
             for di, dd in enumerate(dds):
                 items = list(dd.get("items") or [])
-                if self._is_note_builder_multiple_choice_dd(dd) or bool(dd.get("associated_multi")):
+                if (
+                    self._is_note_builder_multiple_choice_dd(dd)
+                    or bool(dd.get("associated_multi"))
+                    or bool(dd.get("associated_per_primary"))
+                ):
                     fr = ttk.Frame(dd_host)
                 else:
                     dd_name = self._builder_dd_button_name(dd, di)
@@ -4522,7 +4442,8 @@ class FamilySocialSectionCore(ttk.Frame):
         label_text: str = "Output text style:",
         *,
         include_output_format: bool = False,
-    ) -> None:
+        include_assoc_printed_rows: bool = False,
+    ) -> tk.StringVar | None:
         """Render Bold / Italic / Underline checkboxes for a dropdown in the Canvas editor.
         fmt_key selects which dict key holds the format flags (e.g. 'assoc_text_format')."""
         fmt = dd.setdefault(fmt_key, {})
@@ -4592,6 +4513,36 @@ class FamilySocialSectionCore(ttk.Frame):
                 value="period",
                 command=_on_output_format,
             ).pack(side="left")
+
+        printed_rows_var: tk.StringVar | None = None
+        if include_assoc_printed_rows and bool(dd.get("associated_per_primary")):
+            ttk.Label(fr, text="Printed rows:").pack(side="left", padx=(16, 8))
+            printed_rows_var = tk.StringVar(
+                value="bullets" if dd.get("assoc_primary_use_bullets", True) else "plain"
+            )
+
+            def _save_assoc_printed_rows() -> None:
+                dd["assoc_primary_use_bullets"] = printed_rows_var.get() == "bullets"
+                self._persist_templates()
+                self._render_note_builder()
+                self._apply_builder_to_note()
+                self.on_change_callback()
+
+            ttk.Radiobutton(
+                fr,
+                text="Bullet lines",
+                variable=printed_rows_var,
+                value="bullets",
+                command=_save_assoc_printed_rows,
+            ).pack(side="left", padx=(0, 8))
+            ttk.Radiobutton(
+                fr,
+                text="No bullet lines",
+                variable=printed_rows_var,
+                value="plain",
+                command=_save_assoc_printed_rows,
+            ).pack(side="left")
+        return printed_rows_var
 
     def _build_dd_bullet_style_row(self, parent: ttk.Frame, dd: dict) -> None:
         """Combobox for bullet icon when output uses bullet lines or associated-multi rows."""
@@ -4716,30 +4667,6 @@ class FamilySocialSectionCore(ttk.Frame):
             cap_entry_app.bind("<FocusOut>", _save_cap_app)
             cap_entry_app.bind("<Return>", _save_cap_app)
 
-            lay_app = ttk.Frame(frame)
-            lay_app.pack(fill="x", padx=6, pady=(2, 4))
-            ttk.Label(lay_app, text="Printed rows:").pack(side="left", padx=(0, 8))
-            lay_sv_app = tk.StringVar(value="bullets" if dd.get("assoc_primary_use_bullets", True) else "plain")
-
-            def _save_layout_app(*_a) -> None:
-                dd["assoc_primary_use_bullets"] = lay_sv_app.get() == "bullets"
-                self._save_and_reload()
-
-            ttk.Radiobutton(
-                lay_app,
-                text="Bullet lines",
-                variable=lay_sv_app,
-                value="bullets",
-                command=_save_layout_app,
-            ).pack(side="left", padx=(0, 8))
-            ttk.Radiobutton(
-                lay_app,
-                text="No bullet lines",
-                variable=lay_sv_app,
-                value="plain",
-                command=_save_layout_app,
-            ).pack(side="left")
-
             col_app = ttk.Frame(frame)
             col_sv_app = tk.StringVar(
                 value="columns" if dd.get("assoc_primary_plain_columns", False) else "inline"
@@ -4770,16 +4697,17 @@ class FamilySocialSectionCore(ttk.Frame):
                 value="columns",
                 command=_save_col_layout_app,
             ).pack(side="left")
-            lay_sv_app.trace_add("write", lambda *_: _toggle_col_layout_app())
-            _toggle_col_layout_app()
-
             self._build_assoc_slot_color_editor(frame, dd)
             self._canvas_item_list_editor_shell(frame, "Primary choices", dd["items"])
-            self._build_dd_format_row(
+            lay_sv_app = self._build_dd_format_row(
                 frame, dd,
                 fmt_key="text_format",
                 label_text="Primary items text style:",
+                include_assoc_printed_rows=True,
             )
+            if lay_sv_app is not None:
+                lay_sv_app.trace_add("write", lambda *_: _toggle_col_layout_app())
+            _toggle_col_layout_app()
             prim_items_ref = dd["items"]
             ppa_edit = dd.setdefault("per_primary_associates", [])
             for ix_pp, lbl_pp in enumerate(list(prim_items_ref)):
