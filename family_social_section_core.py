@@ -524,10 +524,14 @@ class FamilySocialSectionCore(ttk.Frame):
         persist_all_callback,
         token_feedback_var: tk.StringVar | None = None,
         clear_assoc_on_primary_clear: bool = False,
+        section_id: str = "",
+        set_preview_highlight_callback=None,
     ):
         super().__init__(parent)
         self.on_change_callback = on_change_callback
         self._app = app
+        self._section_id = str(section_id or "")
+        self._set_preview_highlight_callback = set_preview_highlight_callback
         self.section = section
         self.templates = section.setdefault("templates", [])
         # Global color map for DD slot borders (DD1/DD2/...) across this whole section.
@@ -4154,7 +4158,10 @@ class FamilySocialSectionCore(ttk.Frame):
     def _on_template_dd_quick_switch(self, tid: int, di: int) -> None:
         """Promote a dropdown to top position in Note/Builder for one template only."""
         self._builder_dd_top_by_tid[int(tid)] = int(di)
-        self._builder_dd_preview_highlight = (int(tid), int(di))
+        if callable(self._set_preview_highlight_callback) and self._section_id:
+            self._set_preview_highlight_callback(self._section_id, int(tid), int(di))
+        else:
+            self._builder_dd_preview_highlight = (int(tid), int(di))
         repack_cb = self._builder_dd_repack_by_tid.get(int(tid))
         if callable(repack_cb):
             try:

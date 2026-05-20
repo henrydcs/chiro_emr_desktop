@@ -362,6 +362,25 @@ class FamilySocialHistoryPage(ttk.Frame):
             except Exception:
                 pass
 
+    def _set_live_preview_dd_highlight(self, section_id: str, tid: int, di: int) -> None:
+        """One active DD highlight across all sub-sections for Live Preview tinting."""
+        for sid, core in self._cores_by_id.items():
+            if sid == section_id:
+                core._builder_dd_preview_highlight = (int(tid), int(di))
+            else:
+                core._builder_dd_preview_highlight = None
+            try:
+                core._refresh_resolved_prefix_labels()
+                core._refresh_all_dd_quick_switch_rows()
+            except Exception:
+                pass
+        app = self._app
+        if app is not None and hasattr(app, "request_live_preview_refresh"):
+            try:
+                app.request_live_preview_refresh()
+            except Exception:
+                pass
+
     def _on_skip_section_toggled(self) -> None:
         app = self._app
         if app is not None and hasattr(app, "request_live_preview_refresh"):
@@ -455,6 +474,8 @@ class FamilySocialHistoryPage(ttk.Frame):
             persist_all_callback=self._persist_templates_to_disk,
             token_feedback_var=self._token_copy_feedback_var,
             clear_assoc_on_primary_clear=self._clear_assoc_on_primary_clear,
+            section_id=sid,
+            set_preview_highlight_callback=self._set_live_preview_dd_highlight,
         )
         core.pack(fill="both", expand=True)
         self._cores_by_id[sid] = core
