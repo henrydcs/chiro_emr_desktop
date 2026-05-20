@@ -790,7 +790,7 @@ class FamilySocialSectionCore(ttk.Frame):
                 raw = str(tmpl.get("prefix") or "")
             pv = self._resolve_vars(raw)
             return pv, self._assoc_slot_color_for_dd(dd, di)
-        if bool(dd.get("associated_multi")):
+        if bool(dd.get("associated_multi")) or bool(dd.get("associated_per_primary")):
             if di > 0 and str(dd.get("prefix") or "").strip():
                 raw = str(dd.get("prefix") or "")
             else:
@@ -2919,18 +2919,13 @@ class FamilySocialSectionCore(ttk.Frame):
                 "Click to select  •  Ctrl+click to deselect  •  "
                 "each primary opens its own paired options column."
             )
-        else:
-            pt = (dd_ref.get("label") or "Option") + (
-                " — select one or more (each choice adds its paired detail list below):"
-            )
-            hint_txt = "Click to select  •  Ctrl+click to deselect"
-        ttk.Label(top_fr, text=pt).pack(anchor="w", pady=(0, 0))
-        ttk.Label(
-            top_fr,
-            text=hint_txt,
-            font=("Segoe UI", 8),
-            foreground="gray",
-        ).pack(anchor="w", pady=(0, 0))
+            ttk.Label(top_fr, text=pt).pack(anchor="w", pady=(0, 0))
+            ttk.Label(
+                top_fr,
+                text=hint_txt,
+                font=("Segoe UI", 8),
+                foreground="gray",
+            ).pack(anchor="w", pady=(0, 0))
 
         if per_primary:
             lay_fr = ttk.Frame(top_fr)
