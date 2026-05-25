@@ -407,15 +407,19 @@ class LoginScreen(tk.Frame):
         form = tk.Frame(inner, bg=COLOR_CARD)
         form.pack()
 
+        from env_config import get_env as _get_env
+        _dev_user = _get_env("DEV_USERNAME", "") if self._mode == "login" else ""
+        _dev_pass = _get_env("DEV_PASSWORD", "") if self._mode == "login" else ""
+
         tk.Label(form, text="Username", bg=COLOR_CARD, fg=COLOR_TEXT,
                  font=FONT_BASE).grid(row=0, column=0, sticky="w", pady=(0, 4))
-        self.username_var = tk.StringVar()
+        self.username_var = tk.StringVar(value=_dev_user)
         u_entry = ttk.Entry(form, textvariable=self.username_var, width=32)
         u_entry.grid(row=1, column=0, sticky="ew", pady=(0, 14))
 
         tk.Label(form, text="Password", bg=COLOR_CARD, fg=COLOR_TEXT,
                  font=FONT_BASE).grid(row=2, column=0, sticky="w", pady=(0, 4))
-        self.password_var = tk.StringVar()
+        self.password_var = tk.StringVar(value=_dev_pass)
         p_entry = ttk.Entry(form, textvariable=self.password_var, width=32, show="•")
         p_entry.grid(row=3, column=0, sticky="ew", pady=(0, 14))
 
