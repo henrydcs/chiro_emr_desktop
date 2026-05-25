@@ -6438,6 +6438,12 @@ class App(tk.Tk):
         # write. Preserves gender/email/phone/address managed by Patients.
         self._upsert_patient_profile_from_demographics()
 
+        try:
+            from billing_storage import sync_billing_shadow_for_exam_save
+
+            sync_billing_shadow_for_exam_save(path)
+        except Exception:
+            pass
 
     def save_case_now(self):
         """

@@ -36,6 +36,7 @@ NAV_ITEMS: list[tuple[str, str]] = [
     ("dashboard", "Dashboard"),
     ("schedule", "Schedule"),
     ("documents", "Documents"),
+    ("billing", "Billing"),
     ("patients", "Patients"),
     ("providers", "Providers"),
     ("appt_types", "Appt Types"),
@@ -528,8 +529,8 @@ class ShellLayout(tk.Frame):
         self._pages: dict[str, tk.Frame] = {}
         self._active_page_id = "dashboard"
 
-        # Documents page is the only "rich" page in this iteration.
         self.documents_page: DocumentsPage | None = None
+        self.billing_page: "BillingPage | None" = None
 
         self._build()
         self.show_page("dashboard")
@@ -583,6 +584,11 @@ class ShellLayout(tk.Frame):
             elif nav_id == "documents":
                 page = DocumentsPage(self.page_area, self)
                 self.documents_page = page
+            elif nav_id == "billing":
+                from billing_page import BillingPage
+
+                page = BillingPage(self.page_area, self)
+                self.billing_page = page
             elif nav_id == "patients":
                 page = PatientsPage(self.page_area, self)
             else:
@@ -628,6 +634,11 @@ class ShellLayout(tk.Frame):
                 lbl.configure(bg=COLOR_BG_SIDEBAR, fg=COLOR_SIDEBAR_TEXT,
                               font=FONT_BASE)
         self._active_page_id = nav_id
+        if nav_id == "billing" and self.billing_page is not None:
+            try:
+                self.billing_page._sync_patient_from_shell()
+            except Exception:
+                pass
 
 
 # ============================================================
@@ -742,8 +753,22 @@ class DocumentsPage(tk.Frame):
         header = tk.Frame(outer, bg=COLOR_BG_APP)
         header.pack(fill="x", pady=(0, 10))
 
-        tk.Label(header, text="SELECTED PATIENT", bg=COLOR_BG_APP,
-                 fg=COLOR_MUTED, font=("Segoe UI", 9, "bold")).pack(anchor="w")
+        hdr_top = tk.Frame(header, bg=COLOR_BG_APP)
+        hdr_top.pack(fill="x")
+        tk.Label(hdr_top, text="SELECTED PATIENT", bg=COLOR_BG_APP,
+                 fg=COLOR_MUTED, font=("Segoe UI", 9, "bold")).pack(side="left", anchor="w")
+        tk.Button(
+            hdr_top,
+            text="Billing preview →",
+            command=self._open_billing_for_patient,
+            bg=COLOR_BG_APP,
+            fg=COLOR_ACCENT,
+            relief="flat",
+            bd=0,
+            font=FONT_BASE_BOLD,
+            cursor="hand2",
+        ).pack(side="right")
+
         self.patient_name_var = tk.StringVar(value="No patient selected")
         tk.Label(header, textvariable=self.patient_name_var,
                  bg=COLOR_BG_APP, fg=COLOR_TEXT,
@@ -1262,6 +1287,18 @@ class DocumentsPage(tk.Frame):
         write_shell_state({"active_patient_id": None,
                            "active_patient_folder": None,
                            "active_patient_label": None})
+
+    def _open_billing_for_patient(self) -> None:
+        if not self.active_patient:
+            messagebox.showinfo(
+                "Billing",
+                "Select a patient first (search on the left), then open Billing preview.",
+            )
+            return
+        bp = getattr(self.shell, "billing_page", None)
+        if bp is not None:
+            bp.open_patient_from_documents(self.active_patient)
+        self.shell.show_page("billing")
 
     def reload_active_patient_from_shell_state(self) -> None:
         """After SOAP exits, re-read shell state in case the patient was switched."""

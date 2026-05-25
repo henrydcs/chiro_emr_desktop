@@ -4,6 +4,14 @@ from __future__ import annotations
 import tkinter as tk
 from tkinter import ttk, messagebox
 from scrollframe import ScrollFrame
+from em_long_description_dialog import EmLongDescriptionDialog
+from service_catalog import (
+    default_em_long_for_line,
+    ensure_charge_catalog,
+    get_display_lines,
+    save_em_long_description,
+    synced_em_long_for_line,
+)
 
 AUTO_PLAN_TAG = "[AUTO:PLAN]"
 
@@ -218,6 +226,7 @@ class PlanPage(ttk.Frame):
             self.custom_notes_var.set("")
             
             self.current_em_code.set("")
+            self.em_long_description_var.set("")
             self.exam_notes_var.set("")
 
             # --- Uncheck all multi-selects ---
@@ -345,7 +354,8 @@ class PlanPage(ttk.Frame):
         self.current_cmt_notes = tk.StringVar()
 
         self.current_em_code = tk.StringVar(value="")
-        self.exam_notes_var  = tk.StringVar(value="")
+        self.em_long_description_var = tk.StringVar(value="")
+        self.exam_notes_var = tk.StringVar(value="")
         
         # E/M (Exam) code + exam notes (no PDF yet)
         # self.current_em_code = tk.StringVar(value="")
@@ -809,9 +819,12 @@ class PlanPage(ttk.Frame):
         if not modality_code:
             self.open_services_main_popup()
             return
+        ensure_charge_catalog()
+        if not getattr(self, "_therapy_options", None):
+            self._therapy_options = list(get_display_lines("therapy"))
         therapy_name = ""
         list_idx = 0
-        for i, opt in enumerate(getattr(self, "_therapy_options", [])):
+        for i, opt in enumerate(self._therapy_options):
             if opt.startswith(modality_code):
                 therapy_name = opt
                 list_idx = i
@@ -1164,15 +1177,23 @@ class PlanPage(ttk.Frame):
             
         # 1.5) Exam CPT Summary (E/M)
         em = (self.current_em_code.get() or "").strip()
+        em_long = synced_em_long_for_line(em, self.em_long_description_var.get())
         notes = (self.exam_notes_var.get() or "").strip()
 
-        if em or notes:
+        if em or em_long or notes:
             code_num = em.split(":")[0].strip() if em and ":" in em else (em.strip() if em else "")
             lines = []
             if code_num:
                 lines.append(f"• {code_num}: Exam Code")
             else:
                 lines.append("• Exam Notes")  # if notes exist but no code selected
+
+            if em_long:
+                lines.append(em_long)
+            elif em and ":" in em:
+                short = em.split(":", 1)[1].strip()
+                if short:
+                    lines.append(short)
 
             if notes:
                 lines.append(notes)
@@ -1219,11 +1240,40 @@ class PlanPage(ttk.Frame):
     # -------------------------
     # MAIN POPUP
     # -------------------------
+    def _service_values_for_category(self, category: str, current: str = "") -> list[str]:
+        vals = list(get_display_lines(category))
+        cur = (current or "").strip()
+        if cur and cur not in vals:
+            vals.insert(0, cur)
+        return vals
+
+    def _reload_services_popup_lists(
+        self,
+        *,
+        cmt_combo,
+        em_combo,
+        therapy_listbox,
+    ) -> None:
+        ensure_charge_catalog()
+        cmt_combo["values"] = self._service_values_for_category("cmt", self.current_cmt_code.get())
+        em_combo["values"] = self._service_values_for_category("em", self.current_em_code.get())
+        selected_keys = set((self.therapy_data or {}).keys())
+        self._therapy_options = list(get_display_lines("therapy"))
+        for k in selected_keys:
+            if k and k not in self._therapy_options:
+                self._therapy_options.append(k)
+        therapy_listbox.delete(0, "end")
+        for i, item in enumerate(self._therapy_options):
+            therapy_listbox.insert("end", item)
+            if item in selected_keys:
+                therapy_listbox.selection_set(i)
+
     def open_services_main_popup(self):
         root = self.winfo_toplevel()
+        ensure_charge_catalog()
         popup = tk.Toplevel(root)
         popup.title("Services Provided Today")
-        popup.geometry("500x600")
+        popup.geometry("520x620")
         popup.grab_set()
 
         frame = ttk.Frame(popup, padding=20)
@@ -1231,15 +1281,13 @@ class PlanPage(ttk.Frame):
 
         ttk.Label(frame, text="Chiropractic CMT (Pick One):", font=("Segoe UI", 10, "bold")).pack(anchor="w", pady=(0, 5))
 
-        cmt_options = [
-            "98940: Spinal, 1-2 regions",
-            "98941: Spinal, 3-4 regions",
-            "98942: Spinal, 5 regions",
-            "98943: Extraspinal",
-            "0000: No CMT Today",
-        ]
-
-        cmt_combo = ttk.Combobox(frame, textvariable=self.current_cmt_code, values=cmt_options, state="readonly", width=50)
+        cmt_combo = ttk.Combobox(
+            frame,
+            textvariable=self.current_cmt_code,
+            values=self._service_values_for_category("cmt", self.current_cmt_code.get()),
+            state="readonly",
+            width=50,
+        )
         self._disable_mousewheel_on_cb(cmt_combo)
         cmt_combo.pack(pady=(0, 20))
         cmt_combo.bind("<<ComboboxSelected>>", lambda e: self.handle_cmt_interaction(popup))
@@ -1279,35 +1327,98 @@ class PlanPage(ttk.Frame):
             anchor="w", pady=(0, 5)
         )
                 
-        em_options = [
-            "99202: Office or other outpatient visit for the evaluation and management of a new patient, which requires a medically appropriate history and/or examination and straightforward medical decision making.",      
-            "99202-25: A significant, separately identifiable evaluation and management service was performed alongside today's CMT to conduct a formal re-evaluation of the patient’s progress, encompassing a medically appropriate history, physical examination, and low-level medical decision-making to update the treatment plan.",
-            "99203: Office or other outpatient visit for the evaluation and management (E/M) of a new patient, which requires a medically appropriate history and/or examination and low level of medical decision making (MDM).",
-            "99203-25: In addition to the CMT and/or physiotherpay performed today, a significant and separately identifiable E/M service was provided for this new patient, requiring a medically appropriate history, physical examination, and a moderate level of medical decision-making to establish the clinical baseline and treatment plan.",
-            "99212: Office or other outpatient visit for the evaluation and management of a new patient, which requires a medically appropriate history and/or examination and straightforward medical decision making.", 
-            "99212-25: A significant, separately identifiable evaluation and management service was performed alongside today's CMT to conduct a formal re-evaluation of the patient’s progress, encompassing a medically appropriate history, physical examination, and low-level medical decision-making to update the treatment plan.",
-            "99213: Office or other outpatient visit for the evaluation and management (E/M) of a new patient, which requires a medically appropriate history and/or examination and low level of medical decision making (MDM).",
-            "99213-25: A significant, separately identifiable evaluation and management service was performed alongside the CMT and/or physiotherapy to facilitate a re-evaluation of the patient's condition, including a medically appropriate history and examination with low to moderate medical decision-making to assess clinical improvement.",
-            "99214: Office/outpatient visit (moderate complexity)",
-            "99214-25: Office/outpatient visit (moderate complexity)",
-        ]
-
         em_combo = ttk.Combobox(
             frame,
             textvariable=self.current_em_code,
-            values=em_options,
+            values=self._service_values_for_category("em", self.current_em_code.get()),
             state="readonly",
-            width=50
+            width=50,
         )
         self._disable_mousewheel_on_cb(em_combo)
-        em_combo.pack(pady=(0, 12))
+        em_combo.pack(pady=(0, 6))
 
-        # ---- NEW: Exam Notes (starts 1 line, expands) ----
+        def _sync_visit_em_long_from_catalog() -> None:
+            line = (self.current_em_code.get() or "").strip()
+            if line:
+                self.em_long_description_var.set(synced_em_long_for_line(line, ""))
+
+        _sync_visit_em_long_from_catalog()
+
+        em_long_row = ttk.Frame(frame)
+
+        def _em_long_status() -> str:
+            line = (self.current_em_code.get() or "").strip()
+            if not line:
+                return ""
+            if synced_em_long_for_line(line, self.em_long_description_var.get()):
+                return "Long description synced with Fee Schedule"
+            return "Click EM Long Desc. to add chart/PDF text"
+
+        em_long_status = ttk.Label(em_long_row, text="", font=("Segoe UI", 8), foreground="#555555")
+
+        def _refresh_em_long_status() -> None:
+            em_long_status.config(text=_em_long_status())
+
+        def _open_em_long_popup() -> None:
+            if not (self.current_em_code.get() or "").strip():
+                from tkinter import messagebox
+                messagebox.showinfo(
+                    "Select E/M code",
+                    "Choose a CPT Exam Code first, then edit the long description.",
+                    parent=popup,
+                )
+                return
+            line = (self.current_em_code.get() or "").strip()
+            initial = synced_em_long_for_line(line, self.em_long_description_var.get())
+
+            def _on_save(text: str) -> None:
+                try:
+                    saved = save_em_long_description(text, display_line=line)
+                except ValueError as e:
+                    from tkinter import messagebox
+                    messagebox.showerror("Cannot save", str(e), parent=popup)
+                    return
+                self.em_long_description_var.set(saved)
+                _refresh_em_long_status()
+                self.update_services_summary_labels()
+
+            EmLongDescriptionDialog(popup, initial_text=initial, on_save=_on_save)
+
+        notes_box = tk.Text(frame, height=1, wrap="word")
+
+        def delete_exam():
+            self.current_em_code.set("")
+            self.em_long_description_var.set("")
+            self.exam_notes_var.set("")
+            try:
+                notes_box.delete("1.0", "end")
+            except Exception:
+                pass
+            _refresh_em_long_status()
+            self.update_services_summary_labels()
+
+        ttk.Button(em_long_row, text="EM Long Desc.", command=_open_em_long_popup).pack(side="left")
+        ttk.Button(
+            em_long_row,
+            style="Right.TButton",
+            text="Delete Exam",
+            command=delete_exam,
+        ).pack(side="left", padx=(10, 0))
+        em_long_status.pack(side="left", padx=(10, 0))
+        em_long_row.pack(anchor="w", pady=(0, 12))
+
+        def _on_em_selected(_evt=None) -> None:
+            _sync_visit_em_long_from_catalog()
+            _refresh_em_long_status()
+
+        em_combo.bind("<<ComboboxSelected>>", _on_em_selected)
+        _refresh_em_long_status()
+
+        # ---- Exam Notes (starts 1 line, expands) ----
         ttk.Label(frame, text="Exam Notes:", font=("Segoe UI", 10, "bold")).pack(
             anchor="w", pady=(0, 5)
         )
 
-        notes_box = tk.Text(frame, height=1, wrap="word")
         notes_box.pack(fill="x", pady=(0, 16))
 
         # preload saved notes (if any)
@@ -1315,17 +1426,6 @@ class PlanPage(ttk.Frame):
             notes_box.insert("1.0", self.exam_notes_var.get() or "")
         except Exception:
             pass
-
-        def delete_exam():
-            self.current_em_code.set("")
-            self.exam_notes_var.set("")
-            try:
-                notes_box.delete("1.0", "end")
-            except Exception:
-                pass
-            self.update_services_summary_labels()            
-        
-        ttk.Button(frame, style='Right.TButton', text="Delete Exam", command=delete_exam).pack(pady=(0,10))
 
         def _autosize_notes(_evt=None):
             """
@@ -1359,22 +1459,15 @@ class PlanPage(ttk.Frame):
         )
         scrollbar.config(command=self._therapy_listbox.yview)
 
-        self._therapy_options = [
-            "97012: Mechanical Traction",
-            "97014: Electric Stimulation",
-            "97124: MRT / Vibratory Massage",
-            "97110: Therapeutic Exercise",
-            "97140: Manual Therapy",
-            "97035: Ultrasound",
-            "97010: Hot/Cold Pack",
-            "97112: Neuromuscular Re-ed",
-        ]
-
+        self._therapy_options = list(get_display_lines("therapy"))
+        for k in (self.therapy_data or {}):
+            if k and k not in self._therapy_options:
+                self._therapy_options.append(k)
         self._therapy_listbox.delete(0, "end")
-        for item in self._therapy_options:
+        for i, item in enumerate(self._therapy_options):
             self._therapy_listbox.insert("end", item)
             if item in (self.therapy_data or {}):
-                self._therapy_listbox.selection_set(self._therapy_options.index(item))
+                self._therapy_listbox.selection_set(i)
 
         self._therapy_listbox.pack(side="left", fill="x", expand=True)
         scrollbar.pack(side="right", fill="y")
@@ -1391,15 +1484,27 @@ class PlanPage(ttk.Frame):
             try:
                 self.exam_notes_var.set(notes_box.get("1.0", "end-1c").strip())
             except Exception:
-                self.exam_notes_var.set("")                
-            
+                self.exam_notes_var.set("")
 
             self.update_services_summary_labels()
             popup.destroy()
 
+        def open_fee_schedule():
+            from fee_schedule_dialog import FeeScheduleDialog
+
+            def _after_fee_edit():
+                self._reload_services_popup_lists(
+                    cmt_combo=cmt_combo,
+                    em_combo=em_combo,
+                    therapy_listbox=self._therapy_listbox,
+                )
+
+            FeeScheduleDialog(popup, on_close=_after_fee_edit)
+
         bottom_btns = ttk.Frame(frame)
         bottom_btns.pack(side="bottom", fill="x", pady=10)
         ttk.Button(bottom_btns, text="Save and Exit", command=on_close).pack(side="left")
+        ttk.Button(bottom_btns, text="Fee Schedule…", command=open_fee_schedule).pack(side="left", padx=(10, 0))
 
     # -------------------------
     # CMT LOGIC
@@ -1733,6 +1838,7 @@ class PlanPage(ttk.Frame):
                 "cmt_data": self.cmt_data or {},
                 "cmt_notes": (self.current_cmt_notes.get() or ""),
                 "em_code": (self.current_em_code.get() or ""),
+                "em_long_description": (self.em_long_description_var.get() or ""),
                 "exam_notes": (self.exam_notes_var.get() or ""),
                 "therapy_data": self.therapy_data or {},
                 "staff_modalities_letter_data": dict(self.staff_modalities_letter_data or {}),
@@ -1808,7 +1914,11 @@ class PlanPage(ttk.Frame):
             self.last_cmt_code = services.get("last_cmt_code", "") or ""
             self.cmt_data = services.get("cmt_data", {}) or {}
             self.current_cmt_notes.set(services.get("cmt_notes", "") or "") 
-            self.current_em_code.set(services.get("em_code", "") or "")
+            em_line = services.get("em_code", "") or ""
+            self.current_em_code.set(em_line)
+            self.em_long_description_var.set(
+                synced_em_long_for_line(em_line, services.get("em_long_description", "") or "")
+            )
             self.exam_notes_var.set(services.get("exam_notes", "") or "")
             self.therapy_data = services.get("therapy_data", {}) or {}
             self.staff_modalities_letter_data = services.get("staff_modalities_letter_data", {}) or {}

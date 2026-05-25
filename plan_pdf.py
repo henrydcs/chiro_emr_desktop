@@ -38,6 +38,28 @@ def _services_ctx(d: dict) -> dict:
     s = d.get("services") if isinstance(d, dict) else None
     return s if isinstance(s, dict) else {}
 
+def _em_chart_description(services: dict) -> str:
+    """
+    Text shown on chart/PDF for the E/M narrative (not the dropdown short label).
+    Uses clinic catalog long text (synced with Fee Schedule); visit field mirrors catalog.
+    """
+    exam_code = _clean(services.get("em_code", services.get("exam_code", "")))
+    visit_long = _clean(services.get("em_long_description", ""))
+    if exam_code:
+        try:
+            from service_catalog import synced_em_long_for_line
+
+            synced = synced_em_long_for_line(exam_code, visit_long)
+            if synced:
+                return synced
+        except Exception:
+            pass
+    if visit_long:
+        return visit_long
+    _, short = _split_em_code_option(exam_code)
+    return short
+
+
 def _split_em_code_option(em_code: str) -> tuple[str, str]:
     """
     em_code is stored like '99203-25: Description text...'.
@@ -154,7 +176,7 @@ def _has_any_services(d: dict) -> bool:
         for _, v in therapy_data.items():
             if isinstance(v, dict) and v:
                 return True
-    if exam_code or exam_notes:
+    if exam_code or exam_notes or _clean(services.get("em_long_description", "")):
         return True
     return False
 
@@ -238,7 +260,7 @@ def _build_services_flowables(d: dict, B) -> list:
 
     has_cmt = bool(cmt_code)
     has_therapy = isinstance(therapy_data, dict) and any(isinstance(v, dict) and v for v in therapy_data.values())
-    has_em = bool(exam_code or exam_notes)
+    has_em = bool(exam_code or exam_notes or _clean(services.get("em_long_description", "")))
     if not (has_cmt or has_therapy or has_em):
         return []
     
@@ -379,13 +401,14 @@ def _build_services_flowables(d: dict, B) -> list:
     exam_code  = _clean(services.get("em_code", services.get("exam_code", "")))
     exam_notes = _clean(services.get("exam_notes", ""))
 
-    if exam_code or exam_notes:
+    if exam_code or exam_notes or _clean(services.get("em_long_description", "")):
 
         # Section title (matches Chiropractic CMT style)
         story.append(Paragraph("<b>Examination and Management</b>", SUBHEAD))
 
         if exam_code:
-            code_num, em_desc = _split_em_code_option(exam_code)
+            code_num, _short = _split_em_code_option(exam_code)
+            em_desc = _em_chart_description(services)
             if code_num and em_desc:
                 story.append(
                     Paragraph(
@@ -425,7 +448,7 @@ def _services_to_plain_text(d: dict) -> str:
     has_therapy = isinstance(therapy_data, dict) and any(
         isinstance(v, dict) and v for v in therapy_data.values()
     )
-    has_em = bool(exam_code or exam_notes)
+    has_em = bool(exam_code or exam_notes or _clean(services.get("em_long_description", "")))
     if not (has_cmt or has_therapy or has_em):
         return ""
 
@@ -494,12 +517,13 @@ def _services_to_plain_text(d: dict) -> str:
                 else:
                     lines.append(f"    {part_lbl}")
 
-    if exam_code or exam_notes:
+    if exam_code or exam_notes or _clean(services.get("em_long_description", "")):
         if lines:
             lines.append("")
         lines.append("Examination and Management")
         if exam_code:
-            code_num, em_desc = _split_em_code_option(exam_code)
+            code_num, _short = _split_em_code_option(exam_code)
+            em_desc = _em_chart_description(services)
             if code_num and em_desc:
                 lines.append(f"  Exam Code: {code_num} — {em_desc}")
             elif code_num:

@@ -77,7 +77,9 @@ class CarrierPickerDialog(tk.Toplevel):
         self._search_var = tk.StringVar()
         ent = ttk.Entry(search_row, textvariable=self._search_var)
         ent.pack(side="left", fill="x", expand=True, padx=(6, 0))
-        self._search_var.trace_add("write", lambda *_: self._refresh_list())
+        self._search_trace_id = self._search_var.trace_add(
+            "write", lambda *_: self._refresh_list()
+        )
 
         list_wrap = ttk.Frame(outer)
         list_wrap.pack(fill="both", expand=True)
@@ -103,7 +105,15 @@ class CarrierPickerDialog(tk.Toplevel):
         self.grab_set()
         ent.focus_set()
 
+    def _widget_alive(self, w: tk.Misc) -> bool:
+        try:
+            return bool(w.winfo_exists())
+        except tk.TclError:
+            return False
+
     def _refresh_list(self):
+        if not self._widget_alive(self) or not self._widget_alive(self._listbox):
+            return
         q = (self._search_var.get() or "").strip().lower()
         self._all = idata.list_carriers_alphabetical()
         self._listbox.delete(0, "end")
@@ -140,21 +150,35 @@ class CarrierPickerDialog(tk.Toplevel):
             messagebox.showinfo("Select Carrier", "Please select a carrier.", parent=self)
             return
         self.result = rec
+        self._remove_search_trace()
         self.grab_release()
         self.destroy()
 
     def _on_cancel(self):
         self.result = None
+        self._remove_search_trace()
         try:
             self.grab_release()
         except Exception:
             pass
         self.destroy()
 
+    def _remove_search_trace(self) -> None:
+        tid = getattr(self, "_search_trace_id", None)
+        if tid is not None:
+            try:
+                self._search_var.trace_remove("write", tid)
+            except Exception:
+                pass
+            self._search_trace_id = None
+
     def _open_manager(self):
-        win = InsuranceDemographicsWindow(self.master, start_tab="directory")
+        # Open on the picker so closing the parent insurance window does not
+        # destroy this dialog mid-refresh.
+        win = InsuranceDemographicsWindow(self, start_tab="directory")
         self.wait_window(win)
-        self._refresh_list()
+        if self._widget_alive(self):
+            self._refresh_list()
 
 
 # ===========================================================================
