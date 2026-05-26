@@ -39,15 +39,124 @@ def _require_reportlab() -> None:
         )
 
 
-def _receipts_dir(patient_root: str | Path) -> Path:
-    d = patient_billing_root(patient_root) / "receipts"
+# --------------------------------------------------------------------------
+# Page numbering — shared across every billing / package / referral PDF
+# --------------------------------------------------------------------------
+# ReportLab's low-level canvas can't know the total page count until the
+# document is finished. The canonical fix is the "two-pass" NumberedCanvas
+# pattern: override showPage() to defer the actual emit, snapshot every
+# page's state, and on save() iterate through the snapshots stamping
+# "Page N of M" before truly emitting each page.
+#
+# Builders that previously instantiated `pdf_canvas.Canvas(...)` directly
+# now build a `NumberedCanvas(...)` instead; nothing else needs to change
+# in their drawing code, and the footer is drawn on every page including
+# any page-breaks triggered mid-loop by `_ensure_room()`-style helpers.
+
+if REPORTLAB_OK:
+    class NumberedCanvas(pdf_canvas.Canvas):
+        """Canvas that stamps 'Page N of M' bottom-right on every page."""
+
+        _PAGE_NUM_FONT = "Helvetica"
+        _PAGE_NUM_SIZE = 8
+        _PAGE_NUM_RIGHT_MARGIN = 0.55 * inch
+        _PAGE_NUM_BASELINE = 0.40 * inch
+
+        def __init__(self, *args, **kwargs):
+            super().__init__(*args, **kwargs)
+            self._saved_page_states: list[dict] = []
+
+        def showPage(self):  # type: ignore[override]
+            # Snapshot the canvas state and start a fresh page WITHOUT
+            # emitting the current one — final emit happens in save().
+            self._saved_page_states.append(dict(self.__dict__))
+            self._startPage()
+
+        def save(self):  # type: ignore[override]
+            total = len(self._saved_page_states)
+            for state in self._saved_page_states:
+                self.__dict__.update(state)
+                self._draw_page_number(total)
+                # Bypass our overridden showPage() to actually emit.
+                pdf_canvas.Canvas.showPage(self)
+            pdf_canvas.Canvas.save(self)
+
+        def _draw_page_number(self, total_pages: int) -> None:
+            page_w, _page_h = self._pagesize
+            self.saveState()
+            try:
+                self.setFillColor(colors.HexColor(COLOR_TEXT_MUTED))
+                self.setFont(self._PAGE_NUM_FONT, self._PAGE_NUM_SIZE)
+                self.drawRightString(
+                    page_w - self._PAGE_NUM_RIGHT_MARGIN,
+                    self._PAGE_NUM_BASELINE,
+                    f"Page {self._pageNumber} of {total_pages}",
+                )
+            finally:
+                self.restoreState()
+else:
+    # ReportLab is missing; provide a stub so type-checking imports still
+    # work. _require_reportlab() will raise before anything calls this.
+    NumberedCanvas = None  # type: ignore[assignment,misc]
+
+
+def _new_pdf_canvas(out_path: str | Path, *, pagesize=LETTER):
+    """
+    Factory for the page-numbered canvas. Use this in place of
+    `pdf_canvas.Canvas(out_path, pagesize=...)` so every billing-style PDF
+    gets a "Page N of M" footer for free.
+    """
+    _require_reportlab()
+    return NumberedCanvas(str(out_path), pagesize=pagesize)
+
+
+def _receipts_dir(patient_root: str | Path, subfolder: str = "") -> Path:
+    """
+    Returns the receipts directory (optionally a subfolder). The base layout is:
+
+        <patient>/billing/receipts/                    (legacy flat folder)
+        <patient>/billing/receipts/cash/               (cash receipts)
+        <patient>/billing/receipts/package/            (package contracts/statements)
+        <patient>/billing/receipts/pi/                 (PI summaries / settlements)
+        <patient>/billing/receipts/insurance/          (reserved for future)
+        <patient>/billing/receipts/membership/         (reserved for future)
+
+    Receipts in subfolders are still surfaced by list_billing_documents() so
+    the in-app Receipt folder dialog shows everything in one list.
+    """
+    base = patient_billing_root(patient_root) / "receipts"
+    if subfolder:
+        d = base / subfolder.strip().strip("/").strip("\\")
+    else:
+        d = base
     d.mkdir(parents=True, exist_ok=True)
     return d
 
 
-def _new_receipt_path(patient_root: str | Path, prefix: str) -> Path:
-    stamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-    return _receipts_dir(patient_root) / f"{prefix}_{stamp}.pdf"
+def _safe_filename_key(s: str) -> str:
+    return "".join(c if c.isalnum() or c in "-_" else "_" for c in (s or "").strip())
+
+
+def _new_receipt_path(
+    patient_root: str | Path,
+    prefix: str,
+    subfolder: str = "",
+    *,
+    unique_key: str = "",
+) -> Path:
+    """
+    Build a PDF path inside the receipts folder.
+
+    When `unique_key` is provided, the path uses that key INSTEAD of a timestamp
+    suffix, so re-saving for the same encounter/package OVERWRITES the previous
+    PDF (one receipt per visit / one contract per package). When omitted, a
+    timestamp suffix is used (legacy behavior — produces a new file each call).
+    """
+    if unique_key:
+        suffix = _safe_filename_key(unique_key)
+    else:
+        suffix = datetime.now().strftime("%Y%m%d_%H%M%S")
+    return _receipts_dir(patient_root, subfolder=subfolder) / f"{prefix}_{suffix}.pdf"
 
 
 def _draw_header_band(c: "pdf_canvas.Canvas", page_w: float, page_h: float) -> float:
@@ -194,7 +303,13 @@ def _draw_section_header(
     c.setStrokeColor(colors.HexColor(COLOR_BORDER))
     c.setLineWidth(0.7)
     c.line(margin, y_top - 20, page_w - margin, y_top - 20)
-    return y_top - 28
+    # Leave a clear gap (~16px) between the section underline and the first
+    # data row. Without this, bold values like "pkg_6d4cc7e92beb" visually
+    # collide with the line above them — see the Statement of Account PDF
+    # where Package ID / Payment status / Visits / Event log all sit right
+    # under their dividers. This single bump (was 8px) applies to every
+    # PDF that uses this helper.
+    return y_top - 36
 
 
 def _draw_charges_table(
@@ -324,7 +439,7 @@ def build_cash_receipt_pdf(
     _require_reportlab()
     out_path = str(out_path)
     page_w, page_h = LETTER
-    c = pdf_canvas.Canvas(out_path, pagesize=LETTER)
+    c = _new_pdf_canvas(out_path, pagesize=LETTER)
     c.setTitle("Service Receipt" if not payment else "Payment Receipt")
     c.setAuthor("Chiro EMR")
 
@@ -400,7 +515,7 @@ def build_settlement_pdf(
     _require_reportlab()
     out_path = str(out_path)
     page_w, page_h = LETTER
-    c = pdf_canvas.Canvas(out_path, pagesize=LETTER)
+    c = _new_pdf_canvas(out_path, pagesize=LETTER)
     c.setTitle("PI Settlement Receipt")
     c.setAuthor("Chiro EMR")
 
@@ -493,7 +608,7 @@ def build_pi_case_pdf(
     _require_reportlab()
     out_path = str(out_path)
     page_w, page_h = LETTER
-    c = pdf_canvas.Canvas(out_path, pagesize=LETTER)
+    c = _new_pdf_canvas(out_path, pagesize=LETTER)
     c.setTitle("PI Case Statement")
     c.setAuthor("Chiro EMR")
 
@@ -613,7 +728,15 @@ def build_cash_receipt_to_receipts(
     posted: dict,
     payment: dict | None = None,
 ) -> Path:
-    out = _new_receipt_path(patient_root, "receipt")
+    # One receipt per visit — keyed by encounter_id (preferred) or exam stem so
+    # re-clicking Create PDF on the same visit OVERWRITES the previous file
+    # instead of leaving piles of timestamped duplicates in the cash folder.
+    unique_key = (posted.get("encounter_id") or "").strip()
+    if not unique_key:
+        unique_key = Path(posted.get("exam_path") or "").stem or ""
+    out = _new_receipt_path(
+        patient_root, "receipt", subfolder="cash", unique_key=unique_key,
+    )
     build_cash_receipt_pdf(
         out,
         patient_name=patient_name,
@@ -622,6 +745,97 @@ def build_cash_receipt_to_receipts(
         payment=payment,
     )
     return out
+
+
+def build_pdf_from_text(out_path: Path, text: str) -> Path:
+    """
+    Fallback PDF builder — renders the given plain text as a single-document
+    monospaced PDF. Used when a cash receipt has a .txt on disk but no
+    properly-formatted .pdf and the original posted-encounter data isn't
+    available for `build_cash_receipt_pdf()`.
+    """
+    if not REPORTLAB_OK:
+        raise RuntimeError("ReportLab not installed; cannot generate PDF.")
+    out_path.parent.mkdir(parents=True, exist_ok=True)
+    c = _new_pdf_canvas(out_path, pagesize=LETTER)
+    page_w, page_h = LETTER
+    margin = 0.75 * inch
+    line_h = 12
+    y = page_h - margin
+    c.setFont("Courier", 10)
+    for raw in (text or "").splitlines() or [""]:
+        if y < margin:
+            c.showPage()
+            c.setFont("Courier", 10)
+            y = page_h - margin
+        # ReportLab Courier supports basic ASCII; non-ascii chars need encoding.
+        try:
+            c.drawString(margin, y, raw)
+        except Exception:
+            c.drawString(margin, y, raw.encode("ascii", "replace").decode("ascii"))
+        y -= line_h
+    c.save()
+    return out_path
+
+
+def ensure_cash_receipt_pdf(
+    patient_root: str | Path,
+    pdf_path: Path,
+    *,
+    patient_name: str,
+    text_sidecar: Path | None = None,
+) -> Path:
+    """
+    Ensure a cash receipt PDF exists at `pdf_path`, lazy-generating it if not.
+
+    Lookup strategy when the file is missing:
+      1) If the filename is `receipt_<encounter_id>.pdf`, look up the posted
+         encounter by id and render the full formatted receipt
+         (`build_cash_receipt_pdf`).
+      2) Otherwise — or if step 1 fails — fall back to a monospaced text-only
+         PDF built from `text_sidecar` (so the user still gets a printable
+         document).
+
+    Returns the path to the now-existing PDF.
+    """
+    if pdf_path.exists():
+        return pdf_path
+
+    # Try the structured path first: receipt_<encounter_id>.pdf
+    stem = pdf_path.stem
+    if stem.startswith("receipt_"):
+        encounter_id = stem[len("receipt_"):]
+        if encounter_id.startswith("enc_"):
+            try:
+                from billing_ledger import find_posted_encounter_by_id
+                posted = find_posted_encounter_by_id(patient_root, encounter_id)
+            except Exception:
+                posted = None
+            if posted:
+                try:
+                    return build_cash_receipt_to_receipts(
+                        patient_root,
+                        patient_name=patient_name,
+                        posted=posted,
+                        payment=None,
+                    )
+                except Exception:
+                    pass  # fall through to text fallback
+
+    # Fallback: render the .txt sidecar (or a placeholder) as a simple PDF.
+    text = ""
+    if text_sidecar is not None and text_sidecar.is_file():
+        try:
+            text = text_sidecar.read_text(encoding="utf-8", errors="replace")
+        except OSError:
+            text = ""
+    if not text:
+        text = (
+            f"Cash receipt\n"
+            f"Patient: {patient_name}\n"
+            f"(Original receipt content was not available on disk.)"
+        )
+    return build_pdf_from_text(pdf_path, text)
 
 
 def build_settlement_to_receipts(
@@ -635,7 +849,7 @@ def build_settlement_to_receipts(
     payer: str,
     memo: str = "",
 ) -> Path:
-    out = _new_receipt_path(patient_root, "settlement")
+    out = _new_receipt_path(patient_root, "settlement", subfolder="pi")
     build_settlement_pdf(
         out,
         patient_name=patient_name,
@@ -655,7 +869,7 @@ def build_pi_case_to_receipts(
     *,
     patient_name: str,
 ) -> Path:
-    out = _new_receipt_path(patient_root, "pi_case_statement")
+    out = _new_receipt_path(patient_root, "pi_case_statement", subfolder="pi")
     build_pi_case_pdf(
         out,
         patient_name=patient_name,

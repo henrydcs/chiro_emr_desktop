@@ -520,6 +520,56 @@ def build_shadow_encounter(
         )
 
     enc_id = f"enc_{uuid.uuid4().hex[:12]}"
+
+    # Phase 5 — Package deals: attach per-line redemption suggestions when the
+    # patient is on cash payer mode and has an active package whose whitelist
+    # contains the CPT. Caller (BillingPage cash-checkout flow) uses this hint
+    # to prompt the user before posting.
+    package_meta: dict = {"suggested_redemptions": [], "active_package_count": 0}
+    if patient_root and payer_mode == "cash":
+        try:
+            from package_engine import (
+                active_redeemable_packages,
+                packages_covering_cpt,
+            )
+            from package_storage import load_package_log
+
+            events = load_package_log(patient_root).get("events") or []
+            active = active_redeemable_packages(events)
+            package_meta["active_package_count"] = len(active)
+            if active:
+                for ln in lines:
+                    cpt = (ln.get("cpt_code") or "").strip()
+                    if not cpt:
+                        continue
+                    covering = packages_covering_cpt(events, cpt)
+                    if not covering:
+                        continue
+                    fees = ln.get("fees") or {}
+                    pkg_options = []
+                    for s in covering:
+                        purchase = s.get("purchase") or {}
+                        pkg_options.append({
+                            "package_id": s.get("package_id") or "",
+                            "catalog_id": purchase.get("catalog_id") or "",
+                            "name": purchase.get("name") or "",
+                            "visits_remaining": int(s.get("visits_remaining") or 0),
+                            "prorated_value_per_visit": float(
+                                purchase.get("prorated_value_per_visit") or 0.0
+                            ),
+                            "expires_on": purchase.get("expiration_date") or "",
+                        })
+                    package_meta["suggested_redemptions"].append({
+                        "charge_line_id": ln.get("charge_line_id") or "",
+                        "cpt": cpt,
+                        "description": ln.get("description") or "",
+                        "full_fee_cash": float(fees.get("cash") or 0.0),
+                        "package_options": pkg_options,
+                    })
+        except Exception:
+            # Never let package lookup break shadow encounter generation.
+            package_meta = {"suggested_redemptions": [], "active_package_count": 0}
+
     return {
         "encounter_id": enc_id,
         "exam_path": str(Path(exam_path).resolve()),
@@ -536,4 +586,5 @@ def build_shadow_encounter(
         "warnings": warnings,
         "totals": totals,
         "primary_schedule": "cash" if payer_mode == "cash" else "pi_ucr",
+        "package_meta": package_meta,
     }

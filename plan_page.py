@@ -676,6 +676,13 @@ class PlanPage(ttk.Frame):
         self._btn_print_schedule.grid(row=4, column=0, columnspan=4, sticky="w", padx=8, pady=(4, 8))
         self._refresh_print_schedule_btn()
 
+        pkg_btn = ttk.Button(
+            sched_box,
+            text="Convert plan to package…",
+            command=self._convert_plan_to_package,
+        )
+        pkg_btn.grid(row=5, column=0, columnspan=4, sticky="w", padx=8, pady=(0, 8))
+
         return f
     
     def _build_regions_frame(self, parent):
@@ -969,6 +976,97 @@ class PlanPage(ttk.Frame):
             except Exception:
                 return []
         return []
+
+    def _convert_plan_to_package(self):
+        """
+        Open Sell Package dialog pre-populated from the clinical schedule
+        (visits/week × duration weeks → total visits).
+
+        The active patient folder is read from shell_state (set by Documents page).
+        We import package_dialogs lazily to avoid coupling the Plan module to
+        the Billing module at import time.
+        """
+        try:
+            freq_raw = self._freq_value().strip()
+            dur_raw = self._duration_value().strip()
+        except Exception:
+            freq_raw, dur_raw = "", ""
+
+        try:
+            visits_per_week = int(freq_raw)
+        except ValueError:
+            visits_per_week = 0
+        try:
+            duration_weeks = int(dur_raw.split()[0])  # "4 to 6" -> 4
+        except (ValueError, IndexError):
+            duration_weeks = 0
+        total_visits = visits_per_week * duration_weeks if visits_per_week and duration_weeks else 0
+
+        # Resolve active patient folder via shell_state (shared with Billing/Documents).
+        try:
+            from shell_app import patient_record_from_folder, read_shell_state
+        except Exception as e:
+            messagebox.showerror("Convert to package", f"Could not load shell state:\n{e}")
+            return
+        state = read_shell_state() or {}
+        folder = (state.get("active_patient_folder") or state.get("patient_folder") or "").strip()
+        if not folder:
+            messagebox.showinfo(
+                "Convert to package",
+                "Open the patient on the Documents page first, then return to the Plan page.",
+            )
+            return
+        from pathlib import Path as _P
+        rec = patient_record_from_folder(_P(folder)) or {}
+        patient_name = (rec.get("label") or rec.get("name") or "").split("    DOB")[0].strip() or "—"
+
+        # Compose a therapeutic-objectives string from the active plan inputs.
+        objectives_bits = []
+        try:
+            ctx = self._patient_ctx() or {}
+            if ctx.get("first") or ctx.get("last"):
+                objectives_bits.append(
+                    f"Patient: {(ctx.get('first') or '').strip()} "
+                    f"{(ctx.get('last') or '').strip()}".strip()
+                )
+        except Exception:
+            pass
+        try:
+            care_sel = [k for k, v in self._care_vars.items() if v.get()]
+            if care_sel:
+                objectives_bits.append("Care modalities: " + ", ".join(care_sel))
+            region_sel = [k for k, v in self._region_vars.items() if v.get()]
+            if region_sel:
+                objectives_bits.append("Regions of focus: " + ", ".join(region_sel))
+            goal_sel = [k for k, v in self._goal_vars.items() if v.get()]
+            if goal_sel:
+                objectives_bits.append("Goals: " + ", ".join(goal_sel))
+        except Exception:
+            pass
+        if visits_per_week and duration_weeks:
+            objectives_bits.append(
+                f"Recommended schedule: {visits_per_week} visit(s)/week × {duration_weeks} weeks "
+                f"(approx. {total_visits} visits)."
+            )
+        objectives = "\n".join(objectives_bits)
+
+        try:
+            from package_dialogs import SellPackageDialog
+        except Exception as e:
+            messagebox.showerror("Convert to package", f"Package dialogs not available:\n{e}")
+            return
+
+        SellPackageDialog(
+            self.winfo_toplevel(),
+            patient_root=folder,
+            patient_name=patient_name,
+            initial_visits=total_visits or None,
+            initial_objectives=objectives,
+            on_save=lambda _r: messagebox.showinfo(
+                "Package sold",
+                "Package created. Open the Billing page → Package deals tab to view it.",
+            ),
+        )
 
     def _freq_value(self) -> str:
         v = _clean(self.freq_var.get())

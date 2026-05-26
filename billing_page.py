@@ -33,9 +33,11 @@ from billing_pi_ledger import (
 from billing_case_export import build_case_summary_text, save_case_exports
 from billing_receipt import (
     BillingDocument,
+    STREAM_DISPLAY_LABELS,
     archive_pi_summary_to_receipts,
     build_receipt_text,
     build_settlement_receipt_text,
+    ensure_receipt_subfolders,
     list_billing_documents,
     open_receipts_folder,
     receipt_display_label,
@@ -47,7 +49,33 @@ from billing_pdf import (
     build_pi_case_to_receipts,
 )
 from billing_storage import load_or_refresh_shadow_encounter
+from package_pdf import build_contract_pdf
 from fee_schedule_dialog import FeeScheduleDialog
+from package_dialogs import (
+    CancelPackageDialog,
+    CatalogEditorDialog,
+    PackageDetailDialog,
+    PackagePostVisitDialog,
+    PackageTakePaymentDialog,
+    RefundPackageDialog,
+    SellPackageDialog,
+)
+from package_engine import (
+    aggregate_revenue,
+    compute_package_state,
+    is_redeemable,
+    states_for_patient,
+    status_label,
+)
+from package_storage import (
+    EVENT_REDEMPTION,
+    all_events_for_package,
+    is_encounter_package_posted,
+    list_packages,
+    load_package_log,
+    load_package_posted_encounter,
+    reconcile_pending_operations,
+)
 from pi_case_dialog import PiCaseEditorDialog
 
 # Reuse shell palette (import after shell defines constants — no circular class deps)
@@ -76,9 +104,47 @@ COLOR_VISIT_ROW = COLOR_CARD
 COLOR_VISIT_ROW_HOVER = "#F8FAFC"
 COLOR_VISIT_ROW_SELECTED = "#F5EDE0"
 COLOR_VISIT_ROW_SELECTED_BORDER = "#D9CCB0"
-_VISIT_ROW_SYNC_BGS = frozenset(
-    {COLOR_VISIT_ROW, COLOR_VISIT_ROW_HOVER, COLOR_VISIT_ROW_SELECTED, "#F8FAFC"}
-)
+
+# Per-flow visit-row tints. A row's bg is chosen by which flow posted the visit:
+#   cash    → pastel yellow + "CASH" badge
+#   package → pastel purple + "Pckg$" badge
+#   pi      → pastel blue   + "PI" badge
+# If multiple posts exist (legacy / dual-posted visits), priority is package > pi
+# > cash for the background tint, but EVERY applicable badge is shown.
+COLOR_VISIT_ROW_CASH = "#FEF9C3"
+COLOR_VISIT_ROW_CASH_HOVER = "#FEF08A"
+COLOR_VISIT_ROW_CASH_BORDER = "#EAB308"
+COLOR_VISIT_ROW_CASH_BORDER_SELECTED = "#A16207"     # yellow-700 — bolder
+
+COLOR_VISIT_ROW_PACKAGE = "#F3E8FF"
+COLOR_VISIT_ROW_PACKAGE_HOVER = "#E9D5FF"
+COLOR_VISIT_ROW_PACKAGE_BORDER = "#A855F7"
+COLOR_VISIT_ROW_PACKAGE_BORDER_SELECTED = "#7E22CE"  # purple-700 — bolder
+
+COLOR_VISIT_ROW_PI = "#DBEAFE"
+COLOR_VISIT_ROW_PI_HOVER = "#BFDBFE"
+COLOR_VISIT_ROW_PI_BORDER = "#3B82F6"
+COLOR_VISIT_ROW_PI_BORDER_SELECTED = "#1D4ED8"       # blue-700 — bolder
+
+# Unposted-row selected border — bolder neutral grey for visibility on white.
+COLOR_VISIT_ROW_BORDER_SELECTED = "#475569"          # slate-600
+
+# Border width: thin default, thick when the card is the active selection.
+VISIT_ROW_BORDER_THICKNESS = 1
+VISIT_ROW_BORDER_THICKNESS_SELECTED = 3
+
+_VISIT_ROW_SYNC_BGS = frozenset({
+    COLOR_VISIT_ROW,
+    COLOR_VISIT_ROW_HOVER,
+    COLOR_VISIT_ROW_SELECTED,
+    "#F8FAFC",
+    COLOR_VISIT_ROW_CASH,
+    COLOR_VISIT_ROW_CASH_HOVER,
+    COLOR_VISIT_ROW_PACKAGE,
+    COLOR_VISIT_ROW_PACKAGE_HOVER,
+    COLOR_VISIT_ROW_PI,
+    COLOR_VISIT_ROW_PI_HOVER,
+})
 
 
 class BillingPage(tk.Frame):
@@ -94,9 +160,15 @@ class BillingPage(tk.Frame):
         self._current_encounter: dict | None = None
         self._posted_encounter: dict | None = None
         self._posted_pi_encounter: dict | None = None
+        self._posted_package_encounter: dict | None = None
         self._billing_panel = "cash"
         self._last_payment: dict | None = None
         self._visit_row_by_path: dict[str, tk.Frame] = {}
+        # Warnings for the currently-selected encounter, surfaced on demand
+        # by a "Review warnings" button in each flow's action row (the old
+        # inline Review warnings card has been retired).
+        self._current_warnings: list[dict] = []
+        self._warnings_buttons: list[tk.Button] = []
 
         self._build()
         self.bind("<Map>", lambda _e: self._on_map())
@@ -287,6 +359,11 @@ class BillingPage(tk.Frame):
             btn.pack(side="left", padx=(0, 6))
             self._panel_nav_btns[key] = btn
 
+        # Single Review-warnings button anchored to the far-right end of the
+        # tab row — visible regardless of which flow is active. Color + label
+        # auto-update with the current encounter's warning count.
+        self._make_review_warnings_button(nav_row, side="right", padx=(6, 0), pady=6)
+
         body = tk.Frame(outer, bg=COLOR_BG_APP)
         body.pack(fill="both", expand=True)
         body.columnconfigure(0, weight=0, minsize=210)
@@ -351,12 +428,23 @@ class BillingPage(tk.Frame):
 
         right = tk.Frame(body, bg=COLOR_BG_APP)
         right.grid(row=0, column=1, sticky="nsew")
+        # 3-column grid: col 0 + col 1 together hold Visit total + the active
+        # billing panel (Cash / PI / Package deals / Insurance / Memberships)
+        # via columnspan=2; col 2 hosts the Document preview. Weights 2/2/1
+        # give the left side ~80% of any extra horizontal space, so package /
+        # PI tables aren't squeezed by the (text-only) preview column.
+        # Row 2 is the expanding row that now holds the full-width Charge
+        # lines panel.
         right.columnconfigure(0, weight=2)
-        right.columnconfigure(1, weight=1)
-        right.rowconfigure(3, weight=1)
+        right.columnconfigure(1, weight=2)
+        right.columnconfigure(2, weight=1)
+        right.rowconfigure(2, weight=1)
 
         totals_card, totals_body = make_card(right, "Visit total")
-        totals_card.grid(row=0, column=0, sticky="nsew", padx=(0, 6), pady=(0, 10))
+        totals_card.grid(
+            row=0, column=0, columnspan=2,
+            sticky="nsew", padx=(0, 6), pady=(0, 10),
+        )
         self.totals_frame = tk.Frame(totals_body, bg=COLOR_CARD)
         self.totals_frame.pack(fill="x")
 
@@ -365,7 +453,14 @@ class BillingPage(tk.Frame):
             "Document preview",
             "Cash receipt · PI settlement · case summary",
         )
-        receipt_card.grid(row=0, column=1, rowspan=3, sticky="nsew", padx=(6, 0), pady=(0, 10))
+        # rowspan=2 (was 3) so the preview ends at the bottom of the panel
+        # host (row 1), aligning with the View detail / Refund row of the
+        # Package deals panel. The vertical space below (row 2) is reclaimed
+        # by Charge lines.
+        receipt_card.grid(
+            row=0, column=2, rowspan=2,
+            sticky="nsew", padx=(6, 0), pady=(0, 10),
+        )
         receipt_body.rowconfigure(1, weight=1)
         receipt_body.columnconfigure(0, weight=1)
 
@@ -396,6 +491,8 @@ class BillingPage(tk.Frame):
         self.receipt_preview = tk.Text(
             receipt_body,
             height=10,
+            width=46,  # narrower natural width so col 2 can shrink and let
+                       # the Package deals / Visit total side breathe
             wrap="word",
             font=("Consolas", 10),
             bg="#FAFAFA",
@@ -412,7 +509,10 @@ class BillingPage(tk.Frame):
         self._set_receipt_preview_text("Select a visit to preview a receipt.")
 
         panel_host = tk.Frame(right, bg=COLOR_BG_APP)
-        panel_host.grid(row=1, column=0, sticky="new", padx=(0, 6), pady=(0, 10))
+        panel_host.grid(
+            row=1, column=0, columnspan=2,
+            sticky="new", padx=(0, 6), pady=(0, 10),
+        )
         panel_host.columnconfigure(0, weight=1)
 
         cash_frame = self._make_billing_panel_shell(panel_host)
@@ -466,7 +566,7 @@ class BillingPage(tk.Frame):
         self.btn_receipt_folder = tk.Button(
             ck,
             text="Receipt folder",
-            command=self._show_receipt_folder,
+            command=lambda: self._show_receipt_folder(stream="cash"),
             bg=COLOR_CARD,
             fg=COLOR_ACCENT,
             relief="flat",
@@ -478,7 +578,21 @@ class BillingPage(tk.Frame):
             cursor="hand2",
             state="disabled",
         )
-        self.btn_receipt_folder.pack(side="left")
+        self.btn_receipt_folder.pack(side="left", padx=(0, 8))
+        self.btn_sell_package = tk.Button(
+            ck,
+            text="Sell package",
+            command=self._sell_package_from_cash,
+            bg="#0D9488",
+            fg="#FFFFFF",
+            relief="flat",
+            font=FONT_BASE_BOLD,
+            padx=14,
+            pady=6,
+            cursor="hand2",
+            state="disabled",
+        )
+        self.btn_sell_package.pack(side="left")
         self.checkout_status_var = tk.StringVar(value="Select a visit to begin checkout.")
         tk.Label(
             checkout_body,
@@ -599,7 +713,7 @@ class BillingPage(tk.Frame):
         self.btn_pi_receipt_folder = tk.Button(
             pi_ck,
             text="Receipt folder",
-            command=self._show_receipt_folder,
+            command=lambda: self._show_receipt_folder(stream="pi"),
             bg=COLOR_CARD,
             fg=COLOR_ACCENT,
             relief="flat",
@@ -639,15 +753,15 @@ class BillingPage(tk.Frame):
         tk.Frame(pi_frame, bg=COLOR_BG_APP).pack(fill="both", expand=True)
 
         insurance_frame = self._make_billing_panel_shell(panel_host)
-        self._build_wip_panel(insurance_frame, "Insurance billing")
+        self._build_wip_panel(insurance_frame, "Insurance billing", stream="insurance")
         tk.Frame(insurance_frame, bg=COLOR_BG_APP).pack(fill="both", expand=True)
 
         packages_frame = self._make_billing_panel_shell(panel_host)
-        self._build_wip_panel(packages_frame, "Package deals")
+        self._build_packages_panel(packages_frame)
         tk.Frame(packages_frame, bg=COLOR_BG_APP).pack(fill="both", expand=True)
 
         memberships_frame = self._make_billing_panel_shell(panel_host)
-        self._build_wip_panel(memberships_frame, "Memberships")
+        self._build_wip_panel(memberships_frame, "Memberships", stream="membership")
         tk.Frame(memberships_frame, bg=COLOR_BG_APP).pack(fill="both", expand=True)
 
         shell_frames = {
@@ -667,24 +781,13 @@ class BillingPage(tk.Frame):
         panel_host.grid_propagate(False)
         self._show_billing_panel("cash")
 
-        warn_card, warn_body = make_card(right, "Review warnings")
-        warn_card.grid(row=2, column=0, sticky="new", padx=(0, 6), pady=(0, 10))
-        self.warnings_text = tk.Text(
-            warn_body,
-            height=4,
-            wrap="word",
-            font=FONT_SMALL,
-            bg="#FFFBEB",
-            fg=COLOR_TEXT,
-            relief="flat",
-            highlightthickness=1,
-            highlightbackground=COLOR_BORDER,
-        )
-        self.warnings_text.pack(fill="x")
-        self.warnings_text.configure(state="disabled")
-
+        # Charge lines spans the full width of the right pane (cols 0-2) and
+        # claims all the vertical space row 2 makes available — both the slot
+        # the old Review warnings card used to occupy AND the space the now-
+        # shorter Document preview gave up. Review warnings is now a popup,
+        # opened by a per-flow "Review warnings" button below.
         lines_card, lines_body = make_card(right, "Charge lines", "Derived from Services Provided Today")
-        lines_card.grid(row=3, column=0, columnspan=2, sticky="nsew")
+        lines_card.grid(row=2, column=0, columnspan=3, sticky="nsew")
         lines_body.rowconfigure(0, weight=1)
         lines_body.columnconfigure(0, weight=1)
 
@@ -719,7 +822,479 @@ class BillingPage(tk.Frame):
             anchor="w"
         )
 
-    def _build_wip_panel(self, parent: tk.Frame, title: str) -> None:
+    # -----------------------------------------------------------------
+    # Package deals panel (Phase 5)
+    # -----------------------------------------------------------------
+
+    def _build_packages_panel(self, parent: tk.Frame) -> None:
+        card, body = make_card(parent, "Package deals", "Visit packages · prepaid plans")
+        card.pack(fill="both", expand=True)
+        body.columnconfigure(0, weight=1)
+
+        # Top action row (row 0): Package Deals checkout — fully independent of
+        # the Cash checkout. Post Visit redeems one visit; Take Payment collects
+        # money toward an unpaid package balance. Neither touches cash_ledger.
+        actions = tk.Frame(body, bg=COLOR_CARD)
+        actions.grid(row=0, column=0, sticky="ew", pady=(0, 8))
+        self.btn_pkg_post_visit = tk.Button(
+            actions, text="Post Visit", command=self._post_visit_to_package,
+            bg="#7C3AED", fg="#FFFFFF", relief="flat",
+            font=FONT_BASE_BOLD, padx=12, pady=6, cursor="hand2",
+            state="disabled",
+        )
+        self.btn_pkg_post_visit.pack(side="left", padx=(0, 8))
+        self.btn_pkg_take_payment = tk.Button(
+            actions, text="Take Payment", command=self._take_package_payment,
+            bg=COLOR_GREEN, fg="#FFFFFF", relief="flat",
+            font=FONT_BASE_BOLD, padx=12, pady=6, cursor="hand2",
+            state="disabled",
+        )
+        self.btn_pkg_take_payment.pack(side="left", padx=(0, 8))
+        self.btn_pkg_sell = tk.Button(
+            actions, text="Sell package", command=self._sell_package_from_panel,
+            bg="#0D9488", fg="#FFFFFF", relief="flat",
+            font=FONT_BASE_BOLD, padx=12, pady=6, cursor="hand2",
+            state="disabled",
+        )
+        self.btn_pkg_sell.pack(side="left", padx=(0, 8))
+        tk.Button(
+            actions, text="Catalog editor", command=self._open_catalog_editor,
+            bg=COLOR_CARD, fg=COLOR_ACCENT, relief="flat",
+            font=FONT_BASE_BOLD,
+            highlightthickness=1, highlightbackground=COLOR_BORDER,
+            padx=12, pady=6, cursor="hand2",
+        ).pack(side="left", padx=(0, 8))
+        self.btn_pkg_refresh = tk.Button(
+            actions, text="Refresh", command=self._refresh_packages_panel,
+            bg=COLOR_CARD, fg=COLOR_TEXT, relief="flat",
+            font=FONT_BASE,
+            highlightthickness=1, highlightbackground=COLOR_BORDER,
+            padx=10, pady=6, cursor="hand2",
+        )
+        self.btn_pkg_refresh.pack(side="left", padx=(0, 8))
+        # Per-stream Receipt folder button — shows ONLY package contracts and
+        # statements, never cash or PI receipts. Opens billing/receipts/package/.
+        self.btn_pkg_receipt_folder = tk.Button(
+            actions, text="Receipt folder",
+            command=lambda: self._show_receipt_folder(stream="package"),
+            bg=COLOR_CARD, fg=COLOR_ACCENT, relief="flat",
+            font=FONT_BASE_BOLD,
+            highlightthickness=1, highlightbackground=COLOR_BORDER,
+            padx=12, pady=6, cursor="hand2",
+            state="disabled",
+        )
+        self.btn_pkg_receipt_folder.pack(side="left")
+
+        # Reconciliation banner (row 1 — grid_forget'd when not needed)
+        self.pkg_reconcile_var = tk.StringVar(value="")
+        self.pkg_reconcile_label = tk.Label(
+            body, textvariable=self.pkg_reconcile_var,
+            bg="#FEF3C7", fg="#92400E", font=FONT_SMALL,
+            padx=10, pady=6, anchor="w", justify="left", wraplength=900,
+        )
+
+        # Patient summary — single horizontal strip across the full width (row 2)
+        summary_wrap = tk.Frame(
+            body, bg="#F8FAFC",
+            highlightbackground=COLOR_BORDER, highlightthickness=1,
+        )
+        summary_wrap.grid(row=2, column=0, sticky="ew", pady=(0, 8))
+        tk.Label(
+            summary_wrap, text="Patient summary",
+            bg="#F8FAFC", fg=COLOR_MUTED, font=FONT_SMALL,
+        ).pack(anchor="w", padx=10, pady=(6, 0))
+        self.pkg_summary_var = tk.StringVar(value="Select a patient to see package summary.")
+        tk.Label(
+            summary_wrap, textvariable=self.pkg_summary_var,
+            bg="#F8FAFC", fg=COLOR_TEXT, font=FONT_BASE,
+            justify="left", anchor="w",
+        ).pack(fill="x", anchor="w", padx=10, pady=(2, 6))
+
+        # Packages tree — full width (row 3, expands vertically)
+        tree_wrap = tk.Frame(body, bg=COLOR_BORDER, padx=1, pady=1)
+        tree_wrap.grid(row=3, column=0, sticky="nsew")
+        tree_wrap.rowconfigure(0, weight=1)
+        tree_wrap.columnconfigure(0, weight=1)
+        body.rowconfigure(3, weight=1)
+        cols = ("name", "status", "used", "remaining", "value", "deferred", "expires")
+        self.pkg_tree = ttk.Treeview(
+            tree_wrap, columns=cols, show="headings", height=10, selectmode="browse",
+        )
+        # Tighter widths so the row fits typical panel sizes; horizontal
+        # scrollbar below handles narrow windows so no column is ever clipped.
+        for col, title, w, anchor, stretch, minw in [
+            ("name",      "Package",  200, "w",      True,  140),
+            ("status",    "Status",    80, "center", False,  70),
+            ("used",      "Used",      50, "center", False,  46),
+            ("remaining", "Left",      50, "center", False,  46),
+            ("value",     "$/visit",   80, "e",      False,  72),
+            ("deferred",  "Deferred",  95, "e",      False,  86),
+            ("expires",   "Expires",  100, "center", False,  90),
+        ]:
+            self.pkg_tree.heading(col, text=title)
+            self.pkg_tree.column(col, width=w, anchor=anchor, stretch=stretch, minwidth=minw)
+        pkg_vsb = ttk.Scrollbar(tree_wrap, orient="vertical", command=self.pkg_tree.yview)
+        pkg_hsb = ttk.Scrollbar(tree_wrap, orient="horizontal", command=self.pkg_tree.xview)
+        self.pkg_tree.configure(yscrollcommand=pkg_vsb.set, xscrollcommand=pkg_hsb.set)
+        self.pkg_tree.grid(row=0, column=0, sticky="nsew")
+        pkg_vsb.grid(row=0, column=1, sticky="ns")
+        pkg_hsb.grid(row=1, column=0, sticky="ew")
+        self.pkg_tree.bind("<Double-Button-1>", lambda _e: self._open_selected_package_detail())
+
+        # Per-row actions (row 4)
+        pkg_actions = tk.Frame(body, bg=COLOR_CARD)
+        pkg_actions.grid(row=4, column=0, sticky="ew", pady=(8, 0))
+        self.btn_pkg_detail = tk.Button(
+            pkg_actions, text="View detail", command=self._open_selected_package_detail,
+            bg=COLOR_CARD, fg=COLOR_ACCENT, relief="flat",
+            font=FONT_BASE_BOLD,
+            highlightthickness=1, highlightbackground=COLOR_BORDER,
+            padx=10, pady=4, cursor="hand2", state="disabled",
+        )
+        self.btn_pkg_detail.pack(side="left", padx=(0, 6))
+        self.btn_pkg_refund = tk.Button(
+            pkg_actions, text="Refund…", command=self._refund_selected_package,
+            bg=COLOR_RED, fg="#FFFFFF", relief="flat",
+            font=FONT_BASE_BOLD, padx=10, pady=4, cursor="hand2",
+            state="disabled",
+        )
+        self.btn_pkg_refund.pack(side="left", padx=(0, 6))
+        self.btn_pkg_cancel = tk.Button(
+            pkg_actions, text="Cancel (forfeit)", command=self._cancel_selected_package,
+            bg=COLOR_CARD, fg=COLOR_RED, relief="flat",
+            font=FONT_BASE,
+            highlightthickness=1, highlightbackground=COLOR_BORDER,
+            padx=10, pady=4, cursor="hand2", state="disabled",
+        )
+        self.btn_pkg_cancel.pack(side="left")
+
+        self.pkg_tree.bind("<<TreeviewSelect>>", lambda _e: self._on_pkg_tree_select())
+
+    def _refresh_packages_panel(self) -> None:
+        # Tree contents
+        if not hasattr(self, "pkg_tree"):
+            return
+        self.pkg_tree.delete(*self.pkg_tree.get_children())
+        folder = (self.active_patient or {}).get("folder") or ""
+        if not folder:
+            self.pkg_summary_var.set("Select a patient on Documents first.")
+            self.btn_pkg_sell.configure(state="disabled")
+            self._set_pkg_row_buttons(False)
+            self.pkg_reconcile_label.grid_forget()
+            return
+
+        # Hide Sell / Post Visit / Take Payment buttons on PI-only patients
+        # (Package deals are out of scope for PI cases by design).
+        is_pi = determine_payer_mode(folder) == "pi"
+        self.btn_pkg_sell.configure(state="disabled" if is_pi else "normal")
+        if hasattr(self, "btn_sell_package"):
+            self.btn_sell_package.configure(state="disabled" if is_pi else "normal")
+
+        # Reconciliation banner
+        rec = reconcile_pending_operations(folder)
+        if not rec.get("ok"):
+            parts = []
+            if rec.get("orphan_redemptions"):
+                parts.append(
+                    f"{len(rec['orphan_redemptions'])} package redemption(s) without "
+                    "matching cash-ledger adjustment"
+                )
+            if rec.get("orphan_adjustments"):
+                parts.append(
+                    f"{len(rec['orphan_adjustments'])} ledger adjustment(s) without "
+                    "matching package redemption"
+                )
+            if rec.get("stale_journal"):
+                parts.append("a write-ahead journal entry from a prior incomplete operation")
+            msg = (
+                "⚠ Reconciliation: detected "
+                + "; ".join(parts)
+                + ". Open the affected packages in View detail to inspect."
+            )
+            self.pkg_reconcile_var.set(msg)
+            self.pkg_reconcile_label.grid(row=1, column=0, sticky="ew", pady=(0, 6))
+        else:
+            self.pkg_reconcile_label.grid_forget()
+
+        # Patient summary — horizontal one-liner so dollar values are never truncated.
+        # Math is COMPLETELY isolated from cash math: these numbers come only from
+        # packages.json (purchases, payments, redemptions, refunds), never from
+        # cash_ledger.json or pi_ledger.json.
+        events = load_package_log(folder).get("events") or []
+        agg = aggregate_revenue(events)
+        active_count = sum(1 for s in states_for_patient(events) if is_redeemable(s))
+        all_states = states_for_patient(events)
+        unpaid_count = sum(
+            1 for s in all_states if float(s.get("purchase_balance_due") or 0.0) > 0.01
+        )
+        summary = (
+            f"Active: {active_count}   ·   "
+            f"Contracted: ${agg['package_contracted']:,.2f}   ·   "
+            f"Collected: ${agg['package_collections']:,.2f}   ·   "
+            f"Owed: ${agg['package_outstanding']:,.2f}   ·   "
+            f"Earned: ${agg['package_earned']:,.2f}   ·   "
+            f"Refunded: ${agg['package_refunded']:,.2f}   ·   "
+            f"Deferred: ${agg['package_deferred']:,.2f}"
+        )
+        if is_pi:
+            summary += "      (PI patient — package sales disabled)"
+        self.pkg_summary_var.set(summary)
+
+        # Enable Post Visit / Take Payment based on patient + visit state.
+        self._update_package_action_buttons(
+            folder=folder,
+            is_pi=is_pi,
+            active_count=active_count,
+            unpaid_count=unpaid_count,
+        )
+
+        states = states_for_patient(events)
+        if not states:
+            self.pkg_tree.insert(
+                "", "end",
+                values=("(No packages yet — click Sell package to start)", "", "", "", "", "", ""),
+            )
+            self._set_pkg_row_buttons(False)
+            return
+        for s in states:
+            purchase = s.get("purchase") or {}
+            iid = s.get("package_id") or ""
+            self.pkg_tree.insert(
+                "", "end", iid=iid,
+                values=(
+                    purchase.get("name") or "",
+                    status_label(s.get("status") or ""),
+                    int(s.get("visits_used") or 0),
+                    int(s.get("visits_remaining") or 0),
+                    f"${float(purchase.get('prorated_value_per_visit') or 0):,.2f}",
+                    f"${float(s.get('deferred_revenue_remaining') or 0):,.2f}",
+                    purchase.get("expiration_date") or "—",
+                ),
+            )
+        self._set_pkg_row_buttons(False)
+
+    def _update_package_action_buttons(
+        self,
+        *,
+        folder: str = "",
+        is_pi: bool | None = None,
+        active_count: int | None = None,
+        unpaid_count: int | None = None,
+    ) -> None:
+        """
+        Update Post Visit / Take Payment button enabled state without rebuilding
+        the package tree. Safe to call from _select_visit on every click.
+        """
+        if not hasattr(self, "btn_pkg_post_visit"):
+            return
+        folder = folder or ((self.active_patient or {}).get("folder") or "")
+        if not folder:
+            self.btn_pkg_post_visit.configure(state="disabled")
+            self.btn_pkg_take_payment.configure(state="disabled")
+            return
+        if is_pi is None:
+            is_pi = determine_payer_mode(folder) == "pi"
+        if active_count is None or unpaid_count is None:
+            events = load_package_log(folder).get("events") or []
+            all_states = states_for_patient(events)
+            if active_count is None:
+                active_count = sum(1 for s in all_states if is_redeemable(s))
+            if unpaid_count is None:
+                unpaid_count = sum(
+                    1 for s in all_states
+                    if float(s.get("purchase_balance_due") or 0.0) > 0.01
+                )
+        visit_path = (self._selected_visit or {}).get("path") or ""
+        can_post = (
+            not is_pi
+            and active_count > 0
+            and bool(visit_path)
+            and not is_encounter_posted(folder, visit_path)
+            and not is_encounter_pi_posted(folder, visit_path)
+            and not is_encounter_package_posted(folder, visit_path)
+        )
+        self.btn_pkg_post_visit.configure(state="normal" if can_post else "disabled")
+        self.btn_pkg_take_payment.configure(
+            state="normal" if (not is_pi and unpaid_count > 0) else "disabled"
+        )
+
+    def _set_pkg_row_buttons(self, enabled: bool) -> None:
+        state = "normal" if enabled else "disabled"
+        for btn in (self.btn_pkg_detail, self.btn_pkg_refund, self.btn_pkg_cancel):
+            btn.configure(state=state)
+
+    def _on_pkg_tree_select(self) -> None:
+        sel = self.pkg_tree.selection()
+        if not sel:
+            self._set_pkg_row_buttons(False)
+        else:
+            self._set_pkg_row_buttons(True)
+        if self._billing_panel == "packages":
+            self._refresh_receipt_preview()
+        else:
+            self._update_pdf_button()
+
+    def _selected_package_id(self) -> str:
+        sel = self.pkg_tree.selection()
+        return sel[0] if sel else ""
+
+    def _sell_package_from_panel(self) -> None:
+        self._open_sell_package_dialog(initial_objectives="")
+
+    def _sell_package_from_cash(self) -> None:
+        if not self.active_patient or not self.active_patient.get("folder"):
+            return
+        folder = self.active_patient.get("folder") or ""
+        if determine_payer_mode(folder) == "pi":
+            messagebox.showinfo(
+                "PI patient",
+                "Package deals are for cash patients. PI cases use the PI ledger.",
+                parent=self,
+            )
+            return
+        self._open_sell_package_dialog()
+
+    def _open_sell_package_dialog(
+        self,
+        *,
+        initial_visits: int | None = None,
+        initial_objectives: str = "",
+    ) -> None:
+        if not self.active_patient or not self.active_patient.get("folder"):
+            messagebox.showinfo("Sell package", "Select a patient first.", parent=self)
+            return
+        folder = self.active_patient.get("folder") or ""
+        SellPackageDialog(
+            self,
+            patient_root=folder,
+            patient_name=self._patient_display_name(),
+            recorded_by=self.current_user,
+            initial_visits=initial_visits,
+            initial_objectives=initial_objectives,
+            on_save=lambda _r: self._after_package_change(),
+        )
+
+    def _after_package_change(self) -> None:
+        self._refresh_account_balance()
+        self._refresh_packages_panel()
+        if self._current_encounter:
+            # Re-render to pick up new suggested redemptions / status
+            self._select_visit(self._selected_visit or {})
+
+    def _open_catalog_editor(self) -> None:
+        CatalogEditorDialog(self)
+
+    def _open_selected_package_detail(self) -> None:
+        pid = self._selected_package_id()
+        if not pid or not self.active_patient:
+            return
+        folder = self.active_patient.get("folder") or ""
+        PackageDetailDialog(
+            self,
+            patient_root=folder,
+            package_id=pid,
+            patient_name=self._patient_display_name(),
+        )
+
+    def _post_visit_to_package(self) -> None:
+        """
+        Package deals checkout — Post Visit. Applies the currently selected
+        visit to an active package (redeems one visit). Does NOT touch the
+        cash ledger; package money is fully separate from cash money.
+        """
+        if not self.active_patient:
+            messagebox.showinfo("Post Visit", "Select a patient on Documents first.", parent=self)
+            return
+        if not self._selected_visit or not self._selected_visit.get("path"):
+            messagebox.showinfo(
+                "Post Visit",
+                "Select a visit in the Encounters list (left side) first.",
+                parent=self,
+            )
+            return
+        folder = self.active_patient.get("folder") or ""
+        path = self._selected_visit.get("path") or ""
+        if determine_payer_mode(folder) == "pi":
+            messagebox.showinfo(
+                "PI patient",
+                "Package deals are for cash patients. PI cases use the PI ledger.",
+                parent=self,
+            )
+            return
+        PackagePostVisitDialog(
+            self,
+            patient_root=folder,
+            exam_path=path,
+            patient_name=self._patient_display_name(),
+            recorded_by=self.current_user,
+            on_save=lambda _r: self._after_package_visit_post(),
+        )
+
+    def _after_package_visit_post(self) -> None:
+        # Refresh the encounters list so the row picks up its new purple tint
+        # + Pckg$ badge, then re-render the selected visit and the package panel.
+        keep_path = (self._selected_visit or {}).get("path") or ""
+        self._load_visits()
+        self._reselect_visit_by_path(keep_path)
+        self._refresh_packages_panel()
+        self._refresh_receipt_preview()
+
+    def _take_package_payment(self) -> None:
+        """
+        Package deals checkout — Take Payment. Records a payment toward a
+        package's outstanding contract balance. Writes only to packages.json
+        (no cash-ledger impact).
+        """
+        if not self.active_patient:
+            messagebox.showinfo("Take Payment", "Select a patient on Documents first.", parent=self)
+            return
+        folder = self.active_patient.get("folder") or ""
+        if determine_payer_mode(folder) == "pi":
+            messagebox.showinfo(
+                "PI patient",
+                "Package deals are for cash patients. PI cases use the PI ledger.",
+                parent=self,
+            )
+            return
+        preselect = self._selected_package_id()
+        PackageTakePaymentDialog(
+            self,
+            patient_root=folder,
+            patient_name=self._patient_display_name(),
+            recorded_by=self.current_user,
+            preselect_package_id=preselect,
+            on_save=lambda _r: self._after_package_change(),
+        )
+
+    def _refund_selected_package(self) -> None:
+        pid = self._selected_package_id()
+        if not pid or not self.active_patient:
+            return
+        folder = self.active_patient.get("folder") or ""
+        RefundPackageDialog(
+            self,
+            patient_root=folder,
+            package_id=pid,
+            recorded_by=self.current_user,
+            on_save=lambda _r: self._after_package_change(),
+        )
+
+    def _cancel_selected_package(self) -> None:
+        pid = self._selected_package_id()
+        if not pid or not self.active_patient:
+            return
+        folder = self.active_patient.get("folder") or ""
+        CancelPackageDialog(
+            self,
+            patient_root=folder,
+            package_id=pid,
+            recorded_by=self.current_user,
+            on_save=lambda _r: self._after_package_change(),
+        )
+
+    def _build_wip_panel(
+        self, parent: tk.Frame, title: str, *, stream: str = ""
+    ) -> None:
         card, body = make_card(parent, title)
         card.pack(fill="both", expand=True)
         tk.Label(
@@ -735,7 +1310,33 @@ class BillingPage(tk.Frame):
             bg=COLOR_CARD,
             fg=COLOR_MUTED,
             font=FONT_BASE,
-        ).pack(pady=(0, 24))
+        ).pack(pady=(0, 16))
+        # Each WIP stream still gets its own Receipt folder button so the user
+        # can drop EOBs / membership statements into the right subfolder
+        # manually, and so the structure is visible from day one.
+        if stream:
+            btn = tk.Button(
+                body,
+                text="Receipt folder",
+                command=lambda s=stream: self._show_receipt_folder(stream=s),
+                bg=COLOR_CARD,
+                fg=COLOR_ACCENT,
+                relief="flat",
+                font=FONT_BASE_BOLD,
+                highlightthickness=1,
+                highlightbackground=COLOR_BORDER,
+                padx=14,
+                pady=6,
+                cursor="hand2",
+                state="disabled",
+            )
+            btn.pack(pady=(0, 24))
+            # Track these so they enable/disable with the patient selection.
+            attr = f"btn_{stream}_receipt_folder_wip"
+            setattr(self, attr, btn)
+            if not hasattr(self, "_wip_receipt_buttons"):
+                self._wip_receipt_buttons = []
+            self._wip_receipt_buttons.append(btn)
 
     def _set_receipt_preview_text(self, text: str) -> None:
         self.receipt_preview.configure(state="normal")
@@ -745,9 +1346,11 @@ class BillingPage(tk.Frame):
         self._update_pdf_button()
 
     def _pdf_kind_for_preview(self) -> str:
-        """'cash', 'pi', or '' when PDF generation isn't available."""
+        """'cash', 'pi', 'package', or '' when PDF generation isn't available."""
         if not self.active_patient or not self.active_patient.get("folder"):
             return ""
+        if self._billing_panel == "packages":
+            return "package" if self._selected_package_id() else ""
         if self._billing_panel == "pi":
             if determine_payer_mode(self.active_patient.get("folder")) != "pi":
                 return ""
@@ -771,6 +1374,9 @@ class BillingPage(tk.Frame):
         elif kind == "pi":
             self.btn_create_pdf.configure(state="normal")
             self.pdf_hint_var.set("PI case statement PDF")
+        elif kind == "package":
+            self.btn_create_pdf.configure(state="normal")
+            self.pdf_hint_var.set("Package contract PDF")
         else:
             self.btn_create_pdf.configure(state="disabled")
             self.pdf_hint_var.set("")
@@ -781,7 +1387,8 @@ class BillingPage(tk.Frame):
             messagebox.showinfo(
                 "Create PDF",
                 "Nothing to print yet.\n"
-                "Post this visit (cash) or switch to the PI ledger after posting visits.",
+                "Post a visit (cash), switch to the PI ledger, "
+                "or select a package on the Package deals tab.",
             )
             return
         folder = self.active_patient.get("folder") or ""
@@ -793,6 +1400,19 @@ class BillingPage(tk.Frame):
                     patient_name=name,
                     posted=self._posted_encounter or {},
                     payment=self._receipt_payment_for_current_visit(),
+                )
+            elif kind == "package":
+                pid = self._selected_package_id()
+                if not pid:
+                    messagebox.showinfo(
+                        "Create PDF",
+                        "Select a package row first.",
+                    )
+                    return
+                out = build_contract_pdf(
+                    folder,
+                    patient_name=name,
+                    package_id=pid,
                 )
             else:
                 out = build_pi_case_to_receipts(folder, patient_name=name)
@@ -826,10 +1446,177 @@ class BillingPage(tk.Frame):
         if not self.active_patient:
             self._set_receipt_preview_text("Select a patient on Documents first.")
             return
+        if self._billing_panel == "packages":
+            self._refresh_package_document_preview()
+            return
         if self._billing_panel == "pi":
             self._refresh_pi_document_preview()
             return
         self._refresh_cash_receipt_preview()
+
+    def _refresh_package_document_preview(self) -> None:
+        folder = (self.active_patient or {}).get("folder") or ""
+        if not folder:
+            self._set_receipt_preview_text("No patient folder.")
+            return
+        pid = self._selected_package_id()
+        if not pid:
+            self._set_receipt_preview_text(
+                "Select a package row above to preview its details.\n\n"
+                "When a package is selected this pane will show the plan name, "
+                "pricing, visits used vs. remaining, deferred revenue, expiration, "
+                "covered CPT codes, therapeutic objectives, and the full event log "
+                "(redemptions, refunds, cancellations).\n\n"
+                "Use  Create PDF  (above right) to generate the signed Contract PDF.\n"
+                "For the itemized Statement of Account PDF, click  View detail  "
+                "below the tree."
+            )
+            return
+        events = all_events_for_package(folder, pid)
+        if not events:
+            self._set_receipt_preview_text(
+                "No events found for the selected package.\n"
+                "(The row may belong to a stale view — click Refresh.)"
+            )
+            return
+        state = compute_package_state(events)
+        purchase = state.get("purchase") or {}
+
+        line_w = 56
+        sep = "-" * line_w
+        title_sep = "=" * line_w
+
+        lines: list[str] = []
+        plan_name = (purchase.get("name") or "Package").upper()
+        lines.append(f"PACKAGE  {plan_name}")
+        lines.append(title_sep)
+        lines.append(f"Patient        : {self._patient_display_name()}")
+        lines.append(f"Package ID     : {pid}")
+        lines.append(f"Status         : {status_label(state.get('status') or '')}")
+        lines.append(f"Purchase date  : {purchase.get('purchase_date') or '—'}")
+        lines.append(f"Expiration     : {purchase.get('expiration_date') or '(none)'}")
+        exp_days = state.get("expires_in_days")
+        if isinstance(exp_days, int):
+            if exp_days < 0:
+                lines.append(f"                 (expired {abs(exp_days)} day(s) ago)")
+            else:
+                lines.append(f"                 ({exp_days} day(s) until expiration)")
+        lines.append("")
+
+        lines.append("PRICING")
+        lines.append(sep)
+        lines.append(
+            f"Purchase price : ${float(purchase.get('purchase_price') or 0):>10,.2f}"
+        )
+        lines.append(
+            f"Per-visit value: ${float(purchase.get('prorated_value_per_visit') or 0):>10,.2f}"
+        )
+        lines.append(
+            f"Visits granted : {int(purchase.get('total_visits') or 0):>10d}"
+        )
+        lines.append("")
+
+        # PAYMENT STATUS — explicit "what was paid", "what's still owed", and a
+        # clear PAID IN FULL / BALANCE REMAINING marker so the user never has
+        # to derive it from purchase_price minus amount_paid.
+        amount_paid = float(state.get("amount_paid") or 0)
+        balance_due = float(state.get("purchase_balance_due") or 0)
+        lines.append("PAYMENT STATUS")
+        lines.append(sep)
+        lines.append(f"Amount paid    : ${amount_paid:>10,.2f}")
+        if state.get("is_paid_in_full"):
+            lines.append(f"Balance        : {'PAID IN FULL':>11s}")
+        else:
+            lines.append(
+                f"Balance        : ${balance_due:>10,.2f}   (remaining to pay)"
+            )
+        lines.append("")
+
+        lines.append("USAGE  (derived from event log)")
+        lines.append(sep)
+        lines.append(
+            f"Visits used    : {int(state.get('visits_used') or 0):>10d}"
+        )
+        lines.append(
+            f"Visits left    : {int(state.get('visits_remaining') or 0):>10d}"
+        )
+        lines.append(
+            f"Earned revenue : ${float(state.get('value_recognized') or 0):>10,.2f}"
+        )
+        lines.append(
+            f"Refunds paid   : ${float(state.get('refund_paid') or 0):>10,.2f}"
+        )
+        lines.append(
+            f"Deferred       : ${float(state.get('deferred_revenue_remaining') or 0):>10,.2f}"
+        )
+        lines.append("")
+
+        whitelist = purchase.get("cpt_whitelist") or []
+        if whitelist:
+            lines.append("COVERED CPT CODES")
+            lines.append(sep)
+            lines.append("  " + ", ".join(str(c) for c in whitelist))
+            lines.append("")
+
+        objectives = (purchase.get("therapeutic_objectives") or "").strip()
+        if objectives:
+            lines.append("THERAPEUTIC OBJECTIVES")
+            lines.append(sep)
+            for chunk in objectives.splitlines() or [objectives]:
+                lines.append(chunk)
+            lines.append("")
+
+        redemptions = state.get("redemptions") or []
+        if redemptions:
+            lines.append(f"VISITS USED  ({len(redemptions)})")
+            lines.append(sep)
+            for r in redemptions:
+                dos = r.get("date_of_service") or (r.get("timestamp") or "")[:10] or "—"
+                cpts_list = r.get("cpts_redeemed") or []
+                if cpts_list:
+                    cpt_label = "CPTs " + ", ".join(str(c) for c in cpts_list)
+                else:
+                    cpt_label = f"CPT {r.get('cpt_redeemed') or ''}".rstrip()
+                val = float(r.get("value_recognized") or 0)
+                lines.append(
+                    f"  {dos:<12}  {cpt_label:<28}  recognized ${val:>8,.2f}"
+                )
+            lines.append("")
+
+        refunds = state.get("refunds") or []
+        if refunds:
+            lines.append(f"REFUNDS  ({len(refunds)})")
+            lines.append(sep)
+            for r in refunds:
+                dos = r.get("refund_date") or (r.get("timestamp") or "")[:10] or "—"
+                amt = float(r.get("amount") or 0)
+                strategy = r.get("refund_strategy") or "—"
+                method = r.get("method") or ""
+                lines.append(
+                    f"  {dos:<12}  ${amt:>10,.2f}  via {method:<8}  ({strategy})"
+                )
+            lines.append("")
+
+        cancellations = state.get("cancellations") or []
+        if cancellations:
+            lines.append(f"CANCELLATIONS  ({len(cancellations)})")
+            lines.append(sep)
+            for c in cancellations:
+                dos = (c.get("timestamp") or "")[:10] or "—"
+                reason = (c.get("reason") or c.get("memo") or "—").strip()
+                lines.append(f"  {dos:<12}  reason: {reason[:38]}")
+            lines.append("")
+
+        lines.append("---")
+        lines.append(
+            "Click  Create PDF  (above right) to generate the signed Contract PDF."
+        )
+        lines.append(
+            "Click  View detail (below tree) for the Statement of Account PDF "
+            "and full event inspector."
+        )
+
+        self._set_receipt_preview_text("\n".join(lines))
 
     def _refresh_cash_receipt_preview(self) -> None:
         if not self._selected_visit:
@@ -840,6 +1627,16 @@ class BillingPage(tk.Frame):
             return
         folder = self.active_patient.get("folder") or ""
         path = self._selected_visit.get("path") or ""
+        # Package-posted visits never appear on cash receipts (cash math is fully
+        # separate from package money). Tell the user so they don't think it's a bug.
+        if folder and path and is_encounter_package_posted(folder, path):
+            self._set_receipt_preview_text(
+                "This visit was posted to a Package Deal — it does not appear "
+                "on cash receipts.\n\n"
+                "Switch to the Package deals tab to view the package contract, "
+                "statement, and event log."
+            )
+            return
         posted = load_posted_encounter(folder, path) if folder and path else None
         if not posted or posted.get("status") != "posted":
             self._set_receipt_preview_text(
@@ -874,12 +1671,19 @@ class BillingPage(tk.Frame):
             stem = doc.path.stem
             if stem.startswith("receipt_"):
                 continue
+            # The preview pane only renders text. PDFs (cash/package/pi)
+            # are still listed in the Receipt folder dialog and openable
+            # there — they just can't be inlined here.
+            if doc.path.suffix.lower() != ".txt":
+                continue
             if stem.startswith(("settlement_", "pi_case_summary_", "pi_cover_sheet_")) or doc.kind in (
                 "export",
                 "packet",
             ):
                 try:
                     body = doc.path.read_text(encoding="utf-8")
+                except UnicodeDecodeError:
+                    continue  # fall through to the next candidate
                 except OSError as e:
                     self._set_receipt_preview_text(f"Could not read {doc.path.name}:\n{e}")
                     return
@@ -916,6 +1720,8 @@ class BillingPage(tk.Frame):
             self.balance_var.set("No patient selected — open Documents and select a patient")
             self._refresh_receipt_preview()
             self._set_receipt_folder_enabled()
+            if hasattr(self, "pkg_tree"):
+                self._refresh_packages_panel()
             return
         self.billing_for_var.set(f"Billing for: {self._patient_display_name()}")
         folder = self.active_patient.get("folder")
@@ -928,6 +1734,8 @@ class BillingPage(tk.Frame):
             self.pi_case_var.set("")
         self._refresh_receipt_preview()
         self._set_receipt_folder_enabled()
+        if hasattr(self, "pkg_tree"):
+            self._refresh_packages_panel()
         self._persist_shell_patient()
 
     def _set_receipt_folder_enabled(self) -> None:
@@ -935,6 +1743,13 @@ class BillingPage(tk.Frame):
         state = "normal" if folder else "disabled"
         self.btn_receipt_folder.configure(state=state)
         self.btn_pi_receipt_folder.configure(state=state)
+        if hasattr(self, "btn_pkg_receipt_folder"):
+            self.btn_pkg_receipt_folder.configure(state=state)
+        for btn in getattr(self, "_wip_receipt_buttons", []) or []:
+            try:
+                btn.configure(state=state)
+            except tk.TclError:
+                pass
 
     def _refresh_pi_header(self) -> None:
         folder = (self.active_patient or {}).get("folder") or ""
@@ -1027,23 +1842,43 @@ class BillingPage(tk.Frame):
         bg: str,
         *,
         border_color: str | None = None,
+        border_thickness: int | None = None,
     ) -> None:
         row.configure(bg=bg)
         if border_color is not None:
             row.configure(highlightbackground=border_color)
+        if border_thickness is not None:
+            row.configure(highlightthickness=border_thickness)
         self._paint_visit_row_widget(row, bg)
 
     def _highlight_selected_visit_rows(self) -> None:
+        """
+        Repaint every visit row to reflect whether it's the active selection.
+
+        Selection is now indicated ONLY by a thicker, bolder border — the
+        base background tint (which encodes posting status: yellow=cash,
+        purple=package, blue=PI, white=unposted) is preserved so the user
+        always sees the card's true posting state at a glance.
+        """
         selected_path = (self._selected_visit or {}).get("path") or ""
         for path, row in self._visit_row_by_path.items():
+            base_bg = getattr(row, "_row_base_bg", COLOR_VISIT_ROW)
             if path == selected_path:
                 self._paint_visit_row(
                     row,
-                    COLOR_VISIT_ROW_SELECTED,
-                    border_color=COLOR_VISIT_ROW_SELECTED_BORDER,
+                    base_bg,
+                    border_color=getattr(
+                        row, "_row_border_selected", COLOR_VISIT_ROW_BORDER_SELECTED,
+                    ),
+                    border_thickness=VISIT_ROW_BORDER_THICKNESS_SELECTED,
                 )
             else:
-                self._paint_visit_row(row, COLOR_VISIT_ROW, border_color=COLOR_BORDER)
+                self._paint_visit_row(
+                    row,
+                    base_bg,
+                    border_color=getattr(row, "_row_border", COLOR_BORDER),
+                    border_thickness=VISIT_ROW_BORDER_THICKNESS,
+                )
 
     def _load_visits(self) -> None:
         for w in self.enc_inner.winfo_children():
@@ -1081,35 +1916,91 @@ class BillingPage(tk.Frame):
         for visit in self._visits:
             self._make_visit_row(visit)
 
+    def _row_color_tier(
+        self, *, cash_posted: bool, package_posted: bool, pi_posted: bool
+    ) -> tuple[str, str, str, str]:
+        """
+        Return (base_bg, hover_bg, border_color, border_color_selected) for a
+        visit row based on which flow(s) it's posted to.
+
+        The selected-border color is a bolder variant of the tier border so the
+        active card always has a clearly thicker, darker outline regardless of
+        which money stream tinted its background. Package > PI > cash priority
+        for the background tint, but the row may show multiple badges if a
+        legacy visit was dual-posted.
+        """
+        if package_posted:
+            return (
+                COLOR_VISIT_ROW_PACKAGE,
+                COLOR_VISIT_ROW_PACKAGE_HOVER,
+                COLOR_VISIT_ROW_PACKAGE_BORDER,
+                COLOR_VISIT_ROW_PACKAGE_BORDER_SELECTED,
+            )
+        if pi_posted:
+            return (
+                COLOR_VISIT_ROW_PI,
+                COLOR_VISIT_ROW_PI_HOVER,
+                COLOR_VISIT_ROW_PI_BORDER,
+                COLOR_VISIT_ROW_PI_BORDER_SELECTED,
+            )
+        if cash_posted:
+            return (
+                COLOR_VISIT_ROW_CASH,
+                COLOR_VISIT_ROW_CASH_HOVER,
+                COLOR_VISIT_ROW_CASH_BORDER,
+                COLOR_VISIT_ROW_CASH_BORDER_SELECTED,
+            )
+        return (
+            COLOR_VISIT_ROW,
+            COLOR_VISIT_ROW_HOVER,
+            COLOR_BORDER,
+            COLOR_VISIT_ROW_BORDER_SELECTED,
+        )
+
     def _make_visit_row(self, visit: dict) -> None:
         visit_path = visit.get("path") or ""
+
+        cash_posted = False
+        pi_posted = False
+        package_posted = False
+        if self.active_patient and visit.get("path"):
+            folder = self.active_patient.get("folder") or ""
+            cash_posted = is_encounter_posted(folder, visit["path"])
+            pi_posted = is_encounter_pi_posted(folder, visit["path"])
+            package_posted = is_encounter_package_posted(folder, visit["path"])
+
+        base_bg, hover_bg, border_color, border_color_selected = self._row_color_tier(
+            cash_posted=cash_posted,
+            package_posted=package_posted,
+            pi_posted=pi_posted,
+        )
+
         row = tk.Frame(
             self.enc_inner,
-            bg=COLOR_VISIT_ROW,
-            highlightbackground=COLOR_BORDER,
-            highlightthickness=1,
+            bg=base_bg,
+            highlightbackground=border_color,
+            highlightthickness=VISIT_ROW_BORDER_THICKNESS,
             cursor="hand2",
         )
         row.pack(fill="x", padx=4, pady=4)
         if visit_path:
             self._visit_row_by_path[visit_path] = row
+        # Cache the row's "true" tier colors so hover / selection use them.
+        row._row_base_bg = base_bg                          # type: ignore[attr-defined]
+        row._row_hover_bg = hover_bg                        # type: ignore[attr-defined]
+        row._row_border = border_color                      # type: ignore[attr-defined]
+        row._row_border_selected = border_color_selected    # type: ignore[attr-defined]
 
         exam_name = visit.get("exam_name") or ""
         et = classify_exam_type(exam_name)
         type_color = COLOR_ACCENT if et == "initial" else COLOR_GREEN
-        cash_posted = False
-        pi_posted = False
-        if self.active_patient and visit.get("path"):
-            folder = self.active_patient.get("folder") or ""
-            cash_posted = is_encounter_posted(folder, visit["path"])
-            pi_posted = is_encounter_pi_posted(folder, visit["path"])
 
-        top = tk.Frame(row, bg=COLOR_VISIT_ROW)
+        top = tk.Frame(row, bg=base_bg)
         top.pack(pady=(6, 0))
         tk.Label(
             top,
             text=visit.get("exam_date") or "—",
-            bg=COLOR_VISIT_ROW,
+            bg=base_bg,
             fg=COLOR_TEXT,
             font=FONT_BASE_BOLD,
         ).pack(side="left")
@@ -1121,25 +2012,33 @@ class BillingPage(tk.Frame):
                 fg=COLOR_GREEN,
                 font=("Segoe UI", 8, "bold"),
             ).pack(side="left", padx=(6, 0))
+        if package_posted:
+            tk.Label(
+                top,
+                text=" Pckg$ ",
+                bg=COLOR_VISIT_ROW_PACKAGE_HOVER,
+                fg="#6B21A8",
+                font=("Segoe UI", 8, "bold"),
+            ).pack(side="left", padx=(6, 0))
         if pi_posted:
             tk.Label(
                 top,
                 text=" PI ",
-                bg="#EDE9FE",
-                fg="#7C3AED",
+                bg="#DBEAFE",
+                fg="#1D4ED8",
                 font=("Segoe UI", 8, "bold"),
             ).pack(side="left", padx=(6, 0))
         tk.Label(
             row,
             text=exam_name,
-            bg=COLOR_VISIT_ROW,
+            bg=base_bg,
             fg=type_color,
             font=FONT_BASE,
         ).pack(anchor="center", padx=8)
         tk.Label(
             row,
             text=visit.get("provider") or "—",
-            bg=COLOR_VISIT_ROW,
+            bg=base_bg,
             fg=COLOR_MUTED,
             font=FONT_SMALL,
         ).pack(anchor="center", padx=8, pady=(0, 6))
@@ -1151,18 +2050,19 @@ class BillingPage(tk.Frame):
             w.bind("<Button-1>", select)
 
         def hover_in(_e=None, r=row, p=visit_path):
+            # Hover only tints the background — the border (thin/thick + tier
+            # color) stays as `_highlight_selected_visit_rows` set it, so the
+            # active card never loses its bold border on hover.
             if (self._selected_visit or {}).get("path") != p:
-                self._paint_visit_row(r, COLOR_VISIT_ROW_HOVER)
+                self._paint_visit_row(r, r._row_hover_bg)  # type: ignore[attr-defined]
 
         def hover_out(_e=None, r=row, p=visit_path):
-            if (self._selected_visit or {}).get("path") == p:
-                self._paint_visit_row(
-                    r,
-                    COLOR_VISIT_ROW_SELECTED,
-                    border_color=COLOR_VISIT_ROW_SELECTED_BORDER,
-                )
-            else:
-                self._paint_visit_row(r, COLOR_VISIT_ROW, border_color=COLOR_BORDER)
+            # Restore the row's true tier-bg; leave border alone for the same
+            # reason — selection state is encoded purely in border thickness.
+            self._paint_visit_row(
+                r,
+                r._row_base_bg,  # type: ignore[attr-defined]
+            )
 
         row.bind("<Enter>", hover_in)
         row.bind("<Leave>", hover_out)
@@ -1181,7 +2081,23 @@ class BillingPage(tk.Frame):
         path = visit.get("path") or ""
         self._posted_encounter = load_posted_encounter(folder, path)
         self._posted_pi_encounter = load_pi_posted_encounter(folder, path)
-        if self._posted_pi_encounter:
+        self._posted_package_encounter = load_package_posted_encounter(folder, path)
+
+        # One-way tab follow: clicking a posted card switches the billing
+        # tab above to the flow that posted it (matches the card's color
+        # tier — package=purple > pi=blue > cash=yellow). Unposted/beige
+        # cards leave the current tab alone so the user keeps whatever
+        # checkout view they were working in.
+        if self._posted_package_encounter:
+            self._show_billing_panel("packages")
+        elif self._posted_pi_encounter:
+            self._show_billing_panel("pi")
+        elif self._posted_encounter:
+            self._show_billing_panel("cash")
+
+        if self._posted_package_encounter:
+            enc = self._posted_package_encounter
+        elif self._posted_pi_encounter:
             enc = self._posted_pi_encounter
         elif self._posted_encounter:
             enc = self._posted_encounter
@@ -1197,6 +2113,7 @@ class BillingPage(tk.Frame):
         self._current_encounter = enc
         self._render_encounter(enc)
         self._highlight_selected_visit_rows()
+        self._update_package_action_buttons()
 
     def _rebuild_selected(self) -> None:
         if not self._selected_visit or not self.active_patient:
@@ -1225,6 +2142,7 @@ class BillingPage(tk.Frame):
         self._current_encounter = None
         self._posted_encounter = None
         self._posted_pi_encounter = None
+        self._posted_package_encounter = None
         self.btn_post.configure(state="disabled")
         self.btn_pay.configure(state="disabled")
         self.btn_receipt.configure(state="disabled")
@@ -1235,11 +2153,148 @@ class BillingPage(tk.Frame):
         for w in self.totals_frame.winfo_children():
             w.destroy()
         self.lines_tree.delete(*self.lines_tree.get_children())
-        self.warnings_text.configure(state="normal")
-        self.warnings_text.delete("1.0", "end")
-        self.warnings_text.configure(state="disabled")
+        self._current_warnings = []
+        self._refresh_warnings_buttons()
         self.meta_var.set("Select an encounter to preview charges.")
         self._set_receipt_preview_text("Select a visit to preview a receipt.")
+
+    # ------------------------------------------------------------------
+    # On-demand "Review warnings" popup (replaces the old inline card)
+    # ------------------------------------------------------------------
+
+    def _make_review_warnings_button(
+        self,
+        parent: tk.Widget,
+        *,
+        side: str = "left",
+        padx: tuple[int, int] = (6, 0),
+        pady: int = 4,
+    ) -> tk.Button:
+        """
+        Build and register a "Review warnings" button. The button text +
+        background are kept in sync with the current encounter's warning
+        count by `_refresh_warnings_buttons()`, so any flow that hosts one
+        of these gets the same one-click access the old inline card gave.
+        """
+        btn = tk.Button(
+            parent,
+            text="Review warnings",
+            command=self._show_warnings_popup,
+            bg=COLOR_CARD,
+            fg=COLOR_ACCENT,
+            relief="flat",
+            font=FONT_BASE_BOLD,
+            highlightthickness=1,
+            highlightbackground=COLOR_BORDER,
+            padx=10,
+            pady=pady,
+            cursor="hand2",
+        )
+        btn.pack(side=side, padx=padx)
+        self._warnings_buttons.append(btn)
+        return btn
+
+    def _refresh_warnings_buttons(self) -> None:
+        """Sync every registered Review-warnings button to reflect count/level."""
+        count = len(self._current_warnings or [])
+        has_warn_level = any(
+            (w.get("level") or "info") == "warning"
+            for w in (self._current_warnings or [])
+        )
+        if count == 0:
+            label = "Review warnings"
+            bg = COLOR_CARD
+            fg = COLOR_ACCENT
+            border = COLOR_BORDER
+        else:
+            label = f"Review warnings ({count})"
+            # Yellow-tinted when there are warnings; soft amber for "warning"
+            # level, light cream for info-only.
+            bg = "#FEF3C7" if has_warn_level else "#FFFBEB"
+            fg = "#92400E" if has_warn_level else COLOR_TEXT
+            border = "#F59E0B" if has_warn_level else COLOR_BORDER
+        for btn in list(self._warnings_buttons):
+            try:
+                btn.configure(text=label, bg=bg, fg=fg, highlightbackground=border)
+            except tk.TclError:
+                # Button got destroyed (e.g., panel rebuilt) — drop it.
+                self._warnings_buttons.remove(btn)
+
+    def _show_warnings_popup(self) -> None:
+        """
+        Open a small modal showing the warnings for the current encounter.
+        Closes via Close button, the [X], or Escape.
+        """
+        win = tk.Toplevel(self)
+        win.title("Review warnings")
+        win.configure(bg=COLOR_CARD)
+        win.transient(self.winfo_toplevel())
+        win.geometry("560x340")
+        win.minsize(420, 240)
+
+        header = tk.Frame(win, bg=COLOR_CARD)
+        header.pack(fill="x", padx=14, pady=(14, 6))
+        tk.Label(
+            header,
+            text="Review warnings",
+            bg=COLOR_CARD,
+            fg=COLOR_TEXT,
+            font=FONT_TITLE,
+        ).pack(side="left")
+        count = len(self._current_warnings or [])
+        sub = "Ready for staff review." if count == 0 else f"{count} item(s) flagged for review."
+        tk.Label(
+            header,
+            text=sub,
+            bg=COLOR_CARD,
+            fg=COLOR_MUTED,
+            font=FONT_SMALL,
+        ).pack(side="left", padx=(10, 0))
+
+        body = tk.Frame(win, bg=COLOR_CARD)
+        body.pack(fill="both", expand=True, padx=14, pady=(0, 10))
+        text = tk.Text(
+            body,
+            wrap="word",
+            font=FONT_BASE,
+            bg="#FFFBEB",
+            fg=COLOR_TEXT,
+            relief="flat",
+            highlightthickness=1,
+            highlightbackground=COLOR_BORDER,
+        )
+        vsb = ttk.Scrollbar(body, orient="vertical", command=text.yview)
+        text.configure(yscrollcommand=vsb.set)
+        text.pack(side="left", fill="both", expand=True)
+        vsb.pack(side="right", fill="y")
+
+        if not self._current_warnings:
+            text.insert("end", "No warnings — ready for staff review.")
+        else:
+            for w in self._current_warnings:
+                level = w.get("level") or "info"
+                msg = w.get("message") or ""
+                prefix = "⚠ " if level == "warning" else "ℹ "
+                text.insert("end", prefix + msg + "\n")
+        text.configure(state="disabled")
+
+        btn_bar = tk.Frame(win, bg=COLOR_CARD)
+        btn_bar.pack(fill="x", padx=14, pady=(0, 14))
+        tk.Button(
+            btn_bar,
+            text="Close",
+            command=win.destroy,
+            bg=COLOR_ACCENT,
+            fg="#FFFFFF",
+            relief="flat",
+            font=FONT_BASE_BOLD,
+            padx=18,
+            pady=6,
+            cursor="hand2",
+        ).pack(side="right")
+
+        win.bind("<Escape>", lambda _e: win.destroy())
+        win.focus_set()
 
     def _render_encounter(self, enc: dict) -> None:
         for w in self.totals_frame.winfo_children():
@@ -1287,18 +2342,10 @@ class BillingPage(tk.Frame):
                 ),
             )
 
-        self.warnings_text.configure(state="normal")
-        self.warnings_text.delete("1.0", "end")
-        warnings = enc.get("warnings") or []
-        if not warnings:
-            self.warnings_text.insert("end", "No warnings — ready for staff review.")
-        else:
-            for w in warnings:
-                level = w.get("level") or "info"
-                msg = w.get("message") or ""
-                prefix = "⚠ " if level == "warning" else "ℹ "
-                self.warnings_text.insert("end", prefix + msg + "\n")
-        self.warnings_text.configure(state="disabled")
+        # Cache warnings for the on-demand "Review warnings" popup; refresh
+        # each per-flow button so its label/color reflects the current count.
+        self._current_warnings = list(enc.get("warnings") or [])
+        self._refresh_warnings_buttons()
 
         exam = enc.get("exam_name") or ""
         dos = enc.get("date_of_service") or "—"
@@ -1335,9 +2382,20 @@ class BillingPage(tk.Frame):
             self.btn_receipt.configure(state="disabled")
             self.btn_pay.configure(state="disabled")
             self.btn_post.configure(state="normal")
-            self.checkout_status_var.set(
-                "Post cash for same-day desk payment (PI patients can also use PI case ledger)."
-            )
+            suggestions = (enc.get("package_meta") or {}).get("suggested_redemptions") or []
+            if suggestions and not payer_pi:
+                cpts = ", ".join(s.get("cpt") or "" for s in suggestions)
+                self.checkout_status_var.set(
+                    f"Active package covers {len(suggestions)} line(s) "
+                    f"({cpts}) — you'll be prompted on Post cash."
+                )
+            else:
+                self.checkout_status_var.set(
+                    "Post cash for same-day desk payment (PI patients can also use PI case ledger)."
+                )
+        # Sell package button: only meaningful for non-PI patients with a folder
+        if hasattr(self, "btn_sell_package"):
+            self.btn_sell_package.configure(state="disabled" if payer_pi else "normal")
 
         if payer_pi:
             self._set_pi_buttons_enabled(True)
@@ -1379,10 +2437,25 @@ class BillingPage(tk.Frame):
             self.btn_pi_pay.configure(state="disabled")
 
     def _post_charges(self) -> None:
+        """
+        Cash checkout post. Cash math is fully separated from package money — if
+        the doctor wants this visit applied to a package, the user should use
+        Package deals → Post Visit instead.
+        """
         if not self.active_patient or not self._selected_visit:
             return
         folder = self.active_patient.get("folder") or ""
         path = self._selected_visit.get("path") or ""
+
+        # Refuse cash-post if visit is already package-posted (single-flow rule).
+        if is_encounter_package_posted(folder, path):
+            messagebox.showinfo(
+                "Already posted to package",
+                "This visit was already applied to a package deal. Each visit "
+                "posts to exactly one flow (cash, package, or PI).",
+            )
+            return
+
         force = False
         if determine_payer_mode(folder) == "pi":
             if not messagebox.askyesno(
@@ -1393,12 +2466,22 @@ class BillingPage(tk.Frame):
             ):
                 return
             force = True
+
+        self._finalize_post_charges(folder, path, force)
+
+    def _finalize_post_charges(
+        self,
+        folder: str,
+        path: str,
+        force: bool,
+    ) -> None:
         try:
             posted = post_encounter_to_cash_ledger(
                 patient_root=folder,
                 exam_path=path,
                 posted_by=self.current_user,
                 force_cash=force,
+                package_redemptions=None,  # cash is pure cash; use Package deals tab for redemptions
             )
         except ValueError as e:
             messagebox.showinfo("Cannot post", str(e))
@@ -1411,6 +2494,8 @@ class BillingPage(tk.Frame):
         self._render_encounter(posted)
         self._refresh_account_balance()
         self._refresh_pi_header()
+        if hasattr(self, "pkg_tree"):
+            self._refresh_packages_panel()
         self._load_visits()
         messagebox.showinfo(
             "Posted",
@@ -1474,9 +2559,25 @@ class BillingPage(tk.Frame):
             account_balance=bal,
             patient_root=folder,
         )
-        ReceiptDialog(self, text, on_save=lambda t: save_receipt_file(folder, t))
+        # One receipt per visit: key by encounter_id (or exam stem fallback) so
+        # re-saving overwrites the prior text receipt instead of accumulating.
+        unique_key = (enc.get("encounter_id") or "").strip()
+        if not unique_key:
+            unique_key = Path(enc.get("exam_path") or "").stem or ""
+        ReceiptDialog(
+            self, text,
+            on_save=lambda t: save_receipt_file(
+                folder, t, subfolder="cash", unique_key=unique_key,
+            ),
+        )
 
-    def _show_receipt_folder(self) -> None:
+    def _show_receipt_folder(self, stream: str = "") -> None:
+        """
+        Open the Receipt folder dialog. When `stream` is given (cash, package,
+        pi, insurance, membership) the dialog is scoped to ONLY that stream's
+        receipts and opens that subfolder when the user clicks Open in Explorer.
+        Pass stream="" to show everything (legacy unfiltered view).
+        """
         if not self.active_patient:
             messagebox.showinfo("Receipt folder", "Select a patient first.")
             return
@@ -1484,7 +2585,17 @@ class BillingPage(tk.Frame):
         if not folder:
             messagebox.showinfo("Receipt folder", "No patient folder is available.")
             return
-        ReceiptFolderDialog(self, folder, patient_name=self._patient_display_name())
+        # Make sure the 5 stream subfolders exist on disk so they show up when
+        # the user opens Explorer (even when a stream has no receipts yet).
+        try:
+            ensure_receipt_subfolders(folder)
+        except OSError:
+            pass
+        ReceiptFolderDialog(
+            self, folder,
+            patient_name=self._patient_display_name(),
+            stream=stream,
+        )
 
     def _post_pi_charges(self) -> None:
         if not self.active_patient or not self._selected_visit:
@@ -2067,13 +3178,24 @@ class PaymentDialog(tk.Toplevel):
 
 
 class ReceiptFolderDialog(tk.Toplevel):
-    def __init__(self, parent: tk.Misc, patient_root: str, *, patient_name: str = ""):
+    def __init__(
+        self,
+        parent: tk.Misc,
+        patient_root: str,
+        *,
+        patient_name: str = "",
+        stream: str = "",
+    ):
         super().__init__(parent)
         self.patient_root = patient_root
+        self.patient_name = patient_name
+        self.stream = (stream or "").strip().lower()
         self._docs: list[BillingDocument] = []
-        title = "Billing documents"
-        if patient_name:
-            title = f"Billing documents — {patient_name}"
+        # Tailor the title + description to the active stream so the user is
+        # certain they're looking at only that money stream's receipts.
+        stream_label = STREAM_DISPLAY_LABELS.get(self.stream, "")
+        title_prefix = f"{stream_label} receipts" if stream_label else "Billing documents"
+        title = f"{title_prefix} — {patient_name}" if patient_name else title_prefix
         self.title(title)
         self.geometry("720x520")
         self.minsize(560, 420)
@@ -2081,9 +3203,20 @@ class ReceiptFolderDialog(tk.Toplevel):
 
         bar = tk.Frame(self, bg=COLOR_BG_APP)
         bar.pack(fill="x", padx=8, pady=8)
+        desc_map = {
+            "cash": "Cash receipts (text + PDF) — one per posted cash visit.",
+            "package": "Package contracts and statements — kept separate from cash math.",
+            "pi": "PI case summaries, settlement receipts, and attorney packet copies.",
+            "insurance": "Insurance EOBs and remittance receipts (reserved for future).",
+            "membership": "Membership receipts and renewal statements (reserved for future).",
+        }
+        desc = desc_map.get(
+            self.stream,
+            "Cash receipts, PI settlements, case summaries, and attorney packet copies.",
+        )
         tk.Label(
             bar,
-            text="Cash receipts, PI settlements, case summaries, and attorney packet copies.",
+            text=desc,
             bg=COLOR_BG_APP,
             fg=COLOR_MUTED,
             font=FONT_SMALL,
@@ -2175,12 +3308,18 @@ class ReceiptFolderDialog(tk.Toplevel):
 
     def _reload_list(self) -> None:
         self.listbox.delete(0, "end")
-        self._docs = list_billing_documents(self.patient_root)
+        streams = (self.stream,) if self.stream else None
+        self._docs = list_billing_documents(self.patient_root, streams=streams)
         self.preview.configure(state="normal")
         self.preview.delete("1.0", "end")
         self.preview.configure(state="disabled")
         if not self._docs:
-            self.listbox.insert("end", "(No billing documents yet)")
+            empty_msg = (
+                f"(No {STREAM_DISPLAY_LABELS.get(self.stream, '').lower()} receipts yet)"
+                if self.stream
+                else "(No billing documents yet)"
+            )
+            self.listbox.insert("end", empty_msg)
             self.preview.configure(state="normal")
             self.preview.insert(
                 "1.0",
@@ -2204,17 +3343,52 @@ class ReceiptFolderDialog(tk.Toplevel):
     def _load_preview(self, index: int) -> None:
         if index < 0 or index >= len(self._docs):
             return
-        path = self._docs[index].path
-        try:
-            text = path.read_text(encoding="utf-8")
-        except OSError as e:
-            text = f"Could not read document:\n{e}"
+        doc = self._docs[index]
+        path = doc.path
+        # Preferred preview source: a .txt sidecar attached to the document
+        # (cash receipts carry one so the row can show the receipt text inline
+        # even though the canonical file is a .pdf).
+        text = ""
+        if doc.text_sidecar is not None and doc.text_sidecar.is_file():
+            try:
+                text = doc.text_sidecar.read_text(encoding="utf-8")
+            except UnicodeDecodeError:
+                text = ""
+            except OSError as e:
+                text = f"Could not read receipt text:\n{e}"
+        if not text:
+            if path.suffix.lower() == ".pdf":
+                # PDF without a text sidecar — show a friendly placeholder so the
+                # user double-clicks (or hits Open) to view it in their PDF viewer.
+                if path.exists():
+                    text = (
+                        "(PDF document — preview not available in this pane.)\n\n"
+                        "Double-click the row, or click  Open selected,  to open\n"
+                        "the PDF in your default viewer."
+                    )
+                else:
+                    text = (
+                        "(PDF not generated yet.)\n\n"
+                        "Double-click the row, or click  Open selected,  to\n"
+                        "generate the PDF and open it in your default viewer.\n"
+                        "It will be saved into the Cash receipts folder."
+                    )
+            else:
+                try:
+                    text = path.read_text(encoding="utf-8")
+                except UnicodeDecodeError:
+                    text = (
+                        "(Binary or non-UTF-8 document — preview not available.)\n\n"
+                        "Click  Open  to view it in its default application."
+                    )
+                except OSError as e:
+                    text = f"Could not read document:\n{e}"
         self.preview.configure(state="normal")
         self.preview.delete("1.0", "end")
-        self.preview.insert("1.0", f"{self._docs[index].label}\n{'=' * 42}\n\n{text}")
+        self.preview.insert("1.0", f"{doc.label}\n{'=' * 42}\n\n{text}")
         self.preview.configure(state="disabled")
 
-    def _selected_path(self) -> Path | None:
+    def _selected_doc(self) -> "BillingDocument | None":
         if not self._docs:
             return None
         sel = self.listbox.curselection()
@@ -2223,13 +3397,47 @@ class ReceiptFolderDialog(tk.Toplevel):
         idx = sel[0]
         if idx < 0 or idx >= len(self._docs):
             return None
-        return self._docs[idx].path
+        return self._docs[idx]
+
+    def _selected_path(self) -> Path | None:
+        doc = self._selected_doc()
+        return doc.path if doc else None
 
     def _open_selected(self) -> None:
-        path = self._selected_path()
-        if not path:
+        doc = self._selected_doc()
+        if not doc:
             messagebox.showinfo("Receipt folder", "Select a receipt from the list.", parent=self)
             return
+        path = doc.path
+        # Cash entries lazy-generate their PDF on first open: the .txt sidecar
+        # is the source of truth and the .pdf is "printed" only when needed.
+        if path.suffix.lower() == ".pdf" and not path.exists():
+            # Lazy-generate on first open. Cash and Package each have their own
+            # generator that knows how to rebuild the PDF from authoritative
+            # storage (encounter sidecar / package event log).
+            try:
+                if doc.stream == "cash":
+                    from billing_pdf import ensure_cash_receipt_pdf
+                    path = ensure_cash_receipt_pdf(
+                        self.patient_root,
+                        path,
+                        patient_name=self.patient_name or "",
+                        text_sidecar=doc.text_sidecar,
+                    )
+                elif doc.stream == "package":
+                    from package_pdf import ensure_package_pdf
+                    path = ensure_package_pdf(
+                        self.patient_root,
+                        path,
+                        patient_name=self.patient_name or "",
+                    )
+            except Exception as e:
+                messagebox.showerror(
+                    "Open receipt",
+                    f"Could not generate PDF:\n\n{e}",
+                    parent=self,
+                )
+                return
         try:
             os.startfile(str(path.resolve()))  # type: ignore[attr-defined]
         except OSError as e:
@@ -2237,7 +3445,9 @@ class ReceiptFolderDialog(tk.Toplevel):
 
     def _open_folder(self) -> None:
         try:
-            open_receipts_folder(self.patient_root)
+            # When the dialog is scoped to a stream, jump the user straight to
+            # that subfolder so they land in the right place in Explorer.
+            open_receipts_folder(self.patient_root, subfolder=self.stream or "")
         except OSError as e:
             messagebox.showerror("Receipt folder", f"Could not open folder:\n\n{e}", parent=self)
 

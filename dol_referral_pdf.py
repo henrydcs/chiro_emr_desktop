@@ -18,13 +18,18 @@ import os
 from typing import Iterable
 
 try:
-    from reportlab.pdfgen import canvas as pdf_canvas
+    from reportlab.pdfgen import canvas as pdf_canvas  # noqa: F401  (kept for callers/type hints)
     from reportlab.lib.pagesizes import LETTER
     from reportlab.lib.units import inch
     from reportlab.lib import colors
     REPORTLAB_OK = True
 except Exception:
     REPORTLAB_OK = False
+
+# Reuse the shared NumberedCanvas factory so this PDF gets the same
+# bottom-right "Page N of M" footer as cash receipts, package contracts,
+# statements, etc.
+from billing_pdf import _new_pdf_canvas
 
 
 _MONTH_NAMES = [
@@ -300,7 +305,7 @@ def build_dol_referral_log_pdf(
     page_w, page_h = LETTER
     margin = 0.5 * inch
 
-    c = pdf_canvas.Canvas(out_path, pagesize=LETTER)
+    c = _new_pdf_canvas(out_path, pagesize=LETTER)
     c.setTitle("Doctors on Liens — New Patient Referral Log")
     c.setAuthor("Chiro EMR")
 
