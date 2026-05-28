@@ -75,6 +75,40 @@ def determine_payer_mode(patient_root: str | Path | None) -> str:
     return "cash"
 
 
+# Billable health (non-PI, non-self-pay) policies — used for Insurance tab routing.
+_HEALTH_INSURANCE_TYPES = frozenset(
+    {"health", "medicare", "medicaid", "workers_comp"},
+)
+
+
+def patient_has_health_insurance(patient_root: str | Path | None) -> bool:
+    """True when the patient has an active non-PI, non-cash insurance policy."""
+    if not patient_root:
+        return False
+    policies = load_patient_policies(patient_root)
+    today = datetime.now().date()
+    for pol in policies:
+        itype = (pol.get("insurance_type") or "").strip().lower()
+        if itype in _PI_TYPES or itype == "cash":
+            continue
+        if itype not in _HEALTH_INSURANCE_TYPES and itype != "other":
+            continue
+        term = (pol.get("termination_date") or "").strip()
+        if term:
+            expired = False
+            for fmt in ("%Y-%m-%d", "%m/%d/%Y", "%m-%d-%Y"):
+                try:
+                    if datetime.strptime(term[:10], fmt).date() < today:
+                        expired = True
+                    break
+                except ValueError:
+                    continue
+            if expired:
+                continue
+        return True
+    return False
+
+
 # ---------------------------------------------------------------------------
 # CPT parsing (mirrors plan_pdf conventions)
 # ---------------------------------------------------------------------------

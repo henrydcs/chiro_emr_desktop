@@ -344,6 +344,87 @@ def post_encounter_to_cash_ledger(
     return posted
 
 
+def post_insurance_copay_checkout(
+    *,
+    patient_root: str | os.PathLike,
+    exam_path: str | Path,
+    copay_amount: float,
+    claim_id: str = "",
+    payer_name: str = "",
+    posted_by: str = "",
+) -> dict:
+    """
+    Post only the insurance patient-responsibility amount to the cash ledger
+    (not the full cash fee schedule). Used when primary billing is insurance
+    and the desk collects the EOB copay/coinsurance today.
+    """
+    exam_path = str(Path(exam_path).resolve())
+    if is_encounter_posted(patient_root, exam_path):
+        raise ValueError(
+            "This visit is already on the cash ledger. "
+            "Use Collect copay to apply a payment to the existing balance."
+        )
+    amt = round(float(copay_amount or 0), 2)
+    if amt <= 0:
+        raise ValueError("Copay amount must be greater than zero.")
+
+    shadow = load_shadow_encounter(patient_root, exam_path)
+    if not shadow:
+        shadow = build_and_save_shadow(patient_root=patient_root, exam_path=exam_path)
+
+    enc_id = shadow.get("encounter_id") or f"enc_{uuid.uuid4().hex[:12]}"
+    now = datetime.now().isoformat(timespec="seconds")
+    payer_label = (payer_name or "Insurance").strip()
+    memo = f"Insurance patient copay · {payer_label}"
+    if claim_id:
+        memo += f" · {claim_id}"
+
+    posted = dict(shadow)
+    posted["encounter_id"] = enc_id
+    posted["status"] = "posted"
+    posted["phase"] = 2
+    posted["posted_at"] = now
+    posted["posted_by"] = posted_by
+    posted["fee_schedule_used"] = "insurance_copay"
+    posted["amount_charged"] = amt
+    posted["insurance_copay_checkout"] = True
+    posted["insurance_claim_id"] = claim_id or ""
+    posted["lines"] = [
+        {
+            "line_id": "ins_copay",
+            "cpt_code": "INS-COPAY",
+            "description": memo,
+            "units": 1,
+            "amount": amt,
+            "fees": {"cash": amt},
+            "status": "posted",
+        }
+    ]
+    save_posted_encounter(patient_root, posted)
+
+    ledger = load_cash_ledger(patient_root)
+    ledger.setdefault("entries", []).append(
+        {
+            "id": f"le_{uuid.uuid4().hex[:12]}",
+            "type": "charge",
+            "encounter_id": enc_id,
+            "exam_path": exam_path,
+            "date_of_service": posted.get("date_of_service") or "",
+            "amount": amt,
+            "posted_at": now,
+            "memo": memo,
+            "memo_kind": "insurance_copay",
+            "insurance_claim_id": claim_id or "",
+        }
+    )
+    save_cash_ledger(patient_root, ledger)
+
+    shadow["status"] = "posted"
+    shadow["posted_at"] = now
+    save_shadow_encounter(patient_root, shadow)
+    return posted
+
+
 def record_payment(
     *,
     patient_root: str | os.PathLike,

@@ -3,10 +3,11 @@ from __future__ import annotations
 
 import tkinter as tk
 import os
+from datetime import datetime
 from pathlib import Path
-from tkinter import messagebox, ttk
+from tkinter import messagebox, simpledialog, ttk
 
-from billing_engine import classify_exam_type, determine_payer_mode
+from billing_engine import classify_exam_type, determine_payer_mode, patient_has_health_insurance
 from billing_case_export import save_case_exports
 from closeout_dialog import CloseoutDialog
 from billing_ledger import (
@@ -49,6 +50,13 @@ from billing_pdf import (
     build_cash_receipt_to_receipts,
     build_pi_case_to_receipts,
 )
+try:
+    from insurance_pdf import build_insurance_eob_pdf, build_insurance_statement_pdf
+    _INSURANCE_PDF_OK = _BILLING_PDF_OK
+except Exception:
+    _INSURANCE_PDF_OK = False
+    build_insurance_eob_pdf = None  # type: ignore
+    build_insurance_statement_pdf = None  # type: ignore
 from billing_storage import load_or_refresh_shadow_encounter
 from package_pdf import build_contract_pdf
 from fee_schedule_dialog import FeeScheduleDialog
@@ -78,6 +86,45 @@ from package_storage import (
     reconcile_pending_operations,
 )
 from pi_case_dialog import PiCaseEditorDialog
+from insurance_engine import (
+    appeal_claim,
+    build_ar_aging_report_text,
+    change_claim_status,
+    claim_events,
+    claim_postings,
+    insurance_copay_outstanding_for_claim,
+    create_claim_from_encounter,
+    create_correction_or_void_claim,
+    denial_appeal_queue,
+    derive_claim_states,
+    get_claim_state,
+    link_patient_resp_to_cash,
+    mark_claim_denied,
+    post_payer_payment,
+    refresh_claim_snapshot_from_encounter,
+    insurance_balance_for_visit,
+    insurance_copay_outstanding_for_claim,
+    insurance_patient_balance_total,
+)
+from insurance_billing_storage import (
+    ensure_insurance_files,
+)
+from insurance_receipt import (
+    build_insurance_claim_summary_text,
+    save_insurance_claim_summary_receipt,
+    save_insurance_copay_receipt,
+    save_insurance_eob_receipt,
+)
+from insurance_dialogs import (
+    InsuranceArReportDialog,
+    InsuranceAuthorizationDialog,
+    InsuranceClaimAuthDialog,
+    InsuranceCorrectionDialog,
+    InsuranceDenialQueueDialog,
+    InsurancePostPayerDialog,
+    open_insurance_copay_checkout,
+)
+from insurance_catalog_dialog import InsuranceCatalogDialog
 
 # Reuse shell palette (import after shell defines constants — no circular class deps)
 from shell_app import (
@@ -172,6 +219,7 @@ class BillingPage(tk.Frame):
         # inline Review warnings card has been retired).
         self._current_warnings: list[dict] = []
         self._warnings_buttons: list[tk.Button] = []
+        self._insurance_states: list[dict] = []
 
         self._build()
         self.bind("<Map>", lambda _e: self._on_map())
@@ -183,6 +231,17 @@ class BillingPage(tk.Frame):
         self.active_patient = patient
         self._refresh_patient_header()
         self._load_visits()
+        folder = (patient or {}).get("folder") or ""
+        pid = (patient or {}).get("patient_id") or ""
+        if (
+            folder
+            and pid
+            and pid != self._last_insurance_auto_patient_id
+            and patient_has_health_insurance(folder)
+            and determine_payer_mode(folder) != "pi"
+        ):
+            self._last_insurance_auto_patient_id = pid
+            self._show_billing_panel("insurance")
 
     def _sync_patient_from_shell(self) -> None:
         keep_path = (self._selected_visit or {}).get("path") or ""
@@ -756,7 +815,7 @@ class BillingPage(tk.Frame):
         tk.Frame(pi_frame, bg=COLOR_BG_APP).pack(fill="both", expand=True)
 
         insurance_frame = self._make_billing_panel_shell(panel_host)
-        self._build_wip_panel(insurance_frame, "Insurance billing", stream="insurance")
+        self._build_insurance_panel(insurance_frame)
         tk.Frame(insurance_frame, bg=COLOR_BG_APP).pack(fill="both", expand=True)
 
         packages_frame = self._make_billing_panel_shell(panel_host)
@@ -1295,6 +1354,758 @@ class BillingPage(tk.Frame):
             on_save=lambda _r: self._after_package_change(),
         )
 
+    def _build_insurance_panel(self, parent: tk.Frame) -> None:
+        card, body = make_card(parent, "Insurance billing", "Claims queue · posting · COB")
+        card.pack(fill="both", expand=True)
+        body.columnconfigure(0, weight=1)
+        body.rowconfigure(2, weight=1)
+
+        actions = tk.Frame(body, bg=COLOR_CARD)
+        actions.grid(row=0, column=0, sticky="ew", pady=(0, 8))
+        self.btn_ins_claim = tk.Button(
+            actions,
+            text="Create claim",
+            command=self._ins_create_claim_from_selected,
+            bg=COLOR_ACCENT,
+            fg="#FFFFFF",
+            relief="flat",
+            font=FONT_BASE_BOLD,
+            padx=12,
+            pady=6,
+            cursor="hand2",
+            state="disabled",
+        )
+        self.btn_ins_claim.pack(side="left", padx=(0, 8))
+        self.btn_ins_auths = tk.Button(
+            actions,
+            text="Authorizations",
+            command=self._ins_manage_authorizations,
+            bg=COLOR_CARD,
+            fg=COLOR_ACCENT,
+            relief="flat",
+            font=FONT_BASE_BOLD,
+            highlightthickness=1,
+            highlightbackground=COLOR_BORDER,
+            padx=10,
+            pady=6,
+            cursor="hand2",
+            state="disabled",
+        )
+        self.btn_ins_auths.pack(side="left", padx=(0, 6))
+        self.btn_ins_line_auth = tk.Button(
+            actions,
+            text="Line auth",
+            command=self._ins_edit_claim_line_auth,
+            bg=COLOR_CARD,
+            fg=COLOR_ACCENT,
+            relief="flat",
+            font=FONT_BASE_BOLD,
+            highlightthickness=1,
+            highlightbackground=COLOR_BORDER,
+            padx=10,
+            pady=6,
+            cursor="hand2",
+            state="disabled",
+        )
+        self.btn_ins_line_auth.pack(side="left", padx=(0, 6))
+        self.btn_ins_catalog = tk.Button(
+            actions,
+            text="Catalog",
+            command=self._ins_open_catalog,
+            bg=COLOR_CARD,
+            fg=COLOR_ACCENT,
+            relief="flat",
+            font=FONT_BASE,
+            highlightthickness=1,
+            highlightbackground=COLOR_BORDER,
+            padx=10,
+            pady=6,
+            cursor="hand2",
+        )
+        self.btn_ins_catalog.pack(side="left", padx=(0, 6))
+        self.btn_ins_ready = tk.Button(
+            actions,
+            text="Ready",
+            command=lambda: self._ins_change_status("ready_to_submit"),
+            bg="#0EA5E9",
+            fg="#FFFFFF",
+            relief="flat",
+            font=FONT_BASE_BOLD,
+            padx=10,
+            pady=6,
+            cursor="hand2",
+            state="disabled",
+        )
+        self.btn_ins_ready.pack(side="left", padx=(0, 6))
+        self.btn_ins_submit = tk.Button(
+            actions,
+            text="Submit",
+            command=lambda: self._ins_change_status("submitted"),
+            bg="#2563EB",
+            fg="#FFFFFF",
+            relief="flat",
+            font=FONT_BASE_BOLD,
+            padx=10,
+            pady=6,
+            cursor="hand2",
+            state="disabled",
+        )
+        self.btn_ins_submit.pack(side="left", padx=(0, 6))
+        self.btn_ins_post = tk.Button(
+            actions,
+            text="Post payer",
+            command=self._ins_post_payer_payment,
+            bg="#7C3AED",
+            fg="#FFFFFF",
+            relief="flat",
+            font=FONT_BASE_BOLD,
+            padx=10,
+            pady=6,
+            cursor="hand2",
+            state="disabled",
+        )
+        self.btn_ins_post.pack(side="left", padx=(0, 6))
+        self.btn_ins_copay = tk.Button(
+            actions,
+            text="Collect copay",
+            command=self._ins_collect_copay,
+            bg="#059669",
+            fg="#FFFFFF",
+            relief="flat",
+            font=FONT_BASE_BOLD,
+            padx=10,
+            pady=6,
+            cursor="hand2",
+            state="disabled",
+        )
+        self.btn_ins_copay.pack(side="left", padx=(0, 6))
+        self.btn_ins_correct = tk.Button(
+            actions,
+            text="Correct/void",
+            command=self._ins_correction_void,
+            bg=COLOR_CARD,
+            fg=COLOR_ACCENT,
+            relief="flat",
+            font=FONT_BASE_BOLD,
+            highlightthickness=1,
+            highlightbackground=COLOR_BORDER,
+            padx=10,
+            pady=6,
+            cursor="hand2",
+            state="disabled",
+        )
+        self.btn_ins_correct.pack(side="left", padx=(0, 6))
+        self.btn_ins_denials = tk.Button(
+            actions,
+            text="Denials",
+            command=self._ins_show_denial_queue,
+            bg=COLOR_CARD,
+            fg="#B45309",
+            relief="flat",
+            font=FONT_BASE_BOLD,
+            highlightthickness=1,
+            highlightbackground=COLOR_BORDER,
+            padx=10,
+            pady=6,
+            cursor="hand2",
+            state="disabled",
+        )
+        self.btn_ins_denials.pack(side="left", padx=(0, 6))
+        self.btn_ins_ar = tk.Button(
+            actions,
+            text="A/R report",
+            command=self._ins_show_ar_report,
+            bg=COLOR_CARD,
+            fg=COLOR_ACCENT,
+            relief="flat",
+            font=FONT_BASE_BOLD,
+            highlightthickness=1,
+            highlightbackground=COLOR_BORDER,
+            padx=10,
+            pady=6,
+            cursor="hand2",
+            state="disabled",
+        )
+        self.btn_ins_ar.pack(side="left", padx=(0, 6))
+        self.btn_ins_timeline = tk.Button(
+            actions,
+            text="Timeline",
+            command=self._ins_show_timeline,
+            bg=COLOR_CARD,
+            fg=COLOR_ACCENT,
+            relief="flat",
+            font=FONT_BASE_BOLD,
+            highlightthickness=1,
+            highlightbackground=COLOR_BORDER,
+            padx=10,
+            pady=6,
+            cursor="hand2",
+            state="disabled",
+        )
+        self.btn_ins_timeline.pack(side="left", padx=(0, 6))
+        self.btn_ins_refresh = tk.Button(
+            actions,
+            text="Refresh",
+            command=self._refresh_insurance_panel,
+            bg=COLOR_CARD,
+            fg=COLOR_TEXT,
+            relief="flat",
+            font=FONT_BASE,
+            highlightthickness=1,
+            highlightbackground=COLOR_BORDER,
+            padx=10,
+            pady=6,
+            cursor="hand2",
+        )
+        self.btn_ins_refresh.pack(side="left", padx=(0, 8))
+        self.btn_ins_receipt_folder = tk.Button(
+            actions,
+            text="Receipt folder",
+            command=lambda: self._show_receipt_folder(stream="insurance"),
+            bg=COLOR_CARD,
+            fg=COLOR_ACCENT,
+            relief="flat",
+            font=FONT_BASE_BOLD,
+            highlightthickness=1,
+            highlightbackground=COLOR_BORDER,
+            padx=14,
+            pady=6,
+            cursor="hand2",
+            state="disabled",
+        )
+        self.btn_ins_receipt_folder.pack(side="left")
+
+        self.ins_status_var = tk.StringVar(value="Select a visit and click Create claim.")
+        self.ins_balance_var = tk.StringVar(value="")
+        status_row = tk.Frame(body, bg=COLOR_CARD)
+        status_row.grid(row=1, column=0, sticky="ew", pady=(0, 8))
+        tk.Label(
+            status_row,
+            textvariable=self.ins_status_var,
+            bg=COLOR_CARD,
+            fg=COLOR_MUTED,
+            font=FONT_SMALL,
+        ).pack(anchor="w")
+        tk.Label(
+            status_row,
+            textvariable=self.ins_balance_var,
+            bg=COLOR_CARD,
+            fg="#B45309",
+            font=FONT_BASE_BOLD,
+        ).pack(anchor="w", pady=(4, 0))
+
+        tree_wrap = tk.Frame(body, bg=COLOR_CARD)
+        tree_wrap.grid(row=2, column=0, sticky="nsew")
+        tree_wrap.rowconfigure(0, weight=1)
+        tree_wrap.columnconfigure(0, weight=1)
+        cols = ("claim", "status", "cob", "payer", "dos", "charged", "payer_paid", "patient_resp", "updated")
+        self.ins_tree = ttk.Treeview(
+            tree_wrap,
+            columns=cols,
+            show="headings",
+            selectmode="browse",
+            height=10,
+        )
+        for col, title, w in [
+            ("claim", "Claim ID", 160),
+            ("status", "Status", 110),
+            ("cob", "COB", 70),
+            ("payer", "Payer", 140),
+            ("dos", "DOS", 90),
+            ("charged", "Charged", 90),
+            ("payer_paid", "Payer Paid", 90),
+            ("patient_resp", "Patient Resp", 100),
+            ("updated", "Updated", 130),
+        ]:
+            self.ins_tree.heading(col, text=title)
+            self.ins_tree.column(col, width=w, anchor="w" if col in ("claim", "payer", "updated") else "center")
+        ins_vsb = ttk.Scrollbar(tree_wrap, orient="vertical", command=self.ins_tree.yview)
+        self.ins_tree.configure(yscrollcommand=ins_vsb.set)
+        self.ins_tree.grid(row=0, column=0, sticky="nsew")
+        ins_vsb.grid(row=0, column=1, sticky="ns")
+        self.ins_tree.bind("<<TreeviewSelect>>", lambda _e: self._on_insurance_tree_select())
+        self.ins_tree.bind("<Double-Button-1>", lambda _e: self._ins_show_timeline())
+        self._pending_insurance_patient_resp: float | None = None
+        self._pending_insurance_claim_id: str = ""
+        self._last_insurance_auto_patient_id: str = ""
+
+    def _selected_insurance_claim_id(self) -> str:
+        if not hasattr(self, "ins_tree"):
+            return ""
+        sel = self.ins_tree.selection()
+        if not sel:
+            return ""
+        return str(self.ins_tree.item(sel[0], "text") or "")
+
+    def _selected_insurance_state(self) -> dict | None:
+        cid = self._selected_insurance_claim_id()
+        if not cid:
+            return None
+        for st in self._insurance_states:
+            if (st.get("claim_id") or "") == cid:
+                return st
+        return None
+
+    def _refresh_insurance_panel(self) -> None:
+        if not hasattr(self, "ins_tree"):
+            return
+        self.ins_tree.delete(*self.ins_tree.get_children())
+        self._insurance_states = []
+        folder = (self.active_patient or {}).get("folder") or ""
+        patient_id = (self.active_patient or {}).get("patient_id") or ""
+        if not folder:
+            self.ins_status_var.set("Select a patient first.")
+            self._update_insurance_buttons()
+            return
+        try:
+            ensure_insurance_files(folder, patient_id=patient_id)
+            states = derive_claim_states(folder)
+        except Exception as e:
+            self.ins_status_var.set(f"Insurance load failed: {e}")
+            self._update_insurance_buttons()
+            return
+        self._insurance_states = states
+        for st in states:
+            snap = st.get("snapshot") or {}
+            tots = st.get("totals") or {}
+            cob = snap.get("cob_level") or "primary"
+            payer = ((snap.get("policy_snapshot") or {}).get("carrier_name") or st.get("payer_id") or "—")
+            dos = snap.get("date_of_service") or "—"
+            self.ins_tree.insert(
+                "",
+                "end",
+                text=st.get("claim_id") or "",
+                values=(
+                    st.get("claim_id") or "",
+                    st.get("status") or "",
+                    cob,
+                    payer,
+                    dos,
+                    f"${float(tots.get('charged') or 0):,.2f}",
+                    f"${float(tots.get('payer_paid') or 0):,.2f}",
+                    f"${float(tots.get('patient_resp') or 0):,.2f}",
+                    st.get("updated_at") or "",
+                ),
+            )
+        if states:
+            self.ins_status_var.set(f"{len(states)} insurance claim(s).")
+        else:
+            self.ins_status_var.set("No claims yet. Select a visit, then Create claim.")
+        self._update_insurance_buttons()
+        if self._billing_panel == "insurance":
+            self._refresh_receipt_preview()
+
+    def _update_insurance_buttons(self) -> None:
+        folder = (self.active_patient or {}).get("folder") or ""
+        selected_state = self._selected_insurance_state()
+        can_patient = bool(folder)
+        can_create = bool(can_patient and self._selected_visit)
+        if hasattr(self, "btn_ins_claim"):
+            self.btn_ins_claim.configure(state="normal" if can_create else "disabled")
+        if hasattr(self, "btn_ins_receipt_folder"):
+            self.btn_ins_receipt_folder.configure(state="normal" if can_patient else "disabled")
+        if hasattr(self, "btn_ins_auths"):
+            self.btn_ins_auths.configure(state="normal" if can_patient else "disabled")
+        if hasattr(self, "btn_ins_denials"):
+            self.btn_ins_denials.configure(state="normal" if can_patient else "disabled")
+        if hasattr(self, "btn_ins_ar"):
+            self.btn_ins_ar.configure(state="normal" if can_patient else "disabled")
+        self._refresh_insurance_balance_ui()
+        if not selected_state:
+            for name in (
+                "btn_ins_ready",
+                "btn_ins_submit",
+                "btn_ins_post",
+                "btn_ins_timeline",
+                "btn_ins_correct",
+                "btn_ins_line_auth",
+            ):
+                btn = getattr(self, name, None)
+                if btn:
+                    btn.configure(state="disabled")
+            return
+        status = selected_state.get("status") or "draft"
+        self.btn_ins_timeline.configure(state="normal")
+        self.btn_ins_ready.configure(state="normal" if status in ("draft", "rejected") else "disabled")
+        self.btn_ins_submit.configure(state="normal" if status in ("ready_to_submit",) else "disabled")
+        self.btn_ins_post.configure(
+            state="normal"
+            if status in ("submitted", "payer_acknowledged", "pending", "adjudicated", "paid_partial")
+            else "disabled"
+        )
+        self.btn_ins_correct.configure(
+            state="normal"
+            if status in ("submitted", "adjudicated", "paid_partial", "paid_full", "denied")
+            else "disabled"
+        )
+        self.btn_ins_line_auth.configure(
+            state="normal" if status in ("draft", "ready_to_submit") else "disabled"
+        )
+        copay_due = 0.0
+        if folder and selected_state:
+            copay_due = insurance_copay_outstanding_for_claim(
+                folder, selected_state.get("claim_id") or ""
+            )
+        if hasattr(self, "btn_ins_copay"):
+            self.btn_ins_copay.configure(
+                state="normal"
+                if copay_due > 0.01
+                and status
+                not in ("draft", "ready_to_submit", "voided")
+                else "disabled"
+            )
+
+    def _refresh_insurance_balance_ui(self) -> None:
+        if not hasattr(self, "ins_balance_var"):
+            return
+        folder = (self.active_patient or {}).get("folder") or ""
+        if not folder:
+            self.ins_balance_var.set("")
+            return
+        total = insurance_patient_balance_total(folder)
+        visit_out = 0.0
+        if self._selected_visit:
+            bal = insurance_balance_for_visit(
+                folder,
+                exam_path=self._selected_visit.get("path") or "",
+                encounter_id=(self._current_encounter or {}).get("encounter_id") or "",
+            )
+            visit_out = float(bal.get("patient_resp_outstanding") or 0.0)
+        if total <= 0.01 and visit_out <= 0.01:
+            self.ins_balance_var.set("Insurance patient balance: $0.00")
+        else:
+            self.ins_balance_var.set(
+                f"Insurance patient balance — all claims: ${total:,.2f}  |  "
+                f"this visit: ${visit_out:,.2f}"
+            )
+
+    def _ins_manage_authorizations(self) -> None:
+        if not self.active_patient:
+            return
+        folder = self.active_patient.get("folder") or ""
+        patient_id = self.active_patient.get("patient_id") or ""
+        InsuranceAuthorizationDialog(
+            self,
+            patient_root=folder,
+            patient_id=patient_id,
+            recorded_by=self.current_user,
+            on_saved=self._refresh_insurance_panel,
+        )
+
+    def _ins_open_catalog(self) -> None:
+        InsuranceCatalogDialog(self)
+
+    def _ins_edit_claim_line_auth(self) -> None:
+        st = self._selected_insurance_state()
+        if not st or not self.active_patient:
+            return
+        folder = self.active_patient.get("folder") or ""
+
+        def _after() -> None:
+            self._refresh_insurance_panel()
+            self._refresh_receipt_preview()
+
+        InsuranceClaimAuthDialog(
+            self,
+            patient_root=folder,
+            claim_state=get_claim_state(folder, st.get("claim_id") or "") or st,
+            recorded_by=self.current_user,
+            on_saved=_after,
+        )
+
+    def _on_insurance_tree_select(self) -> None:
+        self._update_insurance_buttons()
+        if self._billing_panel == "insurance":
+            self._refresh_receipt_preview()
+
+    def _ins_create_claim_from_selected(self) -> None:
+        if not self.active_patient or not self._selected_visit:
+            messagebox.showinfo("Insurance", "Select a patient and visit first.", parent=self)
+            return
+        folder = self.active_patient.get("folder") or ""
+        patient_id = self.active_patient.get("patient_id") or ""
+        try:
+            ensure_insurance_files(folder, patient_id=patient_id)
+            # Keep encounter preview in sync before claim snapshot creation.
+            path = self._selected_visit.get("path") or ""
+            enc = load_or_refresh_shadow_encounter(folder, path, force=True)
+            if enc:
+                self._current_encounter = enc
+            if not enc:
+                raise ValueError("Could not load encounter for claim creation.")
+            created = create_claim_from_encounter(
+                patient_root=folder,
+                patient_id=patient_id,
+                patient_name=self._patient_display_name(),
+                encounter=enc,
+                recorded_by=self.current_user,
+            )
+        except Exception as e:
+            messagebox.showerror("Insurance", str(e), parent=self)
+            return
+        self._refresh_insurance_panel()
+        self.ins_status_var.set(f"Created claim {(created.get('claim_id') or '')}.")
+
+    def _ins_change_status(self, to_status: str) -> None:
+        st = self._selected_insurance_state()
+        if not st or not self.active_patient:
+            return
+        folder = self.active_patient.get("folder") or ""
+        if to_status == "ready_to_submit":
+            try:
+                self._ins_refresh_claim_snapshot_from_visit(st)
+            except Exception as e:
+                messagebox.showerror("Insurance", str(e), parent=self)
+                return
+            st = get_claim_state(folder, st.get("claim_id") or "") or st
+            if messagebox.askyesno(
+                "Line authorizations",
+                "Review / edit authorization numbers on claim lines before scrub?",
+                parent=self,
+            ):
+                auth_dlg = InsuranceClaimAuthDialog(
+                    self,
+                    patient_root=folder,
+                    claim_state=st,
+                    recorded_by=self.current_user,
+                )
+                self.wait_window(auth_dlg)
+                st = get_claim_state(folder, st.get("claim_id") or "") or st
+        try:
+            change_claim_status(
+                patient_root=folder,
+                claim_id=st.get("claim_id") or "",
+                to_status=to_status,
+                recorded_by=self.current_user,
+            )
+        except Exception as e:
+            messagebox.showerror("Insurance", str(e), parent=self)
+            return
+        self._refresh_insurance_panel()
+
+    def _ins_refresh_claim_snapshot_from_visit(self, claim_state: dict | None = None) -> None:
+        st = claim_state or self._selected_insurance_state()
+        if not st or not self.active_patient or not self._selected_visit:
+            raise ValueError("Select a patient, visit, and claim first.")
+        folder = self.active_patient.get("folder") or ""
+        path = self._selected_visit.get("path") or ""
+        enc = load_or_refresh_shadow_encounter(folder, path, force=True)
+        if not enc:
+            raise ValueError("Could not load encounter for claim refresh.")
+        self._current_encounter = enc
+        refresh_claim_snapshot_from_encounter(
+            patient_root=folder,
+            claim_id=st.get("claim_id") or "",
+            encounter=enc,
+            recorded_by=self.current_user,
+        )
+
+    def _ins_post_payer_payment(self) -> None:
+        st = self._selected_insurance_state()
+        if not st or not self.active_patient:
+            return
+        folder = self.active_patient.get("folder") or ""
+        payer_hint = (st.get("snapshot") or {}).get("policy_snapshot") or {}
+        payer = (payer_hint.get("carrier_id") or st.get("payer_id") or "").strip()
+        default_amt = float((st.get("totals") or {}).get("charged") or 0.0)
+
+        def _do_post(form: dict) -> None:
+            try:
+                result = post_payer_payment(
+                    patient_root=folder,
+                    claim_id=st.get("claim_id") or "",
+                    payer_id=payer,
+                    posting_date=form.get("posting_date") or "",
+                    deposit_ref=form.get("deposit_ref") or "",
+                    payer_paid=float(form.get("payer_paid") or 0.0),
+                    patient_resp=float(form.get("patient_resp") or 0.0),
+                    recorded_by=self.current_user,
+                    denial_carc=form.get("denial_carc") or "",
+                    line_postings=form.get("line_postings"),
+                )
+            except Exception as e:
+                messagebox.showerror("Insurance", str(e), parent=self)
+                return
+            posting = result.get("posting_event") or {}
+            updated = get_claim_state(folder, st.get("claim_id") or "") or st
+            try:
+                save_insurance_eob_receipt(
+                    folder,
+                    patient_name=self._patient_display_name(),
+                    claim_state=updated,
+                    posting=posting,
+                )
+            except Exception:
+                pass
+            self._refresh_insurance_panel()
+            self._refresh_receipt_preview()
+            self._refresh_insurance_balance_ui()
+            pat_resp = float(form.get("patient_resp") or 0.0)
+            if result.get("secondary_claim"):
+                self.ins_status_var.set(
+                    "Posting saved. EOB saved. Secondary claim auto-generated (COB)."
+                )
+            else:
+                self.ins_status_var.set("Posting saved. EOB saved to Receipt folder.")
+            if pat_resp > 0.01:
+                self._ins_prompt_collect_patient_resp(updated, pat_resp)
+
+        InsurancePostPayerDialog(
+            self,
+            claim_state=st,
+            default_payer_paid=max(default_amt, 0.0),
+            on_complete=_do_post,
+        )
+
+    def _ins_prompt_collect_patient_resp(self, claim_state: dict, amount: float) -> None:
+        if messagebox.askyesno(
+            "Patient responsibility",
+            f"The payer EOB shows ${amount:,.2f} patient responsibility (copay/coinsurance).\n\n"
+            "Open insurance copay checkout now?\n"
+            "(Posts only the copay to cash — not the full visit fee schedule.)",
+            parent=self,
+        ):
+            self._ins_collect_copay(claim_state)
+
+    def _ins_collect_copay(self, claim_state: dict | None = None) -> None:
+        st = claim_state or self._selected_insurance_state()
+        if not st or not self.active_patient:
+            messagebox.showinfo("Insurance", "Select a claim with patient responsibility.", parent=self)
+            return
+        folder = self.active_patient.get("folder") or ""
+
+        def _done(result: dict) -> None:
+            pay_amt = float(result.get("amount") or 0)
+            mode = result.get("mode") or ""
+            try:
+                save_insurance_copay_receipt(
+                    folder,
+                    patient_name=self._patient_display_name(),
+                    claim_state=get_claim_state(folder, st.get("claim_id") or "") or st,
+                    amount=pay_amt,
+                    method=(result.get("payment") or {}).get("method") or "cash",
+                    payment_date=(result.get("payment") or {}).get("payment_date") or "",
+                )
+            except Exception:
+                pass
+            self._pending_insurance_patient_resp = None
+            self._pending_insurance_claim_id = ""
+            self._refresh_insurance_panel()
+            self._refresh_insurance_balance_ui()
+            self._load_visits()
+            path = (self._selected_visit or {}).get("path") or ""
+            if path:
+                self._reselect_visit_by_path(path)
+            if mode == "copay_checkout":
+                self.ins_status_var.set(
+                    f"Copay ${pay_amt:,.2f} collected (copay-only cash post + payment)."
+                )
+            else:
+                self.ins_status_var.set(
+                    f"Copay ${pay_amt:,.2f} collected on existing cash ledger."
+                )
+            messagebox.showinfo(
+                "Copay collected",
+                f"${pay_amt:,.2f} applied to claim {st.get('claim_id') or ''}.\n"
+                "Receipt saved under Insurance receipt folder.",
+                parent=self,
+            )
+
+        open_insurance_copay_checkout(
+            self,
+            patient_root=folder,
+            claim_state=st,
+            recorded_by=self.current_user,
+            on_complete=_done,
+        )
+
+    def _ins_correction_void(self) -> None:
+        st = self._selected_insurance_state()
+        if not st or not self.active_patient:
+            return
+        cid = st.get("claim_id") or ""
+
+        def _create(opts: dict) -> None:
+            folder = self.active_patient.get("folder") or ""
+            try:
+                evt = create_correction_or_void_claim(
+                    patient_root=folder,
+                    original_claim_id=cid,
+                    claim_frequency_code=opts.get("frequency_code") or "7",
+                    recorded_by=self.current_user,
+                    void_original=bool(opts.get("void_original")),
+                )
+            except Exception as e:
+                messagebox.showerror("Insurance", str(e), parent=self)
+                return
+            self._refresh_insurance_panel()
+            self.ins_status_var.set(f"Created follow-up claim {evt.get('claim_id') or ''}.")
+
+        InsuranceCorrectionDialog(self, claim_id=cid, on_complete=_create)
+
+    def _ins_show_denial_queue(self) -> None:
+        if not self.active_patient:
+            return
+        folder = self.active_patient.get("folder") or ""
+        rows = denial_appeal_queue(folder)
+
+        def _appeal(claim_id: str) -> None:
+            try:
+                appeal_claim(
+                    patient_root=folder,
+                    claim_id=claim_id,
+                    recorded_by=self.current_user,
+                )
+            except Exception as e:
+                messagebox.showerror("Insurance", str(e), parent=self)
+                return
+            self._refresh_insurance_panel()
+
+        def _deny(claim_id: str) -> None:
+            try:
+                mark_claim_denied(
+                    patient_root=folder,
+                    claim_id=claim_id,
+                    recorded_by=self.current_user,
+                )
+            except Exception as e:
+                messagebox.showerror("Insurance", str(e), parent=self)
+                return
+            self._refresh_insurance_panel()
+
+        InsuranceDenialQueueDialog(
+            self,
+            patient_root=folder,
+            rows=rows,
+            on_appeal=_appeal,
+            on_mark_denied=_deny,
+        )
+
+    def _ins_show_ar_report(self) -> None:
+        if not self.active_patient:
+            return
+        folder = self.active_patient.get("folder") or ""
+        text = build_ar_aging_report_text(folder, patient_name=self._patient_display_name())
+        InsuranceArReportDialog(self, report_text=text, patient_name=self._patient_display_name())
+
+    def _ins_show_timeline(self) -> None:
+        st = self._selected_insurance_state()
+        if not st or not self.active_patient:
+            return
+        folder = self.active_patient.get("folder") or ""
+        events = claim_events(folder, st.get("claim_id") or "")
+        if not events:
+            messagebox.showinfo("Insurance timeline", "No events found.", parent=self)
+            return
+        lines = [f"Claim: {st.get('claim_id')}", f"Status: {st.get('status')}", ""]
+        for ev in events:
+            lines.append(
+                f"{ev.get('timestamp') or ''}  {str(ev.get('type') or '').upper()}  "
+                f"{ev.get('from_status') or ''} -> {ev.get('to_status') or ev.get('status_after') or ''}  "
+                f"{ev.get('reason') or ''}"
+            )
+        messagebox.showinfo("Insurance timeline", "\n".join(lines), parent=self)
+
     def _build_wip_panel(
         self, parent: tk.Frame, title: str, *, stream: str = ""
     ) -> None:
@@ -1349,11 +2160,13 @@ class BillingPage(tk.Frame):
         self._update_pdf_button()
 
     def _pdf_kind_for_preview(self) -> str:
-        """'cash', 'pi', 'package', or '' when PDF generation isn't available."""
+        """'cash', 'pi', 'package', 'insurance', or '' when PDF generation isn't available."""
         if not self.active_patient or not self.active_patient.get("folder"):
             return ""
         if self._billing_panel == "packages":
             return "package" if self._selected_package_id() else ""
+        if self._billing_panel == "insurance":
+            return "insurance" if self._selected_insurance_state() else ""
         if self._billing_panel == "pi":
             if determine_payer_mode(self.active_patient.get("folder")) != "pi":
                 return ""
@@ -1380,6 +2193,23 @@ class BillingPage(tk.Frame):
         elif kind == "package":
             self.btn_create_pdf.configure(state="normal")
             self.pdf_hint_var.set("Package contract PDF")
+        elif kind == "insurance":
+            st = self._selected_insurance_state()
+            posts = []
+            if st and self.active_patient:
+                posts = claim_postings(
+                    self.active_patient.get("folder") or "",
+                    st.get("claim_id") or "",
+                )
+            if _INSURANCE_PDF_OK:
+                self.btn_create_pdf.configure(state="normal")
+                hint = "Insurance statement PDF"
+                if posts:
+                    hint = "Insurance EOB PDF"
+                self.pdf_hint_var.set(hint)
+            else:
+                self.btn_create_pdf.configure(state="disabled")
+                self.pdf_hint_var.set("Install reportlab for PDF")
         else:
             self.btn_create_pdf.configure(state="disabled")
             self.pdf_hint_var.set("")
@@ -1390,8 +2220,8 @@ class BillingPage(tk.Frame):
             messagebox.showinfo(
                 "Create PDF",
                 "Nothing to print yet.\n"
-                "Post a visit (cash), switch to the PI ledger, "
-                "or select a package on the Package deals tab.",
+                "Post a visit (cash), select an insurance claim, "
+                "switch to the PI ledger, or select a package.",
             )
             return
         folder = self.active_patient.get("folder") or ""
@@ -1417,6 +2247,21 @@ class BillingPage(tk.Frame):
                     patient_name=name,
                     package_id=pid,
                 )
+            elif kind == "insurance":
+                st = self._selected_insurance_state()
+                if not st or not build_insurance_statement_pdf:
+                    messagebox.showinfo("Create PDF", "Select an insurance claim first.")
+                    return
+                cid = st.get("claim_id") or ""
+                posts = claim_postings(folder, cid)
+                if posts and build_insurance_eob_pdf:
+                    out = build_insurance_eob_pdf(
+                        folder, patient_name=name, claim_id=cid, posting=posts[-1]
+                    )
+                else:
+                    out = build_insurance_statement_pdf(
+                        folder, patient_name=name, claim_id=cid
+                    )
             else:
                 out = build_pi_case_to_receipts(folder, patient_name=name)
         except RuntimeError as e:
@@ -1455,7 +2300,49 @@ class BillingPage(tk.Frame):
         if self._billing_panel == "pi":
             self._refresh_pi_document_preview()
             return
+        if self._billing_panel == "insurance":
+            self._refresh_insurance_document_preview()
+            return
         self._refresh_cash_receipt_preview()
+
+    def _refresh_insurance_document_preview(self) -> None:
+        if not self.active_patient:
+            self._set_receipt_preview_text("Select a patient on Documents first.")
+            return
+        st = self._selected_insurance_state()
+        if not st:
+            self._set_receipt_preview_text(
+                "Select an insurance claim in the table to preview the claim summary.\n\n"
+                "After you Post payer, the remittance (EOB) appears here and in Receipt folder."
+            )
+            return
+        folder = self.active_patient.get("folder") or ""
+        name = self._patient_display_name()
+        posts = claim_postings(folder, st.get("claim_id") or "")
+        try:
+            if posts:
+                from insurance_receipt import build_insurance_eob_text
+
+                text = build_insurance_eob_text(
+                    patient_name=name,
+                    claim_state=st,
+                    posting=posts[-1],
+                )
+            else:
+                text = build_insurance_claim_summary_text(
+                    patient_name=name,
+                    claim_state=st,
+                    postings=posts,
+                )
+                try:
+                    save_insurance_claim_summary_receipt(
+                        folder, patient_name=name, claim_state=st
+                    )
+                except Exception:
+                    pass
+        except Exception as e:
+            text = f"Could not build insurance preview:\n{e}"
+        self._set_receipt_preview_text(text)
 
     def _refresh_package_document_preview(self) -> None:
         folder = (self.active_patient or {}).get("folder") or ""
@@ -1725,6 +2612,8 @@ class BillingPage(tk.Frame):
             self._set_receipt_folder_enabled()
             if hasattr(self, "pkg_tree"):
                 self._refresh_packages_panel()
+            if hasattr(self, "ins_tree"):
+                self._refresh_insurance_panel()
             return
         self.billing_for_var.set(f"Billing for: {self._patient_display_name()}")
         folder = self.active_patient.get("folder")
@@ -1739,6 +2628,8 @@ class BillingPage(tk.Frame):
         self._set_receipt_folder_enabled()
         if hasattr(self, "pkg_tree"):
             self._refresh_packages_panel()
+        if hasattr(self, "ins_tree"):
+            self._refresh_insurance_panel()
         self._persist_shell_patient()
 
     def _set_receipt_folder_enabled(self) -> None:
@@ -1748,6 +2639,8 @@ class BillingPage(tk.Frame):
         self.btn_pi_receipt_folder.configure(state=state)
         if hasattr(self, "btn_pkg_receipt_folder"):
             self.btn_pkg_receipt_folder.configure(state=state)
+        if hasattr(self, "btn_ins_receipt_folder"):
+            self.btn_ins_receipt_folder.configure(state=state)
         for btn in getattr(self, "_wip_receipt_buttons", []) or []:
             try:
                 btn.configure(state=state)
@@ -1821,10 +2714,14 @@ class BillingPage(tk.Frame):
                 )
             self.balance_var.set(text)
             return
+        ins_due = insurance_patient_balance_total(folder)
+        ins_part = ""
+        if ins_due > 0.01:
+            ins_part = f"  ·  Insurance patient resp: ${ins_due:,.2f}"
         self.balance_var.set(
             f"Account balance: ${cash_bal['balance_due']:,.2f}  "
             f"(charges ${cash_bal['total_charges']:,.2f} · "
-            f"payments ${cash_bal['total_payments']:,.2f})"
+            f"payments ${cash_bal['total_payments']:,.2f}){ins_part}"
         )
 
     def _paint_visit_row_widget(self, widget: tk.Misc, bg: str) -> None:
@@ -2047,6 +2944,24 @@ class BillingPage(tk.Frame):
                 fg="#1D4ED8",
                 font=("Segoe UI", 8, "bold"),
             ).pack(side="left", padx=(6, 0))
+        folder = (self.active_patient or {}).get("folder") or ""
+        if folder and visit_path and not package_posted and not pi_posted:
+            try:
+                ins_bal = insurance_balance_for_visit(
+                    str(folder),
+                    exam_path=visit_path,
+                )
+                ins_due = float(ins_bal.get("patient_resp_outstanding") or 0.0)
+                if ins_due > 0.01:
+                    tk.Label(
+                        top_left,
+                        text=f" INS ${ins_due:,.0f} ",
+                        bg="#FEF3C7",
+                        fg="#B45309",
+                        font=("Segoe UI", 8, "bold"),
+                    ).pack(side="left", padx=(6, 0))
+            except Exception:
+                pass
         tk.Label(
             row,
             text=exam_name,
@@ -2133,6 +3048,9 @@ class BillingPage(tk.Frame):
         self._render_encounter(enc)
         self._highlight_selected_visit_rows()
         self._update_package_action_buttons()
+        if hasattr(self, "ins_tree"):
+            self._update_insurance_buttons()
+            self._refresh_insurance_balance_ui()
 
     def _rebuild_selected(self) -> None:
         if not self._selected_visit or not self.active_patient:
@@ -2174,6 +3092,8 @@ class BillingPage(tk.Frame):
         self.lines_tree.delete(*self.lines_tree.get_children())
         self._current_warnings = []
         self._refresh_warnings_buttons()
+        if hasattr(self, "ins_tree"):
+            self._update_insurance_buttons()
         self.meta_var.set("Select an encounter to preview charges.")
         self._set_receipt_preview_text("Select a visit to preview a receipt.")
 
@@ -2516,11 +3436,31 @@ class BillingPage(tk.Frame):
         if hasattr(self, "pkg_tree"):
             self._refresh_packages_panel()
         self._load_visits()
-        messagebox.showinfo(
-            "Posted",
-            f"Charges posted: ${float(posted.get('amount_charged') or 0):,.2f}\n"
-            "You can take a payment or print a receipt next.",
-        )
+        posted_amt = float(posted.get("amount_charged") or 0)
+        copay = float(self._pending_insurance_patient_resp or 0)
+        if copay > 0.01:
+            messagebox.showinfo(
+                "Posted",
+                f"Cash ledger: ${posted_amt:,.2f} posted for this visit "
+                "(full cash fee schedule).\n\n"
+                f"Insurance copay to collect now: ${copay:,.2f}\n"
+                "Click Take payment — the amount will default to the copay, "
+                f"not the full ${posted_amt:,.0f} balance.",
+                parent=self,
+            )
+            if messagebox.askyesno(
+                "Collect copay",
+                f"Collect ${copay:,.2f} insurance patient responsibility now?",
+                parent=self,
+            ):
+                self._take_payment()
+        else:
+            messagebox.showinfo(
+                "Posted",
+                f"Charges posted: ${posted_amt:,.2f}\n"
+                "You can take a payment or print a receipt next.",
+                parent=self,
+            )
 
     def _take_payment(self) -> None:
         if not self.active_patient or not self._posted_encounter:
@@ -2528,10 +3468,15 @@ class BillingPage(tk.Frame):
             return
         folder = self.active_patient.get("folder") or ""
         path = self._posted_encounter.get("exam_path") or ""
-        default_amt = encounter_amount_due(folder, path)
-        if default_amt <= 0:
+        balance_due = encounter_amount_due(folder, path)
+        if balance_due <= 0:
             messagebox.showinfo("Payment", "This visit has no balance due.")
             return
+        copay = float(self._pending_insurance_patient_resp or 0)
+        if copay > 0.01:
+            default_amt = round(min(copay, balance_due), 2)
+        else:
+            default_amt = balance_due
         PaymentDialog(
             self,
             default_amount=default_amt,
@@ -2558,10 +3503,30 @@ class BillingPage(tk.Frame):
         self._update_checkout_state(posted)
         self._last_payment = pay
         self._refresh_receipt_preview()
+        if self._pending_insurance_patient_resp and self._pending_insurance_claim_id:
+            folder = self.active_patient.get("folder") or ""
+            try:
+                link_patient_resp_to_cash(
+                    patient_root=folder,
+                    claim_id=self._pending_insurance_claim_id,
+                    exam_path=posted.get("exam_path") or "",
+                    amount=float(amount),
+                    recorded_by=self.current_user,
+                )
+            except Exception:
+                pass
+            if amount >= float(self._pending_insurance_patient_resp) - 0.01:
+                self._pending_insurance_patient_resp = None
+                self._pending_insurance_claim_id = ""
+                self.checkout_status_var.set(
+                    "Insurance copay collected. Remaining cash ledger balance may still be due."
+                )
         # Rebuild encounter cards so the paid-in-full checkmark appears.
         keep_path = (self._selected_visit or {}).get("path") or ""
         self._load_visits()
         self._reselect_visit_by_path(keep_path)
+        if hasattr(self, "ins_tree"):
+            self._refresh_insurance_balance_ui()
         messagebox.showinfo("Payment recorded", f"${amount:,.2f} ({method}) applied.")
         if messagebox.askyesno("Receipt", "Open full receipt window to save a copy?"):
             self._show_receipt(payment=pay)
@@ -3230,7 +4195,7 @@ class ReceiptFolderDialog(tk.Toplevel):
             "cash": "Cash receipts (text + PDF) — one per posted cash visit.",
             "package": "Package contracts and statements — kept separate from cash math.",
             "pi": "PI case summaries, settlement receipts, and attorney packet copies.",
-            "insurance": "Insurance EOBs and remittance receipts (reserved for future).",
+            "insurance": "Insurance claim summaries, EOB/remittance text, and statement PDFs.",
             "membership": "Membership receipts and renewal statements (reserved for future).",
         }
         desc = desc_map.get(
@@ -3454,6 +4419,25 @@ class ReceiptFolderDialog(tk.Toplevel):
                         path,
                         patient_name=self.patient_name or "",
                     )
+                elif doc.stream == "insurance":
+                    stem = path.stem
+                    cid = stem
+                    for prefix in ("insurance_eob_", "insurance_statement_", "insurance_claim_"):
+                        if stem.startswith(prefix):
+                            cid = stem[len(prefix) :]
+                            break
+                    if stem.startswith("insurance_eob_") and build_insurance_eob_pdf:
+                        path = build_insurance_eob_pdf(
+                            self.patient_root,
+                            patient_name=self.patient_name or "",
+                            claim_id=cid,
+                        )
+                    elif build_insurance_statement_pdf:
+                        path = build_insurance_statement_pdf(
+                            self.patient_root,
+                            patient_name=self.patient_name or "",
+                            claim_id=cid,
+                        )
             except Exception as e:
                 messagebox.showerror(
                     "Open receipt",

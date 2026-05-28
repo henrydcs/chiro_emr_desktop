@@ -17,6 +17,9 @@ _DOC_PREFIX_LABELS: tuple[tuple[str, str], ...] = (
     ("pi_case_summary_", "PI case summary"),
     ("pi_cover_sheet_", "PI cover sheet"),
     ("receipt_", "Cash receipt"),
+    ("insurance_eob_", "Insurance EOB"),
+    ("insurance_claim_", "Insurance claim"),
+    ("insurance_statement_", "Insurance statement"),
 )
 
 
@@ -426,6 +429,57 @@ def _collect_package_receipts(
     return out
 
 
+def _collect_insurance_receipts(ins_dir: Path) -> list[BillingDocument]:
+    """One row per insurance .pdf/.txt pair (EOB, claim summary, statement)."""
+    if not ins_dir.is_dir():
+        return []
+    by_stem: dict[str, dict] = {}
+    for p in ins_dir.iterdir():
+        if not p.is_file():
+            continue
+        suf = p.suffix.lower()
+        if suf not in {".pdf", ".txt"}:
+            continue
+        info = by_stem.setdefault(p.stem, {"pdf": None, "txt": None, "mtime": 0.0})
+        if suf == ".pdf":
+            info["pdf"] = p
+        else:
+            info["txt"] = p
+        try:
+            info["mtime"] = max(info["mtime"], p.stat().st_mtime)
+        except OSError:
+            pass
+
+    out: list[BillingDocument] = []
+    for stem, info in by_stem.items():
+        pdf_path = info["pdf"]
+        txt_path = info["txt"]
+        canonical = pdf_path if pdf_path is not None else (ins_dir / f"{stem}.pdf")
+        if stem.startswith("insurance_eob_"):
+            kind = "EOB"
+        elif stem.startswith("insurance_copay_"):
+            kind = "Copay"
+        elif stem.startswith("insurance_statement_"):
+            kind = "Statement"
+        elif stem.startswith("insurance_claim_"):
+            kind = "Claim"
+        else:
+            kind = "Insurance"
+        claim_part = stem.split("_", 2)[-1] if "_" in stem else stem
+        label = f"Insurance {kind}, {claim_part}, PDF"
+        out.append(
+            BillingDocument(
+                path=canonical,
+                label=label,
+                kind="receipt",
+                mtime=info["mtime"],
+                stream="insurance",
+                text_sidecar=txt_path,
+            )
+        )
+    return out
+
+
 def _classify_legacy_flat_receipt(stem: str) -> str:
     """Guess stream for a doc in the legacy flat receipts/ folder by filename prefix."""
     if stem.startswith(("settlement_", "pi_case_summary_", "pi_cover_sheet_", "pi_case_statement_")):
@@ -503,6 +557,16 @@ def list_billing_documents(
                 if want is not None and "package" not in want:
                     continue
                 for doc in _collect_package_receipts(sub, patient_root):
+                    key = str(doc.path.resolve())
+                    if key in seen:
+                        continue
+                    seen.add(key)
+                    docs.append(doc)
+                continue
+            if stream == "insurance":
+                if want is not None and "insurance" not in want:
+                    continue
+                for doc in _collect_insurance_receipts(sub):
                     key = str(doc.path.resolve())
                     if key in seen:
                         continue
