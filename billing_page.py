@@ -12,6 +12,7 @@ from closeout_dialog import CloseoutDialog
 from billing_ledger import (
     compute_cash_balance,
     encounter_amount_due,
+    is_encounter_cash_paid_in_full,
     is_encounter_posted,
     load_posted_encounter,
     post_encounter_to_cash_ledger,
@@ -115,6 +116,8 @@ COLOR_VISIT_ROW_CASH = "#FEF9C3"
 COLOR_VISIT_ROW_CASH_HOVER = "#FEF08A"
 COLOR_VISIT_ROW_CASH_BORDER = "#EAB308"
 COLOR_VISIT_ROW_CASH_BORDER_SELECTED = "#A16207"     # yellow-700 — bolder
+# Paid-in-full checkmark on yellow cash encounter cards
+COLOR_VISIT_ROW_CASH_PAID = "#047857"                # emerald-700
 
 COLOR_VISIT_ROW_PACKAGE = "#F3E8FF"
 COLOR_VISIT_ROW_PACKAGE_HOVER = "#E9D5FF"
@@ -1963,11 +1966,14 @@ class BillingPage(tk.Frame):
         cash_posted = False
         pi_posted = False
         package_posted = False
+        cash_paid_in_full = False
         if self.active_patient and visit.get("path"):
             folder = self.active_patient.get("folder") or ""
             cash_posted = is_encounter_posted(folder, visit["path"])
             pi_posted = is_encounter_pi_posted(folder, visit["path"])
             package_posted = is_encounter_package_posted(folder, visit["path"])
+            if cash_posted:
+                cash_paid_in_full = is_encounter_cash_paid_in_full(folder, visit["path"])
 
         base_bg, hover_bg, border_color, border_color_selected = self._row_color_tier(
             cash_posted=cash_posted,
@@ -1996,9 +2002,11 @@ class BillingPage(tk.Frame):
         type_color = COLOR_ACCENT if et == "initial" else COLOR_GREEN
 
         top = tk.Frame(row, bg=base_bg)
-        top.pack(pady=(6, 0))
+        top.pack(fill="x", padx=8, pady=(6, 0))
+        top_left = tk.Frame(top, bg=base_bg)
+        top_left.pack(side="left")
         tk.Label(
-            top,
+            top_left,
             text=visit.get("exam_date") or "—",
             bg=base_bg,
             fg=COLOR_TEXT,
@@ -2006,15 +2014,26 @@ class BillingPage(tk.Frame):
         ).pack(side="left")
         if cash_posted:
             tk.Label(
-                top,
+                top_left,
                 text=" CASH ",
                 bg="#DCFCE7",
                 fg=COLOR_GREEN,
                 font=("Segoe UI", 8, "bold"),
             ).pack(side="left", padx=(6, 0))
-        if package_posted:
+        # Paid-in-full checkmark: only on yellow cash-tier cards (not when
+        # package or PI tint wins). No icon if posted but unpaid / partial.
+        cash_tier = cash_posted and not package_posted and not pi_posted
+        if cash_tier and cash_paid_in_full:
             tk.Label(
                 top,
+                text="\u2713",  # ✓
+                bg=base_bg,
+                fg=COLOR_VISIT_ROW_CASH_PAID,
+                font=("Segoe UI", 13, "bold"),
+            ).pack(side="right", padx=(4, 0))
+        if package_posted:
+            tk.Label(
+                top_left,
                 text=" Pckg$ ",
                 bg=COLOR_VISIT_ROW_PACKAGE_HOVER,
                 fg="#6B21A8",
@@ -2022,7 +2041,7 @@ class BillingPage(tk.Frame):
             ).pack(side="left", padx=(6, 0))
         if pi_posted:
             tk.Label(
-                top,
+                top_left,
                 text=" PI ",
                 bg="#DBEAFE",
                 fg="#1D4ED8",
@@ -2539,6 +2558,10 @@ class BillingPage(tk.Frame):
         self._update_checkout_state(posted)
         self._last_payment = pay
         self._refresh_receipt_preview()
+        # Rebuild encounter cards so the paid-in-full checkmark appears.
+        keep_path = (self._selected_visit or {}).get("path") or ""
+        self._load_visits()
+        self._reselect_visit_by_path(keep_path)
         messagebox.showinfo("Payment recorded", f"${amount:,.2f} ({method}) applied.")
         if messagebox.askyesno("Receipt", "Open full receipt window to save a copy?"):
             self._show_receipt(payment=pay)

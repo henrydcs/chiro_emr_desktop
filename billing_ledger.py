@@ -415,6 +415,22 @@ def encounter_amount_due(
     return round(max(0.0, due), 2)
 
 
+def is_encounter_cash_paid_in_full(
+    patient_root: str | os.PathLike,
+    exam_path: str | Path,
+) -> bool:
+    """
+    True when the visit is cash-posted and nothing remains due on that visit
+    (full payment collected, or balance zeroed by payments + adjustments).
+
+    Used by the encounter list to show a paid-in-full checkmark on yellow
+    cash cards. Partial payments and posted-but-unpaid visits return False.
+    """
+    if not is_encounter_posted(patient_root, exam_path):
+        return False
+    return encounter_amount_due(patient_root, exam_path) <= 0.01
+
+
 # ---------------------------------------------------------------------------
 # Phase 5 — generic adjustment / refund / package purchase entry points
 # ---------------------------------------------------------------------------
