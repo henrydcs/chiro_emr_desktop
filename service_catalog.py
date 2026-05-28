@@ -160,6 +160,42 @@ def format_display_line(item: dict) -> str:
     return f"{code}: {label}" if label else code
 
 
+def exam_code_number(em_line: str) -> str:
+    """
+    CPT with modifier for Live Preview / PDF (e.g. 99203-25).
+    Resolves from the clinic catalog when the stored line omits the modifier suffix.
+    """
+    s = (em_line or "").strip()
+    if not s:
+        return ""
+
+    it = find_item_by_display_line(s)
+    if it:
+        return format_code(str(it.get("cpt") or ""), str(it.get("modifier") or ""))
+
+    from billing_engine import parse_code_modifier
+
+    cpt, mod, desc = parse_code_modifier(s)
+    if cpt and mod:
+        return format_code(cpt, mod)
+
+    short = s.split(":", 1)[1].strip() if ":" in s else ""
+    if not short:
+        short = desc
+
+    if cpt and short:
+        for cand in get_active_items("em"):
+            if str(cand.get("cpt") or "") != cpt:
+                continue
+            if (cand.get("short_description") or "").strip() == short:
+                return format_code(cpt, str(cand.get("modifier") or ""))
+
+    if cpt:
+        return format_code(cpt, mod)
+
+    return s.split(":", 1)[0].strip() if ":" in s else s
+
+
 def _fee_key(item: dict) -> str:
     """Billing fee_schedules.json keys by base CPT only."""
     return str(item.get("cpt") or "").strip()

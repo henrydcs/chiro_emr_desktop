@@ -74,6 +74,17 @@ def _split_em_code_option(em_code: str) -> tuple[str, str]:
     return (left.strip(), right.strip())
 
 
+def _exam_code_number(exam_code: str) -> str:
+    """CPT with modifier dash for chart display (e.g. 99203-25)."""
+    try:
+        from service_catalog import exam_code_number
+
+        return exam_code_number(exam_code)
+    except Exception:
+        code_num, _ = _split_em_code_option(exam_code)
+        return code_num
+
+
 def _format_cmt_code_label(cmt_code: str) -> str:
     # "98941: Spinal, 3-4 regions" -> "Spinal, 3-4 Regions (98941)"
     s = _clean(cmt_code)
@@ -407,7 +418,7 @@ def _build_services_flowables(d: dict, B) -> list:
         story.append(Paragraph("<b>Examination and Management</b>", SUBHEAD))
 
         if exam_code:
-            code_num, _short = _split_em_code_option(exam_code)
+            code_num = _exam_code_number(exam_code)
             em_desc = _em_chart_description(services)
             if code_num and em_desc:
                 story.append(
@@ -522,7 +533,7 @@ def _services_to_plain_text(d: dict) -> str:
             lines.append("")
         lines.append("Examination and Management")
         if exam_code:
-            code_num, _short = _split_em_code_option(exam_code)
+            code_num = _exam_code_number(exam_code)
             em_desc = _em_chart_description(services)
             if code_num and em_desc:
                 lines.append(f"  Exam Code: {code_num} — {em_desc}")

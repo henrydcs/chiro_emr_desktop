@@ -8,6 +8,7 @@ from em_long_description_dialog import EmLongDescriptionDialog
 from service_catalog import (
     default_em_long_for_line,
     ensure_charge_catalog,
+    exam_code_number,
     get_display_lines,
     save_em_long_description,
     synced_em_long_for_line,
@@ -1279,7 +1280,7 @@ class PlanPage(ttk.Frame):
         notes = (self.exam_notes_var.get() or "").strip()
 
         if em or em_long or notes:
-            code_num = em.split(":")[0].strip() if em and ":" in em else (em.strip() if em else "")
+            code_num = exam_code_number(em) if em else ""
             lines = []
             if code_num:
                 lines.append(f"• {code_num}: Exam Code")

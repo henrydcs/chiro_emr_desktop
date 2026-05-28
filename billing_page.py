@@ -196,6 +196,42 @@ _VISIT_ROW_SYNC_BGS = frozenset({
     COLOR_VISIT_ROW_PI_HOVER,
 })
 
+# Below this page width, scale fonts/padding/columns (same layout as desktop).
+_BILLING_WIDE_MIN_WIDTH = 1240
+
+_BILLING_DESKTOP_FONTS = {
+    "title": FONT_TITLE,
+    "section": FONT_SECTION,
+    "base": FONT_BASE,
+    "base_bold": FONT_BASE_BOLD,
+    "small": FONT_SMALL,
+    "totals": ("Segoe UI", 20, "bold"),
+    "mono": ("Consolas", 10),
+}
+
+_BILLING_LAPTOP_FONTS = {
+    "title": ("Segoe UI", 13, "bold"),
+    "section": ("Segoe UI", 9, "bold"),
+    "base": ("Segoe UI", 8),
+    "base_bold": ("Segoe UI", 8, "bold"),
+    "small": ("Segoe UI", 8),
+    "totals": ("Segoe UI", 15, "bold"),
+    "mono": ("Consolas", 8),
+}
+
+# Laptop middle band — fixed pixel layout (unchanged by dynamic page content).
+# Document preview text was 4 lines; +50% → 6 lines. Package panel height is
+# derived so its bottom border aligns with the Document preview card bottom.
+# Charge lines uses a fixed short band on laptop; reclaimed height lives here.
+_BILLING_LAPTOP_RECEIPT_TEXT_LINES = 8
+_BILLING_LAPTOP_TOTALS_CARD_PX = 50
+_BILLING_LAPTOP_TOTALS_BODY_PX = 16
+_BILLING_LAPTOP_ROW_GAP_PX = 6
+_BILLING_LAPTOP_PKG_TREE_ROWS = 3
+_BILLING_LAPTOP_LINES_TREE_ROWS = 3
+_BILLING_LAPTOP_LINES_CARD_PX = 81  # fixed charge-lines band; 25% below prior 108px laptop height
+_BILLING_LAPTOP_CHARGE_GAP_PX = 4  # tiny gap above charge lines
+
 
 class BillingPage(tk.Frame):
     """Cash checkout: preview charges, post, take payment, receipt."""
@@ -220,12 +256,29 @@ class BillingPage(tk.Frame):
         self._current_warnings: list[dict] = []
         self._warnings_buttons: list[tk.Button] = []
         self._insurance_states: list[dict] = []
+        self._billing_layout_compact: bool | None = None
+        self._billing_layout_after_id: str | None = None
+        self._billing_middle_fill_after_id: str | None = None
+        self._billing_fonts = dict(_BILLING_DESKTOP_FONTS)
+        self._billing_action_btns_bold: list[tk.Button] = []
+        self._billing_action_btns_normal: list[tk.Button] = []
+        self._lines_col_specs: list[dict] = []
+        self._pkg_col_specs: list[dict] = []
+        self._panel_shell_spacers: list[tk.Frame] = []
 
         self._build()
         self.bind("<Map>", lambda _e: self._on_map())
 
     def _on_map(self) -> None:
         self._sync_patient_from_shell()
+        self.after_idle(self._sync_billing_layout)
+
+    def _bill_font(self, key: str):
+        return self._billing_fonts.get(key, FONT_BASE)
+
+    def _track_action_btn(self, btn: tk.Button, *, bold: bool = True) -> tk.Button:
+        (self._billing_action_btns_bold if bold else self._billing_action_btns_normal).append(btn)
+        return btn
 
     def set_active_patient(self, patient: dict | None) -> None:
         self.active_patient = patient
@@ -305,6 +358,438 @@ class BillingPage(tk.Frame):
         """Opaque full-area frame so tkraise panels fully cover each other."""
         return tk.Frame(parent, bg=COLOR_BG_APP)
 
+    def _sync_billing_layout(self, *_args, force: bool = False) -> None:
+        outer = getattr(self, "_billing_outer", None)
+        if outer is None or not outer.winfo_exists():
+            return
+        width = outer.winfo_width()
+        if width < 200:
+            return
+        compact = width <= _BILLING_WIDE_MIN_WIDTH
+        if not force and compact == self._billing_layout_compact:
+            return
+        self._apply_billing_scale(compact)
+
+    def _on_billing_configure(self, event) -> None:
+        if event.widget is not getattr(self, "_billing_outer", None):
+            return
+        if event.width < 200:
+            return
+        compact = event.width <= _BILLING_WIDE_MIN_WIDTH
+        if compact == self._billing_layout_compact:
+            return
+        after_id = getattr(self, "_billing_layout_after_id", None)
+        if after_id:
+            try:
+                self.after_cancel(after_id)
+            except Exception:
+                pass
+        self._billing_layout_after_id = self.after(120, self._sync_billing_layout)
+
+    def _lock_laptop_visit_and_panel_frames(self) -> None:
+        """Keep Visit total + Package deals at fixed laptop dimensions."""
+        if not self._billing_layout_compact:
+            return
+        self._totals_card.configure(height=_BILLING_LAPTOP_TOTALS_CARD_PX)
+        self._totals_card.grid_propagate(False)
+        if hasattr(self, "_totals_body"):
+            self._totals_body.pack_propagate(False)
+        self.totals_frame.configure(height=_BILLING_LAPTOP_TOTALS_BODY_PX)
+        self.totals_frame.pack_propagate(False)
+
+    def _fit_laptop_totals_display(self) -> None:
+        """Shrink Visit total amounts so content never grows the fixed card."""
+        if not self._billing_layout_compact:
+            return
+        self._lock_laptop_visit_and_panel_frames()
+        if not self.totals_frame.winfo_children():
+            return
+
+        self.totals_frame.update_idletasks()
+        max_h = _BILLING_LAPTOP_TOTALS_BODY_PX
+        max_w = self.totals_frame.winfo_width()
+        if max_w < 40:
+            self.after_idle(self._fit_laptop_totals_display)
+            return
+
+        small_font = self._bill_font("small")
+        for amount_size in range(15, 8, -1):
+            amount_font = ("Segoe UI", amount_size, "bold")
+            for block in self.totals_frame.winfo_children():
+                line = block.winfo_children()[0] if block.winfo_children() else None
+                if line is None:
+                    continue
+                labels = line.winfo_children()
+                if len(labels) >= 2:
+                    labels[0].configure(font=small_font)
+                    labels[1].configure(font=amount_font)
+            self.totals_frame.update_idletasks()
+            if (
+                self.totals_frame.winfo_reqheight() <= max_h
+                and self.totals_frame.winfo_reqwidth() <= max_w
+            ):
+                return
+
+        for amount_size in range(8, 6, -1):
+            small_font = ("Segoe UI", amount_size)
+            amount_font = ("Segoe UI", max(amount_size + 1, 7), "bold")
+            for block in self.totals_frame.winfo_children():
+                line = block.winfo_children()[0] if block.winfo_children() else None
+                if line is None:
+                    continue
+                labels = line.winfo_children()
+                if len(labels) >= 2:
+                    labels[0].configure(font=small_font)
+                    labels[1].configure(font=amount_font)
+            self.totals_frame.update_idletasks()
+            if self.totals_frame.winfo_reqheight() <= max_h:
+                return
+
+    def _format_package_patient_summary(
+        self,
+        agg: dict,
+        active_count: int,
+        *,
+        is_pi: bool,
+    ) -> str:
+        if self._billing_layout_compact:
+            summary = (
+                f"Act: {active_count} · Ctr: ${agg['package_contracted']:,.2f} · "
+                f"Coll: ${agg['package_collections']:,.2f} · Owed: ${agg['package_outstanding']:,.2f}\n"
+                f"Earn: ${agg['package_earned']:,.2f} · Ref: ${agg['package_refunded']:,.2f} · "
+                f"Def: ${agg['package_deferred']:,.2f}"
+            )
+            if is_pi:
+                summary += "\n(PI — package sales disabled)"
+            return summary
+        summary = (
+            f"Active: {active_count}   ·   "
+            f"Contracted: ${agg['package_contracted']:,.2f}   ·   "
+            f"Collected: ${agg['package_collections']:,.2f}   ·   "
+            f"Owed: ${agg['package_outstanding']:,.2f}   ·   "
+            f"Earned: ${agg['package_earned']:,.2f}   ·   "
+            f"Refunded: ${agg['package_refunded']:,.2f}   ·   "
+            f"Deferred: ${agg['package_deferred']:,.2f}"
+        )
+        if is_pi:
+            summary += "      (PI patient — package sales disabled)"
+        return summary
+
+    def _place_pkg_row_actions_compact(self) -> None:
+        """Pin View / Refund / Cancel to the right of Sell package on laptop."""
+        if not self._billing_layout_compact or not hasattr(self, "_pkg_row_actions"):
+            return
+        self._pkg_actions.update_idletasks()
+        sell = self.btn_pkg_sell
+        actions = self._pkg_actions
+        x = sell.winfo_x() + sell.winfo_width() + 6
+        y = sell.winfo_y()
+        self._pkg_row_actions.place(in_=actions, x=x, y=y, anchor="nw")
+
+    def _apply_package_panel_layout(self, compact: bool) -> None:
+        """Laptop-only density tweaks inside Package deals (frame size unchanged)."""
+        if not hasattr(self, "btn_pkg_post_visit"):
+            return
+
+        row1 = (
+            self.btn_pkg_post_visit,
+            self.btn_pkg_take_payment,
+            self.btn_pkg_sell,
+        )
+        row2 = (
+            self.btn_pkg_catalog,
+            self.btn_pkg_refresh,
+            self.btn_pkg_receipt_folder,
+        )
+        for btn in row1 + row2:
+            btn.pack_forget()
+            btn.grid_forget()
+
+        if compact:
+            for col, btn in enumerate(row1):
+                btn.grid(row=0, column=col, sticky="w", padx=(0, 4), pady=(0, 2))
+            for col, btn in enumerate(row2):
+                btn.grid(row=1, column=col, sticky="w", padx=(0, 4), pady=(2, 0))
+            if hasattr(self, "_pkg_actions"):
+                self._pkg_actions.grid_configure(pady=(0, 2))
+                self._pkg_actions.bind(
+                    "<Configure>",
+                    lambda _e: self.after_idle(self._place_pkg_row_actions_compact),
+                    add="+",
+                )
+            if hasattr(self, "_pkg_summary_wrap"):
+                self._pkg_summary_wrap.grid_remove()
+            if hasattr(self, "_pkg_row_actions"):
+                self._pkg_row_actions.grid_forget()
+                self._pkg_row_actions.place_forget()
+                for btn in (
+                    self.btn_pkg_detail,
+                    self.btn_pkg_refund,
+                    self.btn_pkg_cancel,
+                ):
+                    btn.configure(padx=6, pady=3)
+                self.btn_pkg_detail.configure(text="View")
+                self.btn_pkg_refund.configure(text="Refund…")
+                self.btn_pkg_cancel.configure(text="Cancel")
+                self.after_idle(self._place_pkg_row_actions_compact)
+            if hasattr(self, "pkg_tree"):
+                self.pkg_tree.configure(height=_BILLING_LAPTOP_PKG_TREE_ROWS)
+        else:
+            for col, btn in enumerate(row1 + row2):
+                btn.grid(row=0, column=col, sticky="w", padx=(0, 8))
+            if hasattr(self, "_pkg_actions"):
+                self._pkg_actions.grid_configure(pady=(0, 8))
+            if hasattr(self, "_pkg_summary_wrap"):
+                self._pkg_summary_wrap.grid(row=2, column=0, sticky="ew", pady=(0, 8))
+            if hasattr(self, "_pkg_summary_title"):
+                if not self._pkg_summary_title.winfo_manager():
+                    self._pkg_summary_title.pack(anchor="w", padx=10, pady=(6, 0))
+                else:
+                    self._pkg_summary_title.pack_configure(pady=(6, 0))
+            if hasattr(self, "_pkg_summary_label"):
+                self._pkg_summary_label.pack_configure(padx=10, pady=(2, 6))
+            if hasattr(self, "_pkg_row_actions"):
+                self._pkg_row_actions.place_forget()
+                self._pkg_row_actions.grid(row=4, column=0, sticky="ew", pady=(8, 0))
+                for btn in (
+                    self.btn_pkg_detail,
+                    self.btn_pkg_refund,
+                    self.btn_pkg_cancel,
+                ):
+                    btn.configure(padx=10, pady=4)
+                self.btn_pkg_detail.configure(text="View detail")
+                self.btn_pkg_refund.configure(text="Refund…")
+                self.btn_pkg_cancel.configure(text="Cancel (forfeit)")
+            if hasattr(self, "pkg_tree"):
+                self.pkg_tree.configure(height=10)
+
+    def _apply_billing_laptop_fixed_geometry(self, *, grid_pady_bottom: int, grid_padx_mid: int) -> None:
+        """Laptop grid: row 1 expands; charge lines stay fixed at the bottom."""
+        gap = _BILLING_LAPTOP_ROW_GAP_PX
+        charge_gap = _BILLING_LAPTOP_CHARGE_GAP_PX
+        totals_px = _BILLING_LAPTOP_TOTALS_CARD_PX
+
+        right = self._billing_right
+        right.rowconfigure(0, weight=0)
+        right.rowconfigure(1, weight=1)
+        right.rowconfigure(2, weight=0)
+
+        self.receipt_preview.configure(
+            font=self._bill_font("mono"),
+            height=_BILLING_LAPTOP_RECEIPT_TEXT_LINES,
+        )
+        self._totals_card.configure(height=totals_px)
+        self._totals_card.grid_propagate(False)
+        if hasattr(self, "_totals_body"):
+            self._totals_body.pack_propagate(False)
+        self.totals_frame.configure(height=_BILLING_LAPTOP_TOTALS_BODY_PX)
+        self.totals_frame.pack_propagate(False)
+        self._panel_host.grid_propagate(True)
+        self._receipt_card.grid_propagate(True)
+        self._panel_host.rowconfigure(0, weight=1)
+        self._panel_host.columnconfigure(0, weight=1)
+
+        self._totals_card.grid_configure(
+            row=0, column=0, columnspan=2,
+            sticky="new", padx=(0, grid_padx_mid), pady=(0, gap),
+        )
+        self._panel_host.grid_configure(
+            row=1, column=0, columnspan=2,
+            sticky="nsew", padx=(0, grid_padx_mid), pady=(0, charge_gap),
+        )
+        self._receipt_card.grid_configure(
+            row=0, column=2, rowspan=2,
+            sticky="nsew", padx=(grid_padx_mid, 0), pady=(0, charge_gap),
+        )
+        self._lines_card.grid_configure(
+            row=2, column=0, columnspan=3, sticky="sew", pady=0,
+        )
+        self._lines_card.configure(height=_BILLING_LAPTOP_LINES_CARD_PX)
+        self._lines_card.grid_propagate(False)
+        if hasattr(self, "_lines_body"):
+            self._lines_body.rowconfigure(0, weight=0)
+        self.lines_tree.configure(height=_BILLING_LAPTOP_LINES_TREE_ROWS)
+
+        if hasattr(self, "_receipt_body"):
+            self._receipt_body.rowconfigure(1, weight=1)
+        if hasattr(self, "_pkg_body"):
+            self._pkg_body.rowconfigure(3, weight=0)
+        if hasattr(self, "_pkg_card"):
+            self._pkg_card.pack_configure(fill="both", expand=True)
+        for sp in self._panel_shell_spacers:
+            sp.pack_forget()
+
+        self._apply_package_panel_layout(True)
+        self._lock_laptop_visit_and_panel_frames()
+        self.after_idle(self._fit_laptop_totals_display)
+
+    def _restore_billing_desktop_middle_band(self) -> None:
+        """Restore desktop middle band to content-driven sizing."""
+        right = self._billing_right
+        right.rowconfigure(0, weight=0)
+        right.rowconfigure(1, weight=0)
+        right.rowconfigure(2, weight=1)
+
+        self._totals_card.grid_propagate(True)
+        self._receipt_card.grid_propagate(True)
+        if hasattr(self, "_totals_body"):
+            self._totals_body.pack_propagate(True)
+        self.totals_frame.pack_propagate(True)
+        self._panel_host.configure(height=self._panel_host_wide_height)
+        self._panel_host.grid_propagate(False)
+
+        self._totals_card.grid_configure(
+            row=0, column=0, columnspan=2,
+            sticky="nsew", padx=(0, 6), pady=(0, 10),
+        )
+        self._panel_host.grid_configure(
+            row=1, column=0, columnspan=2,
+            sticky="new", padx=(0, 6), pady=(0, 10),
+        )
+        self._receipt_card.grid_configure(
+            row=0, column=2, rowspan=2,
+            sticky="nsew", padx=(6, 0), pady=(0, 10),
+        )
+        self._lines_card.grid_configure(pady=0)
+        self._lines_card.grid_propagate(True)
+        self._lines_card.grid_configure(sticky="nsew")
+        if hasattr(self, "_lines_body"):
+            self._lines_body.rowconfigure(0, weight=1)
+        self.lines_tree.configure(height=12)
+
+        self.receipt_preview.configure(height=10)
+        if hasattr(self, "_receipt_body"):
+            self._receipt_body.rowconfigure(1, weight=1)
+        if hasattr(self, "_pkg_body"):
+            self._pkg_body.rowconfigure(3, weight=1)
+        if hasattr(self, "_pkg_card"):
+            self._pkg_card.pack_configure(fill="both", expand=True)
+        self._apply_package_panel_layout(False)
+        for sp in self._panel_shell_spacers:
+            if not sp.winfo_manager():
+                sp.pack(fill="both", expand=True)
+
+    def _apply_billing_scale(self, compact: bool) -> None:
+        """Same grid layout as desktop; smaller fonts/padding on laptop widths."""
+        prev = self._billing_layout_compact
+        self._billing_layout_compact = compact
+        self._billing_fonts = dict(_BILLING_LAPTOP_FONTS if compact else _BILLING_DESKTOP_FONTS)
+
+        outer_pad = 8 if compact else 16
+        left_w = 168 if compact else 210
+        left_body_padx = 8 if compact else 14
+        receipt_w = 28 if compact else 46
+        nav_padx = 7 if compact else 12
+        nav_pady = 3 if compact else 6
+        btn_padx = 7 if compact else 14
+        btn_pady = 3 if compact else 6
+        btn_padx_sm = 5 if compact else 10
+        btn_pady_sm = 2 if compact else 4
+        col_weights = (3, 3, 1) if compact else (2, 2, 1)
+        grid_pady_bottom = 6 if compact else 10
+        grid_padx_mid = 4 if compact else 6
+
+        self._billing_outer.pack_configure(padx=outer_pad, pady=(outer_pad, 0 if compact else outer_pad))
+        self._left_card.configure(width=left_w)
+        self._billing_body.columnconfigure(0, minsize=left_w)
+        self._left_body.pack_configure(padx=left_body_padx)
+
+        right = self._billing_right
+        right.columnconfigure(0, weight=col_weights[0])
+        right.columnconfigure(1, weight=col_weights[1])
+        right.columnconfigure(2, weight=col_weights[2])
+
+        self.receipt_preview.configure(width=receipt_w)
+
+        if compact:
+            self._apply_billing_laptop_fixed_geometry(
+                grid_pady_bottom=grid_pady_bottom,
+                grid_padx_mid=grid_padx_mid,
+            )
+        else:
+            self._restore_billing_desktop_middle_band()
+            self.receipt_preview.configure(
+                width=receipt_w,
+                font=self._bill_font("mono"),
+            )
+            self._totals_card.grid_configure(pady=(0, grid_pady_bottom))
+            self._panel_host.grid_configure(padx=(0, grid_padx_mid), pady=(0, grid_pady_bottom))
+            self._receipt_card.grid_configure(
+                padx=(grid_padx_mid, 0),
+                pady=(0, grid_pady_bottom),
+            )
+
+        if hasattr(self, "_billing_title_label"):
+            self._billing_title_label.configure(font=self._bill_font("title"))
+        if hasattr(self, "_billing_balance_label"):
+            self._billing_balance_label.configure(font=self._bill_font("base_bold"))
+        if hasattr(self, "_billing_meta_label"):
+            self._billing_meta_label.configure(font=self._bill_font("small"))
+        if hasattr(self, "_enc_title_label"):
+            self._enc_title_label.configure(font=self._bill_font("section"))
+        if hasattr(self, "_enc_hint_label"):
+            self._enc_hint_label.configure(font=self._bill_font("small"))
+
+        for btn in self._billing_header_btns:
+            btn.configure(font=self._bill_font("base_bold"), padx=btn_padx_sm, pady=btn_pady_sm)
+        for btn in self._billing_header_links:
+            btn.configure(font=self._bill_font("base"))
+
+        for btn in self._panel_nav_btns.values():
+            btn.configure(padx=nav_padx, pady=nav_pady)
+        for btn in self._billing_action_btns_bold:
+            btn.configure(font=self._bill_font("base_bold"), padx=btn_padx, pady=btn_pady)
+        for btn in self._billing_action_btns_normal:
+            btn.configure(font=self._bill_font("base"), padx=btn_padx_sm, pady=btn_pady_sm)
+
+        self.btn_create_pdf.configure(font=self._bill_font("base_bold"), padx=btn_padx_sm, pady=btn_pady_sm)
+        if not compact:
+            self.lines_tree.configure(height=12)
+
+        for spec in self._lines_col_specs:
+            width = spec["laptop_w"] if compact else spec["wide_w"]
+            self.lines_tree.column(spec["col"], width=width)
+
+        for spec in self._pkg_col_specs:
+            width = spec["laptop_w"] if compact else spec["wide_w"]
+            minw = spec["laptop_minw"] if compact else spec["wide_minw"]
+            self.pkg_tree.column(
+                spec["col"],
+                width=width,
+                minwidth=minw,
+                anchor=spec["anchor"],
+                stretch=spec["stretch"],
+            )
+
+        if hasattr(self, "pkg_reconcile_label"):
+            self.pkg_reconcile_label.configure(
+                font=self._bill_font("small"),
+                wraplength=560 if compact else 900,
+            )
+        if hasattr(self, "_pkg_summary_title"):
+            self._pkg_summary_title.configure(font=self._bill_font("small"))
+        if hasattr(self, "_pkg_summary_label"):
+            self._pkg_summary_label.configure(font=self._bill_font("base"))
+
+        style = ttk.Style()
+        style.configure("Billing.Treeview", font=self._bill_font("base"), rowheight=22 if compact else 24)
+        style.configure("Billing.Treeview.Heading", font=self._bill_font("base_bold"))
+        self.lines_tree.configure(style="Billing.Treeview")
+        if hasattr(self, "pkg_tree"):
+            self.pkg_tree.configure(style="Billing.Treeview")
+
+        self._show_billing_panel(self._billing_panel)
+
+        if self._current_encounter:
+            self._render_encounter(self._current_encounter)
+        elif self.active_patient and hasattr(self, "pkg_tree"):
+            self._refresh_packages_panel()
+
+        if prev is not None and prev != compact and self.active_patient:
+            keep = (self._selected_visit or {}).get("path") or ""
+            self._load_visits()
+            self._reselect_visit_by_path(keep)
+
     def _show_billing_panel(self, panel: str) -> None:
         panel = (panel or "cash").strip().lower()
         if panel not in ("cash", "pi", "insurance", "packages", "memberships"):
@@ -320,15 +805,18 @@ class BillingPage(tk.Frame):
                     btn.configure(
                         bg=COLOR_ACCENT,
                         fg="#FFFFFF",
-                        font=FONT_BASE_BOLD,
+                        font=self._bill_font("base_bold"),
                     )
                 else:
                     btn.configure(
                         bg=COLOR_CARD,
                         fg=COLOR_TEXT,
-                        font=FONT_BASE,
+                        font=self._bill_font("base"),
                     )
         self._refresh_receipt_preview()
+        if self._billing_layout_compact:
+            self.after_idle(self._place_pkg_row_actions_compact)
+            self.after_idle(self._lock_laptop_visit_and_panel_frames)
 
     def _build(self) -> None:
         outer = tk.Frame(self, bg=COLOR_BG_APP)
@@ -338,17 +826,20 @@ class BillingPage(tk.Frame):
         header.pack(fill="x", pady=(0, 6))
 
         self.billing_for_var = tk.StringVar(value="Billing for: —")
-        tk.Label(
+        self._billing_title_label = tk.Label(
             header,
             textvariable=self.billing_for_var,
             bg=COLOR_BG_APP,
             fg=COLOR_TEXT,
             font=FONT_TITLE,
-        ).pack(side="left")
+        )
+        self._billing_title_label.pack(side="left")
 
         actions = tk.Frame(header, bg=COLOR_BG_APP)
         actions.pack(side="right")
-        tk.Button(
+        self._billing_header_links: list[tk.Button] = []
+        self._billing_header_btns: list[tk.Button] = []
+        link_fee = tk.Button(
             actions,
             text="Fee schedule",
             command=self._open_fee_schedule,
@@ -358,8 +849,10 @@ class BillingPage(tk.Frame):
             bd=0,
             font=FONT_BASE,
             cursor="hand2",
-        ).pack(side="left", padx=(0, 8))
-        tk.Button(
+        )
+        link_fee.pack(side="left", padx=(0, 8))
+        self._billing_header_links.append(link_fee)
+        link_docs = tk.Button(
             actions,
             text="Open Documents",
             command=lambda: self.shell.show_page("documents"),
@@ -369,8 +862,10 @@ class BillingPage(tk.Frame):
             bd=0,
             font=FONT_BASE,
             cursor="hand2",
-        ).pack(side="left", padx=(0, 8))
-        tk.Button(
+        )
+        link_docs.pack(side="left", padx=(0, 8))
+        self._billing_header_links.append(link_docs)
+        btn_refresh = tk.Button(
             actions,
             text="Refresh from chart",
             command=self._rebuild_selected,
@@ -382,18 +877,21 @@ class BillingPage(tk.Frame):
             padx=12,
             pady=4,
             cursor="hand2",
-        ).pack(side="left")
+        )
+        btn_refresh.pack(side="left")
+        self._billing_header_btns.append(btn_refresh)
 
         balance_row = tk.Frame(outer, bg=COLOR_BG_APP)
         balance_row.pack(fill="x", pady=(0, 8))
         self.balance_var = tk.StringVar(value="")
-        tk.Label(
+        self._billing_balance_label = tk.Label(
             balance_row,
             textvariable=self.balance_var,
             bg=COLOR_BG_APP,
             fg=COLOR_TEXT,
             font=FONT_BASE_BOLD,
-        ).pack(anchor="w")
+        )
+        self._billing_balance_label.pack(anchor="w")
 
         nav_row = tk.Frame(outer, bg=COLOR_BG_APP)
         nav_row.pack(fill="x", pady=(0, 10))
@@ -426,7 +924,9 @@ class BillingPage(tk.Frame):
         # auto-update with the current encounter's warning count.
         self._make_review_warnings_button(nav_row, side="right", padx=(6, 0), pady=6)
 
+        self._billing_outer = outer
         body = tk.Frame(outer, bg=COLOR_BG_APP)
+        self._billing_body = body
         body.pack(fill="both", expand=True)
         body.columnconfigure(0, weight=0, minsize=210)
         body.columnconfigure(1, weight=1)
@@ -444,30 +944,33 @@ class BillingPage(tk.Frame):
         left_card.pack_propagate(False)
         left_card.grid_propagate(False)
         left_card.grid(row=0, column=0, sticky="nsew", padx=(0, 12))
+        self._left_card = left_card
 
         enc_header = tk.Frame(left_card, bg=COLOR_CARD)
         enc_header.pack(pady=(12, 6))
-        tk.Label(
+        self._enc_title_label = tk.Label(
             enc_header,
             text="Encounters",
             bg=COLOR_CARD,
             fg=COLOR_TEXT,
             font=FONT_SECTION,
-        ).pack(side="left")
-        tk.Label(
+        )
+        self._enc_title_label.pack(side="left")
+        self._enc_hint_label = tk.Label(
             enc_header,
             text="  · Select a visit",
             bg=COLOR_CARD,
             fg=COLOR_MUTED,
             font=FONT_SMALL,
-        ).pack(side="left")
+        )
+        self._enc_hint_label.pack(side="left")
 
-        left_body = tk.Frame(left_card, bg=COLOR_CARD)
-        left_body.pack(fill="both", expand=True, padx=14, pady=(0, 12))
+        self._left_body = tk.Frame(left_card, bg=COLOR_CARD)
+        self._left_body.pack(fill="both", expand=True, padx=14, pady=(0, 12))
 
-        enc_scroll = ttk.Scrollbar(left_body, orient="vertical")
+        enc_scroll = ttk.Scrollbar(self._left_body, orient="vertical")
         self.enc_canvas = tk.Canvas(
-            left_body,
+            self._left_body,
             bg=COLOR_CARD,
             highlightthickness=0,
             yscrollcommand=enc_scroll.set,
@@ -490,6 +993,7 @@ class BillingPage(tk.Frame):
 
         right = tk.Frame(body, bg=COLOR_BG_APP)
         right.grid(row=0, column=1, sticky="nsew")
+        self._billing_right = right
         # 3-column grid: col 0 + col 1 together hold Visit total + the active
         # billing panel (Cash / PI / Package deals / Insurance / Memberships)
         # via columnspan=2; col 2 hosts the Document preview. Weights 2/2/1
@@ -503,6 +1007,8 @@ class BillingPage(tk.Frame):
         right.rowconfigure(2, weight=1)
 
         totals_card, totals_body = make_card(right, "Visit total")
+        self._totals_card = totals_card
+        self._totals_body = totals_body
         totals_card.grid(
             row=0, column=0, columnspan=2,
             sticky="nsew", padx=(0, 6), pady=(0, 10),
@@ -515,6 +1021,8 @@ class BillingPage(tk.Frame):
             "Document preview",
             "Cash receipt · PI settlement · case summary",
         )
+        self._receipt_card = receipt_card
+        self._receipt_body = receipt_body
         # rowspan=2 (was 3) so the preview ends at the bottom of the panel
         # host (row 1), aligning with the View detail / Refund row of the
         # Package deals panel. The vertical space below (row 2) is reclaimed
@@ -571,6 +1079,7 @@ class BillingPage(tk.Frame):
         self._set_receipt_preview_text("Select a visit to preview a receipt.")
 
         panel_host = tk.Frame(right, bg=COLOR_BG_APP)
+        self._panel_host = panel_host
         panel_host.grid(
             row=1, column=0, columnspan=2,
             sticky="new", padx=(0, 6), pady=(0, 10),
@@ -582,7 +1091,7 @@ class BillingPage(tk.Frame):
         checkout_card.pack(fill="x", anchor="n")
         ck = tk.Frame(checkout_body, bg=COLOR_CARD)
         ck.pack(fill="x")
-        self.btn_post = tk.Button(
+        self.btn_post = self._track_action_btn(tk.Button(
             ck,
             text="Post cash",
             command=self._post_charges,
@@ -593,9 +1102,9 @@ class BillingPage(tk.Frame):
             padx=14,
             pady=6,
             cursor="hand2",
-        )
+        ))
         self.btn_post.pack(side="left", padx=(0, 8))
-        self.btn_pay = tk.Button(
+        self.btn_pay = self._track_action_btn(tk.Button(
             ck,
             text="Take payment",
             command=self._take_payment,
@@ -607,9 +1116,9 @@ class BillingPage(tk.Frame):
             pady=6,
             cursor="hand2",
             state="disabled",
-        )
+        ))
         self.btn_pay.pack(side="left", padx=(0, 8))
-        self.btn_receipt = tk.Button(
+        self.btn_receipt = self._track_action_btn(tk.Button(
             ck,
             text="Receipt",
             command=self._show_receipt,
@@ -623,9 +1132,9 @@ class BillingPage(tk.Frame):
             pady=6,
             cursor="hand2",
             state="disabled",
-        )
+        ))
         self.btn_receipt.pack(side="left", padx=(0, 8))
-        self.btn_receipt_folder = tk.Button(
+        self.btn_receipt_folder = self._track_action_btn(tk.Button(
             ck,
             text="Receipt folder",
             command=lambda: self._show_receipt_folder(stream="cash"),
@@ -639,9 +1148,9 @@ class BillingPage(tk.Frame):
             pady=6,
             cursor="hand2",
             state="disabled",
-        )
+        ))
         self.btn_receipt_folder.pack(side="left", padx=(0, 8))
-        self.btn_sell_package = tk.Button(
+        self.btn_sell_package = self._track_action_btn(tk.Button(
             ck,
             text="Sell package",
             command=self._sell_package_from_cash,
@@ -653,7 +1162,7 @@ class BillingPage(tk.Frame):
             pady=6,
             cursor="hand2",
             state="disabled",
-        )
+        ))
         self.btn_sell_package.pack(side="left")
         self.checkout_status_var = tk.StringVar(value="Select a visit to begin checkout.")
         tk.Label(
@@ -663,7 +1172,9 @@ class BillingPage(tk.Frame):
             fg=COLOR_MUTED,
             font=FONT_SMALL,
         ).pack(anchor="w", pady=(8, 0))
-        tk.Frame(cash_frame, bg=COLOR_BG_APP).pack(fill="both", expand=True)
+        cash_spacer = tk.Frame(cash_frame, bg=COLOR_BG_APP)
+        cash_spacer.pack(fill="both", expand=True)
+        self._panel_shell_spacers.append(cash_spacer)
 
         pi_frame = self._make_billing_panel_shell(panel_host)
         pi_card, pi_body = make_card(pi_frame, "PI case ledger", "Post visits · payments · close-out packet")
@@ -812,19 +1323,27 @@ class BillingPage(tk.Frame):
             fg=COLOR_MUTED,
             font=FONT_SMALL,
         ).pack(anchor="w", pady=(6, 0))
-        tk.Frame(pi_frame, bg=COLOR_BG_APP).pack(fill="both", expand=True)
+        pi_spacer = tk.Frame(pi_frame, bg=COLOR_BG_APP)
+        pi_spacer.pack(fill="both", expand=True)
+        self._panel_shell_spacers.append(pi_spacer)
 
         insurance_frame = self._make_billing_panel_shell(panel_host)
         self._build_insurance_panel(insurance_frame)
-        tk.Frame(insurance_frame, bg=COLOR_BG_APP).pack(fill="both", expand=True)
+        ins_spacer = tk.Frame(insurance_frame, bg=COLOR_BG_APP)
+        ins_spacer.pack(fill="both", expand=True)
+        self._panel_shell_spacers.append(ins_spacer)
 
         packages_frame = self._make_billing_panel_shell(panel_host)
         self._build_packages_panel(packages_frame)
-        tk.Frame(packages_frame, bg=COLOR_BG_APP).pack(fill="both", expand=True)
+        pkg_spacer = tk.Frame(packages_frame, bg=COLOR_BG_APP)
+        pkg_spacer.pack(fill="both", expand=True)
+        self._panel_shell_spacers.append(pkg_spacer)
 
         memberships_frame = self._make_billing_panel_shell(panel_host)
         self._build_wip_panel(memberships_frame, "Memberships", stream="membership")
-        tk.Frame(memberships_frame, bg=COLOR_BG_APP).pack(fill="both", expand=True)
+        mem_spacer = tk.Frame(memberships_frame, bg=COLOR_BG_APP)
+        mem_spacer.pack(fill="both", expand=True)
+        self._panel_shell_spacers.append(mem_spacer)
 
         shell_frames = {
             "cash": cash_frame,
@@ -839,7 +1358,8 @@ class BillingPage(tk.Frame):
 
         panel_host.update_idletasks()
         panel_h = max(shell.winfo_reqheight() for shell in shell_frames.values())
-        panel_host.configure(height=max(panel_h, 200))
+        self._panel_host_wide_height = max(panel_h, 200)
+        panel_host.configure(height=self._panel_host_wide_height)
         panel_host.grid_propagate(False)
         self._show_billing_panel("cash")
 
@@ -849,6 +1369,8 @@ class BillingPage(tk.Frame):
         # shorter Document preview gave up. Review warnings is now a popup,
         # opened by a per-flow "Review warnings" button below.
         lines_card, lines_body = make_card(right, "Charge lines", "Derived from Services Provided Today")
+        self._lines_card = lines_card
+        self._lines_body = lines_body
         lines_card.grid(row=2, column=0, columnspan=3, sticky="nsew")
         lines_body.rowconfigure(0, weight=1)
         lines_body.columnconfigure(0, weight=1)
@@ -861,17 +1383,18 @@ class BillingPage(tk.Frame):
             height=12,
             selectmode="browse",
         )
-        for col, title, w in [
-            ("cpt", "CPT", 70),
-            ("mod", "Mod", 44),
-            ("desc", "Description", 200),
-            ("units", "Units", 50),
-            ("dx", "DX ptr", 90),
-            ("cash", "Cash $", 72),
-            ("pi", "PI/UCR $", 72),
+        for col, title, wide_w, laptop_w in [
+            ("cpt", "CPT", 70, 52),
+            ("mod", "Mod", 44, 34),
+            ("desc", "Description", 200, 118),
+            ("units", "Units", 50, 38),
+            ("dx", "DX ptr", 90, 66),
+            ("cash", "Cash $", 72, 54),
+            ("pi", "PI/UCR $", 72, 54),
         ]:
             self.lines_tree.heading(col, text=title)
-            self.lines_tree.column(col, width=w, anchor="w" if col == "desc" else "center")
+            self.lines_tree.column(col, width=wide_w, anchor="w" if col == "desc" else "center")
+            self._lines_col_specs.append({"col": col, "wide_w": wide_w, "laptop_w": laptop_w})
         vsb = ttk.Scrollbar(lines_body, orient="vertical", command=self.lines_tree.yview)
         self.lines_tree.configure(yscrollcommand=vsb.set)
         self.lines_tree.grid(row=0, column=0, sticky="nsew")
@@ -880,9 +1403,33 @@ class BillingPage(tk.Frame):
         meta = tk.Frame(lines_body, bg=COLOR_CARD)
         meta.grid(row=1, column=0, columnspan=2, sticky="ew", pady=(8, 0))
         self.meta_var = tk.StringVar(value="Select an encounter to preview charges.")
-        tk.Label(meta, textvariable=self.meta_var, bg=COLOR_CARD, fg=COLOR_MUTED, font=FONT_SMALL).pack(
-            anchor="w"
+        self._billing_meta_label = tk.Label(
+            meta, textvariable=self.meta_var, bg=COLOR_CARD, fg=COLOR_MUTED, font=FONT_SMALL,
         )
+        self._billing_meta_label.pack(anchor="w")
+
+        self._billing_action_btns_bold.extend([
+            self.btn_post_pi,
+            self.btn_pi_pay,
+            self.btn_record_settlement,
+            self.btn_export_case,
+            self.btn_closeout,
+            self.btn_edit_case,
+            self.btn_pi_adjust,
+            self.btn_pi_receipt_folder,
+            self.btn_pkg_post_visit,
+            self.btn_pkg_take_payment,
+            self.btn_pkg_sell,
+            self.btn_pkg_catalog,
+            self.btn_pkg_refresh,
+            self.btn_pkg_receipt_folder,
+            self.btn_pkg_detail,
+            self.btn_pkg_refund,
+        ])
+        self._billing_action_btns_normal.extend([self.btn_pkg_cancel])
+
+        outer.bind("<Configure>", self._on_billing_configure, add="+")
+        self.after_idle(self._sync_billing_layout)
 
     # -----------------------------------------------------------------
     # Package deals panel (Phase 5)
@@ -890,6 +1437,8 @@ class BillingPage(tk.Frame):
 
     def _build_packages_panel(self, parent: tk.Frame) -> None:
         card, body = make_card(parent, "Package deals", "Visit packages · prepaid plans")
+        self._pkg_card = card
+        self._pkg_body = body
         card.pack(fill="both", expand=True)
         body.columnconfigure(0, weight=1)
 
@@ -897,6 +1446,7 @@ class BillingPage(tk.Frame):
         # the Cash checkout. Post Visit redeems one visit; Take Payment collects
         # money toward an unpaid package balance. Neither touches cash_ledger.
         actions = tk.Frame(body, bg=COLOR_CARD)
+        self._pkg_actions = actions
         actions.grid(row=0, column=0, sticky="ew", pady=(0, 8))
         self.btn_pkg_post_visit = tk.Button(
             actions, text="Post Visit", command=self._post_visit_to_package,
@@ -919,13 +1469,14 @@ class BillingPage(tk.Frame):
             state="disabled",
         )
         self.btn_pkg_sell.pack(side="left", padx=(0, 8))
-        tk.Button(
+        self.btn_pkg_catalog = tk.Button(
             actions, text="Catalog editor", command=self._open_catalog_editor,
             bg=COLOR_CARD, fg=COLOR_ACCENT, relief="flat",
             font=FONT_BASE_BOLD,
             highlightthickness=1, highlightbackground=COLOR_BORDER,
             padx=12, pady=6, cursor="hand2",
-        ).pack(side="left", padx=(0, 8))
+        )
+        self.btn_pkg_catalog.pack(side="left", padx=(0, 8))
         self.btn_pkg_refresh = tk.Button(
             actions, text="Refresh", command=self._refresh_packages_panel,
             bg=COLOR_CARD, fg=COLOR_TEXT, relief="flat",
@@ -960,17 +1511,20 @@ class BillingPage(tk.Frame):
             body, bg="#F8FAFC",
             highlightbackground=COLOR_BORDER, highlightthickness=1,
         )
+        self._pkg_summary_wrap = summary_wrap
         summary_wrap.grid(row=2, column=0, sticky="ew", pady=(0, 8))
-        tk.Label(
+        self._pkg_summary_title = tk.Label(
             summary_wrap, text="Patient summary",
             bg="#F8FAFC", fg=COLOR_MUTED, font=FONT_SMALL,
-        ).pack(anchor="w", padx=10, pady=(6, 0))
+        )
+        self._pkg_summary_title.pack(anchor="w", padx=10, pady=(6, 0))
         self.pkg_summary_var = tk.StringVar(value="Select a patient to see package summary.")
-        tk.Label(
+        self._pkg_summary_label = tk.Label(
             summary_wrap, textvariable=self.pkg_summary_var,
             bg="#F8FAFC", fg=COLOR_TEXT, font=FONT_BASE,
             justify="left", anchor="w",
-        ).pack(fill="x", anchor="w", padx=10, pady=(2, 6))
+        )
+        self._pkg_summary_label.pack(fill="x", anchor="w", padx=10, pady=(2, 6))
 
         # Packages tree — full width (row 3, expands vertically)
         tree_wrap = tk.Frame(body, bg=COLOR_BORDER, padx=1, pady=1)
@@ -984,17 +1538,30 @@ class BillingPage(tk.Frame):
         )
         # Tighter widths so the row fits typical panel sizes; horizontal
         # scrollbar below handles narrow windows so no column is ever clipped.
-        for col, title, w, anchor, stretch, minw in [
-            ("name",      "Package",  200, "w",      True,  140),
-            ("status",    "Status",    80, "center", False,  70),
-            ("used",      "Used",      50, "center", False,  46),
-            ("remaining", "Left",      50, "center", False,  46),
-            ("value",     "$/visit",   80, "e",      False,  72),
-            ("deferred",  "Deferred",  95, "e",      False,  86),
-            ("expires",   "Expires",  100, "center", False,  90),
+        for col, title, wide_w, anchor, stretch, wide_minw, laptop_w, laptop_minw in [
+            ("name",      "Package",  200, "w",      True,  140, 118, 88),
+            ("status",    "Status",    80, "center", False,  70,  56,  50),
+            ("used",      "Used",      50, "center", False,  46,  38,  34),
+            ("remaining", "Left",      50, "center", False,  46,  38,  34),
+            ("value",     "$/visit",   80, "e",      False,  72,  60,  52),
+            ("deferred",  "Deferred",  95, "e",      False,  86,  70,  60),
+            ("expires",   "Expires",  100, "center", False,  90,  72,  62),
         ]:
             self.pkg_tree.heading(col, text=title)
-            self.pkg_tree.column(col, width=w, anchor=anchor, stretch=stretch, minwidth=minw)
+            self.pkg_tree.column(
+                col, width=wide_w, anchor=anchor, stretch=stretch, minwidth=wide_minw,
+            )
+            self._pkg_col_specs.append(
+                {
+                    "col": col,
+                    "wide_w": wide_w,
+                    "laptop_w": laptop_w,
+                    "wide_minw": wide_minw,
+                    "laptop_minw": laptop_minw,
+                    "anchor": anchor,
+                    "stretch": stretch,
+                }
+            )
         pkg_vsb = ttk.Scrollbar(tree_wrap, orient="vertical", command=self.pkg_tree.yview)
         pkg_hsb = ttk.Scrollbar(tree_wrap, orient="horizontal", command=self.pkg_tree.xview)
         self.pkg_tree.configure(yscrollcommand=pkg_vsb.set, xscrollcommand=pkg_hsb.set)
@@ -1005,6 +1572,7 @@ class BillingPage(tk.Frame):
 
         # Per-row actions (row 4)
         pkg_actions = tk.Frame(body, bg=COLOR_CARD)
+        self._pkg_row_actions = pkg_actions
         pkg_actions.grid(row=4, column=0, sticky="ew", pady=(8, 0))
         self.btn_pkg_detail = tk.Button(
             pkg_actions, text="View detail", command=self._open_selected_package_detail,
@@ -1089,17 +1657,9 @@ class BillingPage(tk.Frame):
         unpaid_count = sum(
             1 for s in all_states if float(s.get("purchase_balance_due") or 0.0) > 0.01
         )
-        summary = (
-            f"Active: {active_count}   ·   "
-            f"Contracted: ${agg['package_contracted']:,.2f}   ·   "
-            f"Collected: ${agg['package_collections']:,.2f}   ·   "
-            f"Owed: ${agg['package_outstanding']:,.2f}   ·   "
-            f"Earned: ${agg['package_earned']:,.2f}   ·   "
-            f"Refunded: ${agg['package_refunded']:,.2f}   ·   "
-            f"Deferred: ${agg['package_deferred']:,.2f}"
+        summary = self._format_package_patient_summary(
+            agg, active_count, is_pi=is_pi,
         )
-        if is_pi:
-            summary += "      (PI patient — package sales disabled)"
         self.pkg_summary_var.set(summary)
 
         # Enable Post Visit / Take Payment based on patient + visit state.
@@ -2794,7 +3354,7 @@ class BillingPage(tk.Frame):
                 text="Select a patient on the Documents page first.",
                 bg=COLOR_CARD,
                 fg=COLOR_MUTED,
-                font=FONT_BASE,
+                font=self._bill_font("base"),
             ).pack(pady=20)
             return
 
@@ -2809,7 +3369,7 @@ class BillingPage(tk.Frame):
                 text="No saved encounters yet.",
                 bg=COLOR_CARD,
                 fg=COLOR_MUTED,
-                font=FONT_BASE,
+                font=self._bill_font("base"),
             ).pack(pady=20)
             return
 
@@ -2907,7 +3467,7 @@ class BillingPage(tk.Frame):
             text=visit.get("exam_date") or "—",
             bg=base_bg,
             fg=COLOR_TEXT,
-            font=FONT_BASE_BOLD,
+            font=self._bill_font("base_bold"),
         ).pack(side="left")
         if cash_posted:
             tk.Label(
@@ -2967,14 +3527,14 @@ class BillingPage(tk.Frame):
             text=exam_name,
             bg=base_bg,
             fg=type_color,
-            font=FONT_BASE,
+            font=self._bill_font("base"),
         ).pack(anchor="center", padx=8)
         tk.Label(
             row,
             text=visit.get("provider") or "—",
             bg=base_bg,
             fg=COLOR_MUTED,
-            font=FONT_SMALL,
+            font=self._bill_font("small"),
         ).pack(anchor="center", padx=8, pady=(0, 6))
 
         def select(_e=None, v=visit):
@@ -3096,6 +3656,8 @@ class BillingPage(tk.Frame):
             self._update_insurance_buttons()
         self.meta_var.set("Select an encounter to preview charges.")
         self._set_receipt_preview_text("Select a visit to preview a receipt.")
+        if self._billing_layout_compact:
+            self.after_idle(self._lock_laptop_visit_and_panel_frames)
 
     # ------------------------------------------------------------------
     # On-demand "Review warnings" popup (replaces the old inline card)
@@ -3244,21 +3806,49 @@ class BillingPage(tk.Frame):
         cash_t = totals.get("cash", 0)
         pi_t = totals.get("pi_ucr", 0)
 
-        for label, amt, highlight in [
+        gap = 8 if self._billing_layout_compact else 24
+        total_items = [
+            ("Cash", cash_t, primary == "cash"),
+            ("PI / UCR", pi_t, primary == "pi_ucr"),
+        ] if self._billing_layout_compact else [
             ("Cash schedule", cash_t, primary == "cash"),
             ("PI / UCR schedule", pi_t, primary == "pi_ucr"),
-        ]:
+        ]
+        for label, amt, highlight in total_items:
             fr = tk.Frame(self.totals_frame, bg=COLOR_CARD)
-            fr.pack(side="left", padx=(0, 24))
+            fr.pack(side="left", padx=(0, gap))
             fg = COLOR_ACCENT if highlight else COLOR_TEXT
-            tk.Label(fr, text=label, bg=COLOR_CARD, fg=COLOR_MUTED, font=FONT_SMALL).pack(anchor="w")
-            tk.Label(
-                fr,
-                text=f"${amt:,.2f}",
-                bg=COLOR_CARD,
-                fg=fg,
-                font=("Segoe UI", 20, "bold"),
-            ).pack(anchor="w")
+            if self._billing_layout_compact:
+                line = tk.Frame(fr, bg=COLOR_CARD)
+                line.pack(anchor="w")
+                tk.Label(
+                    line,
+                    text=f"{label} ",
+                    bg=COLOR_CARD,
+                    fg=COLOR_MUTED,
+                    font=self._bill_font("small"),
+                ).pack(side="left")
+                tk.Label(
+                    line,
+                    text=f"${amt:,.2f}",
+                    bg=COLOR_CARD,
+                    fg=fg,
+                    font=self._bill_font("totals"),
+                ).pack(side="left")
+            else:
+                tk.Label(
+                    fr, text=label, bg=COLOR_CARD, fg=COLOR_MUTED, font=self._bill_font("small"),
+                ).pack(anchor="w")
+                tk.Label(
+                    fr,
+                    text=f"${amt:,.2f}",
+                    bg=COLOR_CARD,
+                    fg=fg,
+                    font=self._bill_font("totals"),
+                ).pack(anchor="w")
+
+        if self._billing_layout_compact:
+            self.after_idle(self._fit_laptop_totals_display)
 
         self.lines_tree.delete(*self.lines_tree.get_children())
         dx_all = ", ".join(enc.get("diagnosis_pointers") or []) or "—"
