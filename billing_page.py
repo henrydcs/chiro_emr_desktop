@@ -229,6 +229,7 @@ _BILLING_LAPTOP_TOTALS_BODY_PX = 16
 _BILLING_LAPTOP_ROW_GAP_PX = 6
 _BILLING_LAPTOP_PKG_TREE_ROWS = 3
 _BILLING_LAPTOP_LINES_TREE_ROWS = 3
+_BILLING_LAPTOP_INS_TREE_ROWS = 9
 _BILLING_LAPTOP_LINES_CARD_PX = 81  # fixed charge-lines band; 25% below prior 108px laptop height
 _BILLING_LAPTOP_CHARGE_GAP_PX = 4  # tiny gap above charge lines
 
@@ -264,6 +265,7 @@ class BillingPage(tk.Frame):
         self._billing_action_btns_normal: list[tk.Button] = []
         self._lines_col_specs: list[dict] = []
         self._pkg_col_specs: list[dict] = []
+        self._ins_col_specs: list[dict] = []
         self._panel_shell_spacers: list[tk.Frame] = []
 
         self._build()
@@ -563,6 +565,73 @@ class BillingPage(tk.Frame):
             if hasattr(self, "pkg_tree"):
                 self.pkg_tree.configure(height=10)
 
+    def _apply_insurance_panel_layout(self, compact: bool) -> None:
+        """Laptop-only: 3-row action grid so all 14 insurance buttons stay visible."""
+        if not hasattr(self, "btn_ins_claim"):
+            return
+
+        row1 = (
+            self.btn_ins_claim,
+            self.btn_ins_auths,
+            self.btn_ins_line_auth,
+            self.btn_ins_catalog,
+        )
+        row2 = (
+            self.btn_ins_ready,
+            self.btn_ins_submit,
+            self.btn_ins_post,
+            self.btn_ins_copay,
+            self.btn_ins_correct,
+        )
+        row3 = (
+            self.btn_ins_denials,
+            self.btn_ins_ar,
+            self.btn_ins_timeline,
+            self.btn_ins_refresh,
+            self.btn_ins_receipt_folder,
+        )
+        all_btns = row1 + row2 + row3
+
+        for btn in all_btns:
+            btn.pack_forget()
+            btn.grid_forget()
+
+        if compact:
+            self.btn_ins_auths.configure(text="Auths")
+            self.btn_ins_copay.configure(text="Copay")
+            self.btn_ins_correct.configure(text="Correct")
+            self.btn_ins_ar.configure(text="A/R")
+            self.btn_ins_receipt_folder.configure(text="Receipts")
+            for col, btn in enumerate(row1):
+                btn.grid(row=0, column=col, sticky="w", padx=(0, 4), pady=(0, 2))
+            for col, btn in enumerate(row2):
+                btn.grid(row=1, column=col, sticky="w", padx=(0, 4), pady=(2, 2))
+            for col, btn in enumerate(row3):
+                btn.grid(row=2, column=col, sticky="w", padx=(0, 4), pady=(2, 0))
+            if hasattr(self, "_ins_actions"):
+                self._ins_actions.grid_configure(pady=(0, 4))
+            if hasattr(self, "ins_tree"):
+                self.ins_tree.configure(height=_BILLING_LAPTOP_INS_TREE_ROWS)
+        else:
+            self.btn_ins_auths.configure(text="Authorizations")
+            self.btn_ins_copay.configure(text="Collect copay")
+            self.btn_ins_correct.configure(text="Correct/void")
+            self.btn_ins_ar.configure(text="A/R report")
+            self.btn_ins_receipt_folder.configure(text="Receipt folder")
+            for btn in all_btns:
+                if btn is self.btn_ins_claim:
+                    btn.pack(side="left", padx=(0, 8))
+                elif btn is self.btn_ins_refresh:
+                    btn.pack(side="left", padx=(0, 8))
+                elif btn is self.btn_ins_receipt_folder:
+                    btn.pack(side="left")
+                else:
+                    btn.pack(side="left", padx=(0, 6))
+            if hasattr(self, "_ins_actions"):
+                self._ins_actions.grid_configure(pady=(0, 8))
+            if hasattr(self, "ins_tree"):
+                self.ins_tree.configure(height=10)
+
     def _apply_billing_laptop_fixed_geometry(self, *, grid_pady_bottom: int, grid_padx_mid: int) -> None:
         """Laptop grid: row 1 expands; charge lines stay fixed at the bottom."""
         gap = _BILLING_LAPTOP_ROW_GAP_PX
@@ -620,6 +689,7 @@ class BillingPage(tk.Frame):
             sp.pack_forget()
 
         self._apply_package_panel_layout(True)
+        self._apply_insurance_panel_layout(True)
         self._lock_laptop_visit_and_panel_frames()
         self.after_idle(self._fit_laptop_totals_display)
 
@@ -665,6 +735,7 @@ class BillingPage(tk.Frame):
         if hasattr(self, "_pkg_card"):
             self._pkg_card.pack_configure(fill="both", expand=True)
         self._apply_package_panel_layout(False)
+        self._apply_insurance_panel_layout(False)
         for sp in self._panel_shell_spacers:
             if not sp.winfo_manager():
                 sp.pack(fill="both", expand=True)
@@ -761,6 +832,14 @@ class BillingPage(tk.Frame):
                 stretch=spec["stretch"],
             )
 
+        for spec in self._ins_col_specs:
+            width = spec["laptop_w"] if compact else spec["wide_w"]
+            self.ins_tree.column(
+                spec["col"],
+                width=width,
+                anchor=spec["anchor"],
+            )
+
         if hasattr(self, "pkg_reconcile_label"):
             self.pkg_reconcile_label.configure(
                 font=self._bill_font("small"),
@@ -777,6 +856,8 @@ class BillingPage(tk.Frame):
         self.lines_tree.configure(style="Billing.Treeview")
         if hasattr(self, "pkg_tree"):
             self.pkg_tree.configure(style="Billing.Treeview")
+        if hasattr(self, "ins_tree"):
+            self.ins_tree.configure(style="Billing.Treeview")
 
         self._show_billing_panel(self._billing_panel)
 
@@ -1425,8 +1506,24 @@ class BillingPage(tk.Frame):
             self.btn_pkg_receipt_folder,
             self.btn_pkg_detail,
             self.btn_pkg_refund,
+            self.btn_ins_claim,
+            self.btn_ins_auths,
+            self.btn_ins_line_auth,
+            self.btn_ins_ready,
+            self.btn_ins_submit,
+            self.btn_ins_post,
+            self.btn_ins_copay,
+            self.btn_ins_correct,
+            self.btn_ins_denials,
+            self.btn_ins_ar,
+            self.btn_ins_timeline,
+            self.btn_ins_receipt_folder,
         ])
-        self._billing_action_btns_normal.extend([self.btn_pkg_cancel])
+        self._billing_action_btns_normal.extend([
+            self.btn_pkg_cancel,
+            self.btn_ins_catalog,
+            self.btn_ins_refresh,
+        ])
 
         outer.bind("<Configure>", self._on_billing_configure, add="+")
         self.after_idle(self._sync_billing_layout)
@@ -1918,9 +2015,10 @@ class BillingPage(tk.Frame):
         card, body = make_card(parent, "Insurance billing", "Claims queue · posting · COB")
         card.pack(fill="both", expand=True)
         body.columnconfigure(0, weight=1)
-        body.rowconfigure(2, weight=1)
+        body.rowconfigure(1, weight=1)
 
         actions = tk.Frame(body, bg=COLOR_CARD)
+        self._ins_actions = actions
         actions.grid(row=0, column=0, sticky="ew", pady=(0, 8))
         self.btn_ins_claim = tk.Button(
             actions,
@@ -2135,27 +2233,8 @@ class BillingPage(tk.Frame):
         )
         self.btn_ins_receipt_folder.pack(side="left")
 
-        self.ins_status_var = tk.StringVar(value="Select a visit and click Create claim.")
-        self.ins_balance_var = tk.StringVar(value="")
-        status_row = tk.Frame(body, bg=COLOR_CARD)
-        status_row.grid(row=1, column=0, sticky="ew", pady=(0, 8))
-        tk.Label(
-            status_row,
-            textvariable=self.ins_status_var,
-            bg=COLOR_CARD,
-            fg=COLOR_MUTED,
-            font=FONT_SMALL,
-        ).pack(anchor="w")
-        tk.Label(
-            status_row,
-            textvariable=self.ins_balance_var,
-            bg=COLOR_CARD,
-            fg="#B45309",
-            font=FONT_BASE_BOLD,
-        ).pack(anchor="w", pady=(4, 0))
-
         tree_wrap = tk.Frame(body, bg=COLOR_CARD)
-        tree_wrap.grid(row=2, column=0, sticky="nsew")
+        tree_wrap.grid(row=1, column=0, sticky="nsew")
         tree_wrap.rowconfigure(0, weight=1)
         tree_wrap.columnconfigure(0, weight=1)
         cols = ("claim", "status", "cob", "payer", "dos", "charged", "payer_paid", "patient_resp", "updated")
@@ -2166,23 +2245,32 @@ class BillingPage(tk.Frame):
             selectmode="browse",
             height=10,
         )
-        for col, title, w in [
-            ("claim", "Claim ID", 160),
-            ("status", "Status", 110),
-            ("cob", "COB", 70),
-            ("payer", "Payer", 140),
-            ("dos", "DOS", 90),
-            ("charged", "Charged", 90),
-            ("payer_paid", "Payer Paid", 90),
-            ("patient_resp", "Patient Resp", 100),
-            ("updated", "Updated", 130),
+        for col, title, wide_w, laptop_w in [
+            ("claim", "Claim ID", 160, 118),
+            ("status", "Status", 110, 78),
+            ("cob", "COB", 70, 48),
+            ("payer", "Payer", 140, 96),
+            ("dos", "DOS", 90, 72),
+            ("charged", "Charged", 90, 72),
+            ("payer_paid", "Payer Paid", 90, 72),
+            ("patient_resp", "Patient Resp", 100, 80),
+            ("updated", "Updated", 130, 96),
         ]:
+            anchor = "w" if col in ("claim", "payer", "updated") else "center"
             self.ins_tree.heading(col, text=title)
-            self.ins_tree.column(col, width=w, anchor="w" if col in ("claim", "payer", "updated") else "center")
+            self.ins_tree.column(col, width=wide_w, anchor=anchor)
+            self._ins_col_specs.append({
+                "col": col,
+                "wide_w": wide_w,
+                "laptop_w": laptop_w,
+                "anchor": anchor,
+            })
         ins_vsb = ttk.Scrollbar(tree_wrap, orient="vertical", command=self.ins_tree.yview)
-        self.ins_tree.configure(yscrollcommand=ins_vsb.set)
+        ins_hsb = ttk.Scrollbar(tree_wrap, orient="horizontal", command=self.ins_tree.xview)
+        self.ins_tree.configure(yscrollcommand=ins_vsb.set, xscrollcommand=ins_hsb.set)
         self.ins_tree.grid(row=0, column=0, sticky="nsew")
         ins_vsb.grid(row=0, column=1, sticky="ns")
+        ins_hsb.grid(row=1, column=0, sticky="ew")
         self.ins_tree.bind("<<TreeviewSelect>>", lambda _e: self._on_insurance_tree_select())
         self.ins_tree.bind("<Double-Button-1>", lambda _e: self._ins_show_timeline())
         self._pending_insurance_patient_resp: float | None = None
@@ -2214,14 +2302,12 @@ class BillingPage(tk.Frame):
         folder = (self.active_patient or {}).get("folder") or ""
         patient_id = (self.active_patient or {}).get("patient_id") or ""
         if not folder:
-            self.ins_status_var.set("Select a patient first.")
             self._update_insurance_buttons()
             return
         try:
             ensure_insurance_files(folder, patient_id=patient_id)
             states = derive_claim_states(folder)
-        except Exception as e:
-            self.ins_status_var.set(f"Insurance load failed: {e}")
+        except Exception:
             self._update_insurance_buttons()
             return
         self._insurance_states = states
@@ -2247,10 +2333,6 @@ class BillingPage(tk.Frame):
                     st.get("updated_at") or "",
                 ),
             )
-        if states:
-            self.ins_status_var.set(f"{len(states)} insurance claim(s).")
-        else:
-            self.ins_status_var.set("No claims yet. Select a visit, then Create claim.")
         self._update_insurance_buttons()
         if self._billing_panel == "insurance":
             self._refresh_receipt_preview()
@@ -2270,7 +2352,6 @@ class BillingPage(tk.Frame):
             self.btn_ins_denials.configure(state="normal" if can_patient else "disabled")
         if hasattr(self, "btn_ins_ar"):
             self.btn_ins_ar.configure(state="normal" if can_patient else "disabled")
-        self._refresh_insurance_balance_ui()
         if not selected_state:
             for name in (
                 "btn_ins_ready",
@@ -2313,30 +2394,6 @@ class BillingPage(tk.Frame):
                 and status
                 not in ("draft", "ready_to_submit", "voided")
                 else "disabled"
-            )
-
-    def _refresh_insurance_balance_ui(self) -> None:
-        if not hasattr(self, "ins_balance_var"):
-            return
-        folder = (self.active_patient or {}).get("folder") or ""
-        if not folder:
-            self.ins_balance_var.set("")
-            return
-        total = insurance_patient_balance_total(folder)
-        visit_out = 0.0
-        if self._selected_visit:
-            bal = insurance_balance_for_visit(
-                folder,
-                exam_path=self._selected_visit.get("path") or "",
-                encounter_id=(self._current_encounter or {}).get("encounter_id") or "",
-            )
-            visit_out = float(bal.get("patient_resp_outstanding") or 0.0)
-        if total <= 0.01 and visit_out <= 0.01:
-            self.ins_balance_var.set("Insurance patient balance: $0.00")
-        else:
-            self.ins_balance_var.set(
-                f"Insurance patient balance — all claims: ${total:,.2f}  |  "
-                f"this visit: ${visit_out:,.2f}"
             )
 
     def _ins_manage_authorizations(self) -> None:
@@ -2404,7 +2461,6 @@ class BillingPage(tk.Frame):
             messagebox.showerror("Insurance", str(e), parent=self)
             return
         self._refresh_insurance_panel()
-        self.ins_status_var.set(f"Created claim {(created.get('claim_id') or '')}.")
 
     def _ins_change_status(self, to_status: str) -> None:
         st = self._selected_insurance_state()
@@ -2499,14 +2555,7 @@ class BillingPage(tk.Frame):
                 pass
             self._refresh_insurance_panel()
             self._refresh_receipt_preview()
-            self._refresh_insurance_balance_ui()
             pat_resp = float(form.get("patient_resp") or 0.0)
-            if result.get("secondary_claim"):
-                self.ins_status_var.set(
-                    "Posting saved. EOB saved. Secondary claim auto-generated (COB)."
-                )
-            else:
-                self.ins_status_var.set("Posting saved. EOB saved to Receipt folder.")
             if pat_resp > 0.01:
                 self._ins_prompt_collect_patient_resp(updated, pat_resp)
 
@@ -2536,7 +2585,6 @@ class BillingPage(tk.Frame):
 
         def _done(result: dict) -> None:
             pay_amt = float(result.get("amount") or 0)
-            mode = result.get("mode") or ""
             try:
                 save_insurance_copay_receipt(
                     folder,
@@ -2551,19 +2599,10 @@ class BillingPage(tk.Frame):
             self._pending_insurance_patient_resp = None
             self._pending_insurance_claim_id = ""
             self._refresh_insurance_panel()
-            self._refresh_insurance_balance_ui()
             self._load_visits()
             path = (self._selected_visit or {}).get("path") or ""
             if path:
                 self._reselect_visit_by_path(path)
-            if mode == "copay_checkout":
-                self.ins_status_var.set(
-                    f"Copay ${pay_amt:,.2f} collected (copay-only cash post + payment)."
-                )
-            else:
-                self.ins_status_var.set(
-                    f"Copay ${pay_amt:,.2f} collected on existing cash ledger."
-                )
             messagebox.showinfo(
                 "Copay collected",
                 f"${pay_amt:,.2f} applied to claim {st.get('claim_id') or ''}.\n"
@@ -2588,7 +2627,7 @@ class BillingPage(tk.Frame):
         def _create(opts: dict) -> None:
             folder = self.active_patient.get("folder") or ""
             try:
-                evt = create_correction_or_void_claim(
+                create_correction_or_void_claim(
                     patient_root=folder,
                     original_claim_id=cid,
                     claim_frequency_code=opts.get("frequency_code") or "7",
@@ -2599,7 +2638,6 @@ class BillingPage(tk.Frame):
                 messagebox.showerror("Insurance", str(e), parent=self)
                 return
             self._refresh_insurance_panel()
-            self.ins_status_var.set(f"Created follow-up claim {evt.get('claim_id') or ''}.")
 
         InsuranceCorrectionDialog(self, claim_id=cid, on_complete=_create)
 
@@ -3610,7 +3648,6 @@ class BillingPage(tk.Frame):
         self._update_package_action_buttons()
         if hasattr(self, "ins_tree"):
             self._update_insurance_buttons()
-            self._refresh_insurance_balance_ui()
 
     def _rebuild_selected(self) -> None:
         if not self._selected_visit or not self.active_patient:
@@ -4115,8 +4152,6 @@ class BillingPage(tk.Frame):
         keep_path = (self._selected_visit or {}).get("path") or ""
         self._load_visits()
         self._reselect_visit_by_path(keep_path)
-        if hasattr(self, "ins_tree"):
-            self._refresh_insurance_balance_ui()
         messagebox.showinfo("Payment recorded", f"${amount:,.2f} ({method}) applied.")
         if messagebox.askyesno("Receipt", "Open full receipt window to save a copy?"):
             self._show_receipt(payment=pay)
