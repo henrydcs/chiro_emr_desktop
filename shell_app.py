@@ -37,7 +37,7 @@ NAV_ITEMS: list[tuple[str, str]] = [
     ("schedule", "Schedule"),
     ("documents", "Documents"),
     ("billing", "Billing"),
-    ("patients", "Patients"),
+    ("demographics", "Demographics"),
     ("providers", "Providers"),
     ("appt_types", "Appt Types"),
     ("team", "Team"),
@@ -535,6 +535,10 @@ class ShellLayout(tk.Frame):
 
         self.documents_page: DocumentsPage | None = None
         self.billing_page: "BillingPage | None" = None
+        self.schedule_page: "SchedulePage | None" = None
+        self.appt_types_page: "ApptTypesPage | None" = None
+        self.providers_page: "ProvidersPage | None" = None
+        self.demographics_page: "DemographicsPage | None" = None
 
         self._build()
         self.show_page("dashboard")
@@ -593,8 +597,26 @@ class ShellLayout(tk.Frame):
 
                 page = BillingPage(self.page_area, self)
                 self.billing_page = page
-            elif nav_id == "patients":
-                page = PatientsPage(self.page_area, self)
+            elif nav_id == "schedule":
+                from schedule_page import SchedulePage
+
+                page = SchedulePage(self.page_area, self)
+                self.schedule_page = page
+            elif nav_id == "appt_types":
+                from appt_types_page import ApptTypesPage
+
+                page = ApptTypesPage(self.page_area, self)
+                self.appt_types_page = page
+            elif nav_id == "providers":
+                from providers_page import ProvidersPage
+
+                page = ProvidersPage(self.page_area, self)
+                self.providers_page = page
+            elif nav_id == "demographics":
+                from demographics_page import DemographicsPage
+
+                page = DemographicsPage(self.page_area, self)
+                self.demographics_page = page
             else:
                 page = PlaceholderPage(self.page_area, label)
             self._pages[nav_id] = page
@@ -643,6 +665,32 @@ class ShellLayout(tk.Frame):
                 self.billing_page._sync_patient_from_shell()
             except Exception:
                 pass
+        if nav_id == "schedule" and self.schedule_page is not None:
+            try:
+                self.schedule_page._refresh()
+            except Exception:
+                pass
+        if nav_id == "appt_types" and self.appt_types_page is not None:
+            try:
+                self.appt_types_page.refresh()
+            except Exception:
+                pass
+        if nav_id == "providers" and self.providers_page is not None:
+            try:
+                self.providers_page.refresh()
+            except Exception:
+                pass
+        if nav_id == "demographics" and self.demographics_page is not None:
+            try:
+                self.demographics_page.refresh()
+            except Exception:
+                pass
+        page = self._pages.get(nav_id)
+        if nav_id == "dashboard" and isinstance(page, DashboardPage):
+            try:
+                page.refresh()
+            except Exception:
+                pass
 
 
 # ============================================================
@@ -669,7 +717,9 @@ class PlaceholderPage(tk.Frame):
 class DashboardPage(tk.Frame):
     def __init__(self, parent: tk.Misc, current_user: str):
         super().__init__(parent, bg=COLOR_BG_APP)
+        self._current_user = current_user
         wrap = tk.Frame(self, bg=COLOR_BG_APP)
+        self._wrap = wrap
         wrap.pack(fill="both", expand=True, padx=20, pady=20)
 
         tk.Label(wrap, text="Dashboard", bg=COLOR_BG_APP,
@@ -699,13 +749,54 @@ class DashboardPage(tk.Frame):
         # Lower row
         lower = tk.Frame(wrap, bg=COLOR_BG_APP)
         lower.pack(fill="both", expand=True, pady=(8, 0))
+        self._upcoming_body: tk.Frame | None = None
         for i, title in enumerate(["Recent Activity", "Upcoming Appointments"]):
             card, body = make_card(lower, title)
             card.grid(row=0, column=i, sticky="nsew", padx=(0 if i == 0 else 12, 0))
-            tk.Label(body, text="No data yet.", bg=COLOR_CARD, fg=COLOR_MUTED,
-                     font=FONT_BASE).pack(anchor="w", pady=20)
+            if title == "Upcoming Appointments":
+                self._upcoming_body = body
+            else:
+                tk.Label(body, text="No data yet.", bg=COLOR_CARD, fg=COLOR_MUTED,
+                         font=FONT_BASE).pack(anchor="w", pady=20)
             lower.grid_columnconfigure(i, weight=1, uniform="lower")
         lower.grid_rowconfigure(0, weight=1)
+        self.refresh()
+
+    def refresh(self) -> None:
+        if self._upcoming_body is None:
+            return
+        for w in self._upcoming_body.winfo_children():
+            w.destroy()
+        try:
+            from datetime import date
+            from schedule_engine import enrich_appointment, format_time_12h, patient_short_label
+            from schedule_storage import upcoming_appointments
+
+            rows = upcoming_appointments(from_day=date.today(), days=7)
+            rows = [enrich_appointment(r) for r in rows][:8]
+        except Exception:
+            rows = []
+        if not rows:
+            tk.Label(
+                self._upcoming_body, text="No upcoming appointments.",
+                bg=COLOR_CARD, fg=COLOR_MUTED, font=FONT_BASE,
+            ).pack(anchor="w", pady=20)
+            return
+        for appt in rows:
+            style = appt.get("display_style") or {"bg": "#DBEAFE", "fg": "#1E40AF"}
+            d_raw = appt.get("date") or ""
+            try:
+                d_label = date.fromisoformat(d_raw).strftime("%a %m/%d")
+            except Exception:
+                d_label = d_raw
+            line = (
+                f"{d_label}  {format_time_12h(appt.get('start_time') or '')}  "
+                f"{patient_short_label(appt)}  ·  {(appt.get('appt_type') or '').strip()}"
+            )
+            tk.Label(
+                self._upcoming_body, text=line, bg=style["bg"], fg=style["fg"],
+                font=FONT_BASE, anchor="w", padx=8, pady=4,
+            ).pack(fill="x", pady=(0, 4))
 
 
 # ============================================================

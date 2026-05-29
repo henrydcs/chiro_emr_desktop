@@ -5025,7 +5025,6 @@ class App(tk.Tk):
                 self.tk_docs_page.refresh()
             except Exception:
                 pass
-            self.after_idle(self.show_current_patient_alerts_popup)
             try:
                 self._refresh_referral_toggle_buttons()
             except Exception:
@@ -6569,9 +6568,6 @@ class App(tk.Tk):
             except Exception:
                 pass
 
-            # After loading patient_id + names, show that patient's alerts file
-            self.after_idle(self.show_current_patient_alerts_popup)
-
             try:
                 self._refresh_referral_toggle_buttons()
             except Exception:
@@ -6955,7 +6951,6 @@ class App(tk.Tk):
         self.status_var.set("New case started. Previous cases/files are unchanged.")
         self.current_patient_id = None
         self._ensure_current_patient_id()
-        self.after_idle(self.show_current_patient_alerts_popup)
         try:
             self._refresh_referral_toggle_buttons()
         except Exception:

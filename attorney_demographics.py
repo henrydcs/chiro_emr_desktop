@@ -23,6 +23,8 @@ from datetime import datetime
 from tkinter import ttk, messagebox
 
 import attorney_data as adata
+from demographics_styling import DemographicsShellThemeMixin, PREFIX
+from shell_app import COLOR_BG_APP, COLOR_MUTED, FONT_SECTION
 
 
 # Wide range so the user always finds the year they want.
@@ -276,10 +278,10 @@ class _AttorneyEditor(tk.Toplevel):
 
 
 # ===========================================================================
-# Main window
+# Main panel (embeddable) + popup window wrapper
 # ===========================================================================
-class AttorneyDemographicsWindow(tk.Toplevel):
-    """Notebook-style window with Directory + multiple Stats tabs."""
+class AttorneyDemographicsPanel(DemographicsShellThemeMixin, ttk.Frame):
+    """Notebook-style UI with Directory + multiple Stats tabs."""
 
     TAB_KEYS = ("patient", "directory", "dol", "att_in", "att_out", "master", "alpha")
 
@@ -290,6 +292,8 @@ class AttorneyDemographicsWindow(tk.Toplevel):
         *,
         get_current_patient_fn=None,
         on_change_callback=None,
+        show_close: bool = False,
+        shell_theme: bool = False,
     ):
         """
         get_current_patient_fn() should return a dict like:
@@ -304,26 +308,24 @@ class AttorneyDemographicsWindow(tk.Toplevel):
         on_change_callback() is called any time the window mutates this
         patient's referral state, so the parent can refresh its UI.
         """
-        super().__init__(master)
-        self.title("Attorney Demographics & Referrals")
-        self.transient(master)
-        self.attributes("-topmost", True)
+        self._init_shell_theme(master, shell_theme)
+        if self._shell_theme:
+            super().__init__(master, style=f"{PREFIX}.TFrame")
+        else:
+            super().__init__(master)
 
         self._get_current_patient_fn = get_current_patient_fn
         self._on_change_callback = on_change_callback
 
-        sw = self.winfo_screenwidth()
-        sh = self.winfo_screenheight()
-        w = min(1200, int(sw * 0.78))
-        h = min(820,  int(sh * 0.82))
-        self.geometry(f"{w}x{h}")
-        self.minsize(900, 620)
-
-        nb = ttk.Notebook(self)
+        nb_kw: dict = {}
+        if self._shell_theme:
+            nb_kw["style"] = f"{PREFIX}.TNotebook"
+        nb = ttk.Notebook(self, **nb_kw)
         self._notebook = nb
-        nb.pack(fill="both", expand=True, padx=10, pady=10)
+        nb.pack(fill="both", expand=True, padx=(0, 0) if self._shell_theme else 10, pady=(0, 8) if self._shell_theme else 10)
 
         self._tabs: dict[str, ttk.Frame] = {}
+        tab_frame_style = f"{PREFIX}.Card.TFrame" if self._shell_theme else None
         for key, label in [
             ("patient",   "This Patient"),
             ("directory", "Attorneys Directory"),
@@ -333,7 +335,10 @@ class AttorneyDemographicsWindow(tk.Toplevel):
             ("master",    "Master Stats"),
             ("alpha",     "Alphabetical List"),
         ]:
-            f = ttk.Frame(nb, padding=10)
+            if tab_frame_style:
+                f = ttk.Frame(nb, padding=10, style=tab_frame_style)
+            else:
+                f = ttk.Frame(nb, padding=10)
             nb.add(f, text=label)
             self._tabs[key] = f
 
@@ -354,12 +359,25 @@ class AttorneyDemographicsWindow(tk.Toplevel):
 
         nb.bind("<<NotebookTabChanged>>", lambda e: self._refresh_all())
 
-        bottom = ttk.Frame(self)
-        bottom.pack(fill="x", padx=10, pady=(0, 10))
-        ttk.Button(bottom, text="Refresh", command=self._refresh_all).pack(side="left")
-        ttk.Button(bottom, text="Close", command=self.destroy).pack(side="right")
+        if self._shell_theme:
+            bottom = tk.Frame(self, bg=COLOR_BG_APP)
+            bottom.pack(fill="x", pady=(4, 0))
+            self._mk_btn(bottom, "Refresh", self._refresh_all, side="left")
+            if show_close:
+                self._mk_btn(bottom, "Close", self._close_host, side="right", padx=(6, 0))
+        else:
+            bottom = ttk.Frame(self)
+            bottom.pack(fill="x", padx=10, pady=(0, 10))
+            ttk.Button(bottom, text="Refresh", command=self._refresh_all).pack(side="left")
+            if show_close:
+                ttk.Button(bottom, text="Close", command=self._close_host).pack(side="right")
 
         self._refresh_all()
+
+    def _close_host(self) -> None:
+        top = self.winfo_toplevel()
+        if top is not self:
+            top.destroy()
 
     # -------------------------------- shared --------------------------------
     def _current_patient_info(self) -> dict | None:
@@ -393,26 +411,22 @@ class AttorneyDemographicsWindow(tk.Toplevel):
 
     # ----------------------- Tab: This Patient ------------------------------
     def _build_patient_tab(self, parent: ttk.Frame):
-        header = ttk.Frame(parent)
+        header = self._mk_frame(parent, card=True)
         header.pack(fill="x", pady=(0, 8))
 
         self._patient_title_var = tk.StringVar(value="Current Patient")
-        ttk.Label(
-            header,
-            textvariable=self._patient_title_var,
-            font=("Segoe UI", 13, "bold"),
+        self._mk_label(
+            header, textvariable=self._patient_title_var, title=True,
         ).pack(anchor="w")
 
         self._patient_subtitle_var = tk.StringVar(value="")
-        ttk.Label(
-            header,
-            textvariable=self._patient_subtitle_var,
-            foreground="gray",
+        self._mk_label(
+            header, textvariable=self._patient_subtitle_var, muted=True,
         ).pack(anchor="w")
 
         ttk.Separator(parent).pack(fill="x", pady=(2, 10))
 
-        body = ttk.Frame(parent)
+        body = self._mk_frame(parent, card=True)
         body.pack(fill="both", expand=True)
 
         # Three labelframes side-by-side; on narrow windows they stack.
@@ -423,47 +437,40 @@ class AttorneyDemographicsWindow(tk.Toplevel):
             ("from_attorney",  "Attorney Referred Patient"),
             ("to_attorney",    "We Referred to Attorney"),
         )):
-            lf = ttk.LabelFrame(body, text=title)
+            lf = self._mk_lf(body, title)
             lf.grid(row=0, column=col, sticky="nsew", padx=(0 if col == 0 else 6, 0), pady=0)
             body.columnconfigure(col, weight=1)
             body.rowconfigure(0, weight=1)
 
-            inner = ttk.Frame(lf, padding=10)
-            inner.pack(fill="both", expand=True)
+            inner = self._mk_frame(lf, card=True)
+            inner.pack(fill="both", expand=True, padx=10, pady=10)
 
             status_var = tk.StringVar(value="(not set)")
-            ttk.Label(
-                inner, textvariable=status_var,
-                font=("Segoe UI", 10, "bold"),
+            self._mk_label(
+                inner, textvariable=status_var, section=True,
             ).pack(anchor="w")
 
             details_var = tk.StringVar(value="")
-            details_lbl = ttk.Label(
+            details_lbl = self._mk_label(
                 inner, textvariable=details_var, justify="left", anchor="w",
             )
             details_lbl.pack(fill="x", pady=(6, 0))
 
-            btn_row = ttk.Frame(inner)
+            btn_row = self._mk_frame(inner, card=True)
             btn_row.pack(fill="x", pady=(10, 0))
 
-            set_btn = ttk.Button(
-                btn_row,
-                text="Set / Change…",
-                command=lambda d=direction: self._patient_set(d),
+            set_btn = self._mk_btn(
+                btn_row, "Set / Change…", lambda d=direction: self._patient_set(d),
             )
             set_btn.pack(side="left")
 
-            clear_btn = ttk.Button(
-                btn_row,
-                text="Clear",
-                command=lambda d=direction: self._patient_clear(d),
+            clear_btn = self._mk_btn(
+                btn_row, "Clear", lambda d=direction: self._patient_clear(d),
             )
             clear_btn.pack(side="left", padx=(6, 0))
 
-            view_btn = ttk.Button(
-                btn_row,
-                text="Edit Attorney…",
-                command=lambda d=direction: self._patient_edit_linked(d),
+            view_btn = self._mk_btn(
+                btn_row, "Edit Attorney…", lambda d=direction: self._patient_edit_linked(d),
             )
             view_btn.pack(side="left", padx=(6, 0))
 
@@ -479,11 +486,8 @@ class AttorneyDemographicsWindow(tk.Toplevel):
         self._patient_no_patient_var = tk.StringVar(
             value="No patient loaded. Open or start a patient case to see their attorney."
         )
-        self._patient_no_patient_label = ttk.Label(
-            parent,
-            textvariable=self._patient_no_patient_var,
-            foreground="gray",
-            font=("Segoe UI", 10, "italic"),
+        self._patient_no_patient_label = self._mk_label(
+            parent, textvariable=self._patient_no_patient_var, italic=True,
         )
         # only packed when there's no patient
 
@@ -498,9 +502,9 @@ class AttorneyDemographicsWindow(tk.Toplevel):
             for d, w in self._patient_section_widgets.items():
                 w["status_var"].set("(no patient loaded)")
                 w["details_var"].set("")
-                w["set_btn"].state(["disabled"])
-                w["clear_btn"].state(["disabled"])
-                w["view_btn"].state(["disabled"])
+                self._set_widget_enabled(w["set_btn"], False)
+                self._set_widget_enabled(w["clear_btn"], False)
+                self._set_widget_enabled(w["view_btn"], False)
             try:
                 self._patient_no_patient_label.pack(fill="x", pady=(8, 0))
             except Exception:
@@ -528,24 +532,24 @@ class AttorneyDemographicsWindow(tk.Toplevel):
             entry = state.get(direction) or {}
             aid = (entry.get("attorney_id") or "").strip()
             set_at = (entry.get("set_at") or "").strip()
-            widgets["set_btn"].state(["!disabled"])
+            self._set_widget_enabled(widgets["set_btn"], True)
             if aid:
                 rec = adata.find_attorney(aid)
                 if rec:
                     widgets["status_var"].set("✓  " + adata.attorney_display_label(rec))
                     widgets["details_var"].set(self._format_attorney_block(rec, set_at))
-                    widgets["clear_btn"].state(["!disabled"])
-                    widgets["view_btn"].state(["!disabled"])
+                    self._set_widget_enabled(widgets["clear_btn"], True)
+                    self._set_widget_enabled(widgets["view_btn"], True)
                 else:
                     widgets["status_var"].set("(linked attorney was deleted)")
                     widgets["details_var"].set("")
-                    widgets["clear_btn"].state(["!disabled"])
-                    widgets["view_btn"].state(["disabled"])
+                    self._set_widget_enabled(widgets["clear_btn"], True)
+                    self._set_widget_enabled(widgets["view_btn"], False)
             else:
                 widgets["status_var"].set("(not set)")
                 widgets["details_var"].set("Click 'Set / Change…' to link this patient to an attorney.")
-                widgets["clear_btn"].state(["disabled"])
-                widgets["view_btn"].state(["disabled"])
+                self._set_widget_enabled(widgets["clear_btn"], False)
+                self._set_widget_enabled(widgets["view_btn"], False)
 
     @staticmethod
     def _format_attorney_block(rec: dict, set_at: str = "") -> str:
@@ -652,34 +656,30 @@ class AttorneyDemographicsWindow(tk.Toplevel):
 
     # ---------------------- Tab: Attorneys Directory -----------------------
     def _build_directory_tab(self, parent: ttk.Frame):
-        top = ttk.Frame(parent)
+        top = self._mk_frame(parent, card=True)
         top.pack(fill="x", pady=(0, 8))
 
-        ttk.Label(
-            top,
-            text="Attorneys Directory",
-            font=("Segoe UI", 12, "bold"),
-        ).pack(side="left")
+        self._mk_label(top, text="Attorneys Directory", heading=True).pack(side="left")
 
-        ttk.Button(top, text="Add Attorney", command=self._dir_add).pack(side="right")
-        ttk.Button(top, text="Edit", command=self._dir_edit).pack(side="right", padx=(0, 6))
-        ttk.Button(top, text="Delete", command=self._dir_delete).pack(side="right", padx=(0, 6))
-        ttk.Button(top, text="Print PDF…", command=self._dir_print_pdf).pack(side="right", padx=(0, 12))
+        self._mk_btn(top, "Print PDF…", self._dir_print_pdf, side="right", padx=(0, 12))
+        self._mk_btn(top, "Delete", self._dir_delete, side="right", padx=(0, 6))
+        self._mk_btn(top, "Edit", self._dir_edit, side="right", padx=(0, 6))
+        self._mk_btn(top, "Add Attorney", self._dir_add, side="right", accent=True)
 
-        search_row = ttk.Frame(parent)
+        search_row = self._mk_frame(parent, card=True)
         search_row.pack(fill="x", pady=(0, 6))
-        ttk.Label(search_row, text="Search:").pack(side="left")
+        self._mk_label(search_row, text="Search:").pack(side="left")
         self._dir_search_var = tk.StringVar()
         ttk.Entry(search_row, textvariable=self._dir_search_var).pack(
             side="left", fill="x", expand=True, padx=(6, 0)
         )
         self._dir_search_var.trace_add("write", lambda *_: self._refresh_directory())
 
-        body = ttk.Frame(parent)
+        body = self._mk_frame(parent, card=True)
         body.pack(fill="both", expand=True)
 
         cols = ("firm", "attorney", "phone", "email", "city", "state")
-        self._dir_tree = ttk.Treeview(body, columns=cols, show="headings", selectmode="browse")
+        self._dir_tree = self._mk_tree(body, columns=cols, show="headings", selectmode="browse")
         for c, label, w in [
             ("firm", "Firm", 220),
             ("attorney", "Attorney", 180),
@@ -698,10 +698,10 @@ class AttorneyDemographicsWindow(tk.Toplevel):
         self._dir_tree.bind("<Double-Button-1>", lambda e: self._dir_edit())
 
         # Detail panel
-        detail = ttk.LabelFrame(parent, text="Details")
+        detail = self._mk_lf(parent, "Details")
         detail.pack(fill="x", pady=(8, 0))
         self._dir_detail_var = tk.StringVar(value="(select an attorney)")
-        ttk.Label(
+        self._mk_label(
             detail, textvariable=self._dir_detail_var, justify="left", anchor="w",
         ).pack(fill="x", padx=8, pady=8)
         self._dir_tree.bind("<<TreeviewSelect>>", lambda e: self._dir_update_detail())
@@ -890,21 +890,21 @@ class AttorneyDemographicsWindow(tk.Toplevel):
 
     # ----------------------- Tab: Doctors on Liens -------------------------
     def _build_dol_tab(self, parent: ttk.Frame):
-        header = ttk.Frame(parent)
+        header = self._mk_frame(parent, card=True)
         header.pack(fill="x", pady=(0, 8))
 
-        ttk.Label(
+        self._mk_label(
             header,
             text="DOCTORS ON LIENS — NEW PATIENT REFERRAL LOG",
-            font=("Segoe UI", 13, "bold"),
+            title=True,
         ).pack(anchor="w")
-        ttk.Label(
+        self._mk_label(
             header,
             text="Email: DolReferrals@gmail.com",
-            foreground="gray",
+            muted=True,
         ).pack(anchor="w")
 
-        period_row = ttk.Frame(parent)
+        period_row = self._mk_frame(parent, card=True)
         period_row.pack(fill="x", pady=(2, 8))
 
         months, years = _month_year_choices()
@@ -912,26 +912,25 @@ class AttorneyDemographicsWindow(tk.Toplevel):
         self._dol_month = tk.StringVar(value=_MONTH_NAMES[now.month - 1])
         self._dol_year = tk.StringVar(value=str(now.year))
 
-        ttk.Label(period_row, text="Referral Period — Month:").pack(side="left")
+        self._mk_label(period_row, text="Referral Period — Month:").pack(side="left")
         ttk.Combobox(
             period_row, textvariable=self._dol_month, values=months,
             state="readonly", width=12,
         ).pack(side="left", padx=(6, 12))
-        ttk.Label(period_row, text="Year:").pack(side="left")
+        self._mk_label(period_row, text="Year:").pack(side="left")
         ttk.Combobox(
             period_row, textvariable=self._dol_year, values=years,
             state="readonly", width=8,
         ).pack(side="left", padx=(6, 12))
 
         self._dol_period_label = tk.StringVar(value="")
-        ttk.Label(
-            period_row, textvariable=self._dol_period_label,
-            font=("Segoe UI", 10, "italic"),
+        self._mk_label(
+            period_row, textvariable=self._dol_period_label, italic=True,
         ).pack(side="left", padx=(6, 0))
 
         # --- form-field row (Clinic Name / City) so the printed PDF matches the
         # Doctors on Liens form exactly ---
-        clinic_row = ttk.Frame(parent)
+        clinic_row = self._mk_frame(parent, card=True)
         clinic_row.pack(fill="x", pady=(0, 4))
 
         from config import CLINIC_NAME as _CFG_CLINIC, CLINIC_ADDR as _CFG_ADDR
@@ -944,29 +943,26 @@ class AttorneyDemographicsWindow(tk.Toplevel):
             value=(saved.get("city") or self._guess_city_from_addr(_CFG_ADDR) or "").strip()
         )
 
-        ttk.Label(clinic_row, text="Clinic Name:").pack(side="left")
+        self._mk_label(clinic_row, text="Clinic Name:").pack(side="left")
         ttk.Entry(
             clinic_row, textvariable=self._dol_clinic_name, width=28,
         ).pack(side="left", padx=(6, 12))
-        ttk.Label(clinic_row, text="City:").pack(side="left")
+        self._mk_label(clinic_row, text="City:").pack(side="left")
         ttk.Entry(
             clinic_row, textvariable=self._dol_city, width=18,
         ).pack(side="left", padx=(6, 12))
-        ttk.Button(
-            clinic_row, text="Print PDF…",
-            command=self._dol_print_pdf,
-        ).pack(side="right")
+        self._mk_btn(clinic_row, "Print PDF…", self._dol_print_pdf, side="right")
 
         def _on_change(*_):
             self._refresh_dol()
         self._dol_month.trace_add("write", _on_change)
         self._dol_year.trace_add("write", _on_change)
 
-        body = ttk.Frame(parent)
+        body = self._mk_frame(parent, card=True)
         body.pack(fill="both", expand=True)
 
         cols = ("num", "patient", "attorney", "address_phone")
-        self._dol_tree = ttk.Treeview(body, columns=cols, show="headings", selectmode="browse")
+        self._dol_tree = self._mk_tree(body, columns=cols, show="headings", selectmode="browse")
         for c, label, w, anc in [
             ("num", "#", 50, "center"),
             ("patient", "Patient", 220, "w"),
@@ -981,18 +977,17 @@ class AttorneyDemographicsWindow(tk.Toplevel):
         self._dol_tree.pack(side="left", fill="both", expand=True)
         sb.pack(side="right", fill="y")
 
-        footer = ttk.Frame(parent)
+        footer = self._mk_frame(parent, card=True)
         footer.pack(fill="x", pady=(8, 0))
         self._dol_total_var = tk.StringVar(value="Number of patients: 0")
-        ttk.Label(
-            footer, textvariable=self._dol_total_var,
-            font=("Segoe UI", 11, "bold"),
+        self._mk_label(
+            footer, textvariable=self._dol_total_var, section=True,
         ).pack(side="left")
 
-        ttk.Label(
+        self._mk_label(
             footer,
             text="   The 'Print PDF' button generates a one-page form matching the Doctors on Liens template.",
-            foreground="gray",
+            muted=True,
         ).pack(side="left")
 
     def _refresh_dol(self):
@@ -1213,24 +1208,24 @@ class AttorneyDemographicsWindow(tk.Toplevel):
 
     # ------------------ Tab: Attorney Referrals (Incoming) -----------------
     def _build_incoming_tab(self, parent: ttk.Frame):
-        ttk.Label(
+        self._mk_label(
             parent,
             text="Attorney Referrals (NOT through Doctors on Liens)",
-            font=("Segoe UI", 12, "bold"),
+            heading=True,
         ).pack(anchor="w")
-        ttk.Label(
+        self._mk_label(
             parent,
             text="Counts of patients each attorney has directly referred to our clinic.",
-            foreground="gray",
+            muted=True,
         ).pack(anchor="w", pady=(0, 8))
 
         self._att_in_filter = self._build_period_filter(parent, on_change=self._refresh_incoming)
 
-        body = ttk.Frame(parent)
+        body = self._mk_frame(parent, card=True)
         body.pack(fill="both", expand=True)
 
         cols = ("attorney", "count")
-        self._att_in_tree = ttk.Treeview(body, columns=cols, show="headings", selectmode="browse")
+        self._att_in_tree = self._mk_tree(body, columns=cols, show="headings", selectmode="browse")
         self._att_in_tree.heading("attorney", text="Attorney / Firm")
         self._att_in_tree.heading("count", text="Patients Referred")
         self._att_in_tree.column("attorney", width=420, anchor="w")
@@ -1241,9 +1236,8 @@ class AttorneyDemographicsWindow(tk.Toplevel):
         sb.pack(side="right", fill="y")
 
         self._att_in_total_var = tk.StringVar(value="Total: 0")
-        ttk.Label(
-            parent, textvariable=self._att_in_total_var,
-            font=("Segoe UI", 11, "bold"),
+        self._mk_label(
+            parent, textvariable=self._att_in_total_var, section=True,
         ).pack(anchor="w", pady=(8, 0))
 
     def _refresh_incoming(self):
@@ -1268,24 +1262,24 @@ class AttorneyDemographicsWindow(tk.Toplevel):
 
     # ------------------ Tab: Clinic Referrals (Outgoing) -------------------
     def _build_outgoing_tab(self, parent: ttk.Frame):
-        ttk.Label(
+        self._mk_label(
             parent,
             text="Clinic Referrals to Attorneys",
-            font=("Segoe UI", 12, "bold"),
+            heading=True,
         ).pack(anchor="w")
-        ttk.Label(
+        self._mk_label(
             parent,
             text="Counts of patients we (the clinic) referred OUT to each attorney.",
-            foreground="gray",
+            muted=True,
         ).pack(anchor="w", pady=(0, 8))
 
         self._att_out_filter = self._build_period_filter(parent, on_change=self._refresh_outgoing)
 
-        body = ttk.Frame(parent)
+        body = self._mk_frame(parent, card=True)
         body.pack(fill="both", expand=True)
 
         cols = ("attorney", "count")
-        self._att_out_tree = ttk.Treeview(body, columns=cols, show="headings", selectmode="browse")
+        self._att_out_tree = self._mk_tree(body, columns=cols, show="headings", selectmode="browse")
         self._att_out_tree.heading("attorney", text="Attorney / Firm")
         self._att_out_tree.heading("count", text="Patients We Referred")
         self._att_out_tree.column("attorney", width=420, anchor="w")
@@ -1296,9 +1290,8 @@ class AttorneyDemographicsWindow(tk.Toplevel):
         sb.pack(side="right", fill="y")
 
         self._att_out_total_var = tk.StringVar(value="Total: 0")
-        ttk.Label(
-            parent, textvariable=self._att_out_total_var,
-            font=("Segoe UI", 11, "bold"),
+        self._mk_label(
+            parent, textvariable=self._att_out_total_var, section=True,
         ).pack(anchor="w", pady=(8, 0))
 
     def _refresh_outgoing(self):
@@ -1323,24 +1316,20 @@ class AttorneyDemographicsWindow(tk.Toplevel):
 
     # --------------------------- Tab: Master Stats -------------------------
     def _build_master_tab(self, parent: ttk.Frame):
-        ttk.Label(
-            parent,
-            text="Master Referral Stats",
-            font=("Segoe UI", 12, "bold"),
-        ).pack(anchor="w")
-        ttk.Label(
+        self._mk_label(parent, text="Master Referral Stats", heading=True).pack(anchor="w")
+        self._mk_label(
             parent,
             text="All three categories combined, broken down by attorney.",
-            foreground="gray",
+            muted=True,
         ).pack(anchor="w", pady=(0, 8))
 
         self._master_filter = self._build_period_filter(parent, on_change=self._refresh_master)
 
-        body = ttk.Frame(parent)
+        body = self._mk_frame(parent, card=True)
         body.pack(fill="both", expand=True)
 
         cols = ("attorney", "from_dol", "from_attorney", "to_attorney", "total")
-        self._master_tree = ttk.Treeview(body, columns=cols, show="headings", selectmode="browse")
+        self._master_tree = self._mk_tree(body, columns=cols, show="headings", selectmode="browse")
         for c, label, w, anc in [
             ("attorney", "Attorney / Firm", 320, "w"),
             ("from_dol", "From DoL", 110, "center"),
@@ -1355,12 +1344,11 @@ class AttorneyDemographicsWindow(tk.Toplevel):
         self._master_tree.pack(side="left", fill="both", expand=True)
         sb.pack(side="right", fill="y")
 
-        totals = ttk.Frame(parent)
+        totals = self._mk_frame(parent, card=True)
         totals.pack(fill="x", pady=(8, 0))
         self._master_totals_var = tk.StringVar(value="")
-        ttk.Label(
-            totals, textvariable=self._master_totals_var,
-            font=("Segoe UI", 11, "bold"),
+        self._mk_label(
+            totals, textvariable=self._master_totals_var, section=True,
         ).pack(anchor="w")
 
     def _refresh_master(self):
@@ -1397,24 +1385,24 @@ class AttorneyDemographicsWindow(tk.Toplevel):
 
     # ------------------------- Tab: Alphabetical List ----------------------
     def _build_alpha_tab(self, parent: ttk.Frame):
-        ttk.Label(
+        self._mk_label(
             parent,
             text="All Attorneys — Alphabetical",
-            font=("Segoe UI", 12, "bold"),
+            heading=True,
         ).pack(anchor="w", pady=(0, 8))
 
-        wrap = ttk.Frame(parent)
+        wrap = self._mk_frame(parent, card=True)
         wrap.pack(fill="both", expand=True)
 
-        self._alpha_text = tk.Text(wrap, wrap="word", state="disabled")
+        self._alpha_text = self._mk_text_card(wrap)
+        self._alpha_text.configure(state="disabled")
         sb = ttk.Scrollbar(wrap, orient="vertical", command=self._alpha_text.yview)
         self._alpha_text.configure(yscrollcommand=sb.set)
         self._alpha_text.pack(side="left", fill="both", expand=True)
         sb.pack(side="right", fill="y")
 
-        # styling
-        self._alpha_text.tag_configure("hdr", font=("Segoe UI", 10, "bold"))
-        self._alpha_text.tag_configure("dim", foreground="gray")
+        self._alpha_text.tag_configure("hdr", font=FONT_SECTION)
+        self._alpha_text.tag_configure("dim", foreground=COLOR_MUTED)
 
     def _refresh_alpha(self):
         if not hasattr(self, "_alpha_text"):
@@ -1441,7 +1429,7 @@ class AttorneyDemographicsWindow(tk.Toplevel):
 
     # ------------------------- helpers: period filter ----------------------
     def _build_period_filter(self, parent: ttk.Frame, *, on_change) -> dict:
-        row = ttk.Frame(parent)
+        row = self._mk_frame(parent, card=True)
         row.pack(fill="x", pady=(0, 8))
 
         months, years = _month_year_choices()
@@ -1449,7 +1437,7 @@ class AttorneyDemographicsWindow(tk.Toplevel):
         month_var = tk.StringVar(value=_MONTH_NAMES[datetime.now().month - 1])
         year_var = tk.StringVar(value=str(datetime.now().year))
 
-        ttk.Label(row, text="Period:").pack(side="left")
+        self._mk_label(row, text="Period:").pack(side="left")
         scope_cb = ttk.Combobox(
             row, textvariable=scope_var,
             values=("All time", "By Year", "By Month"),
@@ -1457,13 +1445,13 @@ class AttorneyDemographicsWindow(tk.Toplevel):
         )
         scope_cb.pack(side="left", padx=(6, 12))
 
-        ttk.Label(row, text="Month:").pack(side="left")
+        self._mk_label(row, text="Month:").pack(side="left")
         month_cb = ttk.Combobox(
             row, textvariable=month_var, values=months, state="readonly", width=12,
         )
         month_cb.pack(side="left", padx=(6, 12))
 
-        ttk.Label(row, text="Year:").pack(side="left")
+        self._mk_label(row, text="Year:").pack(side="left")
         year_cb = ttk.Combobox(
             row, textvariable=year_var, values=years, state="readonly", width=8,
         )
@@ -1501,3 +1489,36 @@ class AttorneyDemographicsWindow(tk.Toplevel):
         except Exception:
             month = None
         return (year, month)
+
+
+class AttorneyDemographicsWindow(tk.Toplevel):
+    """Popup wrapper around :class:`AttorneyDemographicsPanel`."""
+
+    def __init__(
+        self,
+        master,
+        start_tab: str = "patient",
+        *,
+        get_current_patient_fn=None,
+        on_change_callback=None,
+    ):
+        super().__init__(master)
+        self.title("Attorney Demographics & Referrals")
+        self.transient(master)
+        self.attributes("-topmost", True)
+
+        sw = self.winfo_screenwidth()
+        sh = self.winfo_screenheight()
+        w = min(1200, int(sw * 0.78))
+        h = min(820,  int(sh * 0.82))
+        self.geometry(f"{w}x{h}")
+        self.minsize(900, 620)
+
+        self._panel = AttorneyDemographicsPanel(
+            self,
+            start_tab,
+            get_current_patient_fn=get_current_patient_fn,
+            on_change_callback=on_change_callback,
+            show_close=True,
+        )
+        self._panel.pack(fill="both", expand=True)

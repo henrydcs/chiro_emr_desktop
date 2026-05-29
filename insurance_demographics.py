@@ -26,6 +26,8 @@ import tkinter as tk
 from tkinter import ttk, messagebox
 
 import insurance_data as idata
+from demographics_styling import DemographicsShellThemeMixin, PREFIX
+from shell_app import COLOR_BG_APP, COLOR_MUTED, FONT_SECTION
 
 
 # Wide range so the user always finds the year they want.
@@ -466,10 +468,10 @@ class _PolicyEditor(tk.Toplevel):
 
 
 # ===========================================================================
-# Main window
+# Main panel (embeddable) + popup window wrapper
 # ===========================================================================
-class InsuranceDemographicsWindow(tk.Toplevel):
-    """Notebook-style window with Patient + Directory + Stats tabs."""
+class InsuranceDemographicsPanel(DemographicsShellThemeMixin, ttk.Frame):
+    """Notebook-style UI with Patient + Directory + Stats tabs."""
 
     TAB_KEYS = ("patient", "directory", "master", "by_type", "alpha")
 
@@ -480,6 +482,8 @@ class InsuranceDemographicsWindow(tk.Toplevel):
         *,
         get_current_patient_fn=None,
         on_change_callback=None,
+        show_close: bool = False,
+        shell_theme: bool = False,
     ):
         """``get_current_patient_fn`` should return the same shape as the
         attorney window expects:
@@ -491,26 +495,24 @@ class InsuranceDemographicsWindow(tk.Toplevel):
             }
         or None if no patient is loaded.
         """
-        super().__init__(master)
-        self.title("Insurance Demographics & Stats")
-        self.transient(master)
-        self.attributes("-topmost", True)
+        self._init_shell_theme(master, shell_theme)
+        if self._shell_theme:
+            super().__init__(master, style=f"{PREFIX}.TFrame")
+        else:
+            super().__init__(master)
 
         self._get_current_patient_fn = get_current_patient_fn
         self._on_change_callback = on_change_callback
 
-        sw = self.winfo_screenwidth()
-        sh = self.winfo_screenheight()
-        w = min(1200, int(sw * 0.78))
-        h = min(820,  int(sh * 0.82))
-        self.geometry(f"{w}x{h}")
-        self.minsize(900, 620)
-
-        nb = ttk.Notebook(self)
+        nb_kw: dict = {}
+        if self._shell_theme:
+            nb_kw["style"] = f"{PREFIX}.TNotebook"
+        nb = ttk.Notebook(self, **nb_kw)
         self._notebook = nb
-        nb.pack(fill="both", expand=True, padx=10, pady=10)
+        nb.pack(fill="both", expand=True, padx=(0, 0) if self._shell_theme else 10, pady=(0, 8) if self._shell_theme else 10)
 
         self._tabs: dict[str, ttk.Frame] = {}
+        tab_frame_style = f"{PREFIX}.Card.TFrame" if self._shell_theme else None
         for key, label in [
             ("patient",   "This Patient"),
             ("directory", "Insurance Directory"),
@@ -518,7 +520,10 @@ class InsuranceDemographicsWindow(tk.Toplevel):
             ("by_type",   "Type Breakdown"),
             ("alpha",     "Alphabetical List"),
         ]:
-            f = ttk.Frame(nb, padding=10)
+            if tab_frame_style:
+                f = ttk.Frame(nb, padding=10, style=tab_frame_style)
+            else:
+                f = ttk.Frame(nb, padding=10)
             nb.add(f, text=label)
             self._tabs[key] = f
 
@@ -536,12 +541,25 @@ class InsuranceDemographicsWindow(tk.Toplevel):
 
         nb.bind("<<NotebookTabChanged>>", lambda e: self._refresh_all())
 
-        bottom = ttk.Frame(self)
-        bottom.pack(fill="x", padx=10, pady=(0, 10))
-        ttk.Button(bottom, text="Refresh", command=self._refresh_all).pack(side="left")
-        ttk.Button(bottom, text="Close", command=self.destroy).pack(side="right")
+        if self._shell_theme:
+            bottom = tk.Frame(self, bg=COLOR_BG_APP)
+            bottom.pack(fill="x", pady=(4, 0))
+            self._mk_btn(bottom, "Refresh", self._refresh_all, side="left")
+            if show_close:
+                self._mk_btn(bottom, "Close", self._close_host, side="right", padx=(6, 0))
+        else:
+            bottom = ttk.Frame(self)
+            bottom.pack(fill="x", padx=10, pady=(0, 10))
+            ttk.Button(bottom, text="Refresh", command=self._refresh_all).pack(side="left")
+            if show_close:
+                ttk.Button(bottom, text="Close", command=self._close_host).pack(side="right")
 
         self._refresh_all()
+
+    def _close_host(self) -> None:
+        top = self.winfo_toplevel()
+        if top is not self:
+            top.destroy()
 
     # ------------------------------ shared -------------------------------
     def _current_patient_info(self) -> dict | None:
@@ -573,39 +591,36 @@ class InsuranceDemographicsWindow(tk.Toplevel):
 
     # ----------------------- Tab: This Patient ---------------------------
     def _build_patient_tab(self, parent: ttk.Frame):
-        header = ttk.Frame(parent)
+        header = self._mk_frame(parent, card=True)
         header.pack(fill="x", pady=(0, 8))
 
         self._patient_title_var = tk.StringVar(value="Current Patient")
-        ttk.Label(
-            header, textvariable=self._patient_title_var,
-            font=("Segoe UI", 13, "bold"),
+        self._mk_label(
+            header, textvariable=self._patient_title_var, title=True,
         ).pack(anchor="w")
 
         self._patient_subtitle_var = tk.StringVar(value="")
-        ttk.Label(
-            header, textvariable=self._patient_subtitle_var,
-            foreground="gray",
+        self._mk_label(
+            header, textvariable=self._patient_subtitle_var, muted=True,
         ).pack(anchor="w")
 
         ttk.Separator(parent).pack(fill="x", pady=(2, 10))
 
-        toolbar = ttk.Frame(parent)
+        toolbar = self._mk_frame(parent, card=True)
         toolbar.pack(fill="x", pady=(0, 6))
-        ttk.Label(
-            toolbar, text="Patient Insurance Policies",
-            font=("Segoe UI", 11, "bold"),
+        self._mk_label(
+            toolbar, text="Patient Insurance Policies", section=True,
         ).pack(side="left")
 
-        ttk.Button(toolbar, text="Add Policy", command=self._patient_add_policy).pack(side="right")
-        ttk.Button(toolbar, text="Edit", command=self._patient_edit_policy).pack(side="right", padx=(0, 6))
-        ttk.Button(toolbar, text="Delete", command=self._patient_delete_policy).pack(side="right", padx=(0, 6))
+        self._mk_btn(toolbar, "Delete", self._patient_delete_policy, side="right", padx=(0, 6))
+        self._mk_btn(toolbar, "Edit", self._patient_edit_policy, side="right", padx=(0, 6))
+        self._mk_btn(toolbar, "Add Policy", self._patient_add_policy, side="right", accent=True)
 
-        body = ttk.Frame(parent)
+        body = self._mk_frame(parent, card=True)
         body.pack(fill="both", expand=True)
 
         cols = ("type", "priority", "carrier", "policy_number", "claim_number", "adjuster")
-        self._patient_tree = ttk.Treeview(body, columns=cols, show="headings", selectmode="browse")
+        self._patient_tree = self._mk_tree(body, columns=cols, show="headings", selectmode="browse")
         for c, label, w, anc in [
             ("type",          "Type",       140, "w"),
             ("priority",      "Priority",   90,  "center"),
@@ -623,10 +638,10 @@ class InsuranceDemographicsWindow(tk.Toplevel):
         self._patient_tree.bind("<Double-Button-1>", lambda e: self._patient_edit_policy())
         self._patient_tree.bind("<<TreeviewSelect>>", lambda e: self._patient_update_detail())
 
-        detail = ttk.LabelFrame(parent, text="Policy Details")
+        detail = self._mk_lf(parent, "Policy Details")
         detail.pack(fill="x", pady=(8, 0))
         self._patient_detail_var = tk.StringVar(value="(select a policy)")
-        ttk.Label(
+        self._mk_label(
             detail, textvariable=self._patient_detail_var,
             justify="left", anchor="w",
         ).pack(fill="x", padx=8, pady=8)
@@ -635,9 +650,8 @@ class InsuranceDemographicsWindow(tk.Toplevel):
         self._patient_no_patient_var = tk.StringVar(
             value="No patient loaded. Open or start a patient case to add insurance policies."
         )
-        self._patient_no_patient_label = ttk.Label(
-            parent, textvariable=self._patient_no_patient_var,
-            foreground="gray", font=("Segoe UI", 10, "italic"),
+        self._patient_no_patient_label = self._mk_label(
+            parent, textvariable=self._patient_no_patient_var, italic=True,
         )
         # only packed when there's no patient
 
@@ -836,33 +850,30 @@ class InsuranceDemographicsWindow(tk.Toplevel):
 
     # --------------------- Tab: Insurance Directory ----------------------
     def _build_directory_tab(self, parent: ttk.Frame):
-        top = ttk.Frame(parent)
+        top = self._mk_frame(parent, card=True)
         top.pack(fill="x", pady=(0, 8))
 
-        ttk.Label(
-            top, text="Insurance Directory",
-            font=("Segoe UI", 12, "bold"),
-        ).pack(side="left")
+        self._mk_label(top, text="Insurance Directory", heading=True).pack(side="left")
 
-        ttk.Button(top, text="Add Carrier", command=self._dir_add).pack(side="right")
-        ttk.Button(top, text="Edit", command=self._dir_edit).pack(side="right", padx=(0, 6))
-        ttk.Button(top, text="Delete", command=self._dir_delete).pack(side="right", padx=(0, 6))
-        ttk.Button(top, text="Print PDF…", command=self._dir_print_pdf).pack(side="right", padx=(0, 12))
+        self._mk_btn(top, "Print PDF…", self._dir_print_pdf, side="right", padx=(0, 12))
+        self._mk_btn(top, "Delete", self._dir_delete, side="right", padx=(0, 6))
+        self._mk_btn(top, "Edit", self._dir_edit, side="right", padx=(0, 6))
+        self._mk_btn(top, "Add Carrier", self._dir_add, side="right", accent=True)
 
-        search_row = ttk.Frame(parent)
+        search_row = self._mk_frame(parent, card=True)
         search_row.pack(fill="x", pady=(0, 6))
-        ttk.Label(search_row, text="Search:").pack(side="left")
+        self._mk_label(search_row, text="Search:").pack(side="left")
         self._dir_search_var = tk.StringVar()
         ttk.Entry(search_row, textvariable=self._dir_search_var).pack(
             side="left", fill="x", expand=True, padx=(6, 0),
         )
         self._dir_search_var.trace_add("write", lambda *_: self._refresh_directory())
 
-        body = ttk.Frame(parent)
+        body = self._mk_frame(parent, card=True)
         body.pack(fill="both", expand=True)
 
         cols = ("name", "parent", "payer_id", "phone", "fax", "city", "state")
-        self._dir_tree = ttk.Treeview(body, columns=cols, show="headings", selectmode="browse")
+        self._dir_tree = self._mk_tree(body, columns=cols, show="headings", selectmode="browse")
         for c, label, w in [
             ("name", "Carrier", 220),
             ("parent", "Parent / Group", 160),
@@ -881,10 +892,10 @@ class InsuranceDemographicsWindow(tk.Toplevel):
         sb.pack(side="right", fill="y")
         self._dir_tree.bind("<Double-Button-1>", lambda e: self._dir_edit())
 
-        detail = ttk.LabelFrame(parent, text="Carrier Details")
+        detail = self._mk_lf(parent, "Carrier Details")
         detail.pack(fill="x", pady=(8, 0))
         self._dir_detail_var = tk.StringVar(value="(select a carrier)")
-        ttk.Label(
+        self._mk_label(
             detail, textvariable=self._dir_detail_var,
             justify="left", anchor="w",
         ).pack(fill="x", padx=8, pady=8)
@@ -1076,32 +1087,28 @@ class InsuranceDemographicsWindow(tk.Toplevel):
 
     # --------------------------- Tab: Master Stats -----------------------
     def _build_master_tab(self, parent: ttk.Frame):
-        ttk.Label(
-            parent, text="Master Insurance Stats",
-            font=("Segoe UI", 12, "bold"),
-        ).pack(anchor="w")
-        ttk.Label(
+        self._mk_label(parent, text="Master Insurance Stats", heading=True).pack(anchor="w")
+        self._mk_label(
             parent,
             text="How many patients each carrier serves, plus overall counters.",
-            foreground="gray",
+            muted=True,
         ).pack(anchor="w", pady=(0, 8))
 
         self._master_filter = self._build_period_filter(parent, on_change=self._refresh_master)
 
         # Counters band.
-        counters = ttk.Frame(parent)
+        counters = self._mk_frame(parent, card=True)
         counters.pack(fill="x", pady=(0, 6))
         self._master_counters_var = tk.StringVar(value="")
-        ttk.Label(
-            counters, textvariable=self._master_counters_var,
-            font=("Segoe UI", 11, "bold"),
+        self._mk_label(
+            counters, textvariable=self._master_counters_var, section=True,
         ).pack(anchor="w")
 
-        body = ttk.Frame(parent)
+        body = self._mk_frame(parent, card=True)
         body.pack(fill="both", expand=True)
 
         cols = ("rank", "carrier", "patients", "policies", "share", "bar")
-        self._master_tree = ttk.Treeview(body, columns=cols, show="headings", selectmode="browse")
+        self._master_tree = self._mk_tree(body, columns=cols, show="headings", selectmode="browse")
         for c, label, w, anc in [
             ("rank",     "#",            40,  "center"),
             ("carrier",  "Carrier",      280, "w"),
@@ -1158,27 +1165,24 @@ class InsuranceDemographicsWindow(tk.Toplevel):
 
     # -------------------------- Tab: Type Breakdown ----------------------
     def _build_by_type_tab(self, parent: ttk.Frame):
-        ttk.Label(
-            parent, text="Insurance Type Breakdown",
-            font=("Segoe UI", 12, "bold"),
-        ).pack(anchor="w")
-        ttk.Label(
+        self._mk_label(parent, text="Insurance Type Breakdown", heading=True).pack(anchor="w")
+        self._mk_label(
             parent,
             text=(
                 "How patient policies break down by insurance type. "
                 "Auto types (PIP / Med-Pay / Liability) are also rolled up "
                 "into a single 'Personal Injury / Auto' bucket."
             ),
-            foreground="gray", justify="left", wraplength=900,
+            muted=True, justify="left", wraplength=900,
         ).pack(anchor="w", pady=(0, 8))
 
         self._type_filter = self._build_period_filter(parent, on_change=self._refresh_by_type)
 
         # Detailed (per type) table on top, bucket roll-up on the bottom.
-        top_lf = ttk.LabelFrame(parent, text="By insurance type")
+        top_lf = self._mk_lf(parent, "By insurance type")
         top_lf.pack(fill="both", expand=True, pady=(0, 8))
         cols = ("type", "patients", "policies", "share")
-        self._type_tree = ttk.Treeview(top_lf, columns=cols, show="headings", selectmode="browse")
+        self._type_tree = self._mk_tree(top_lf, columns=cols, show="headings", selectmode="browse")
         for c, label, w, anc in [
             ("type",     "Type",         220, "w"),
             ("patients", "Patients",     100, "center"),
@@ -1192,10 +1196,10 @@ class InsuranceDemographicsWindow(tk.Toplevel):
         self._type_tree.pack(side="left", fill="both", expand=True)
         sb.pack(side="right", fill="y")
 
-        bot_lf = ttk.LabelFrame(parent, text="Rolled-up buckets")
+        bot_lf = self._mk_lf(parent, "Rolled-up buckets")
         bot_lf.pack(fill="x")
         cols2 = ("bucket", "patients", "policies")
-        self._bucket_tree = ttk.Treeview(bot_lf, columns=cols2, show="headings", selectmode="browse", height=6)
+        self._bucket_tree = self._mk_tree(bot_lf, columns=cols2, show="headings", selectmode="browse", height=6)
         for c, label, w, anc in [
             ("bucket",   "Bucket",   260, "w"),
             ("patients", "Patients", 100, "center"),
@@ -1240,22 +1244,22 @@ class InsuranceDemographicsWindow(tk.Toplevel):
 
     # ------------------------- Tab: Alphabetical List --------------------
     def _build_alpha_tab(self, parent: ttk.Frame):
-        ttk.Label(
-            parent, text="All Carriers — Alphabetical",
-            font=("Segoe UI", 12, "bold"),
+        self._mk_label(
+            parent, text="All Carriers — Alphabetical", heading=True,
         ).pack(anchor="w", pady=(0, 8))
 
-        wrap = ttk.Frame(parent)
+        wrap = self._mk_frame(parent, card=True)
         wrap.pack(fill="both", expand=True)
 
-        self._alpha_text = tk.Text(wrap, wrap="word", state="disabled")
+        self._alpha_text = self._mk_text_card(wrap)
+        self._alpha_text.configure(state="disabled")
         sb = ttk.Scrollbar(wrap, orient="vertical", command=self._alpha_text.yview)
         self._alpha_text.configure(yscrollcommand=sb.set)
         self._alpha_text.pack(side="left", fill="both", expand=True)
         sb.pack(side="right", fill="y")
 
-        self._alpha_text.tag_configure("hdr", font=("Segoe UI", 10, "bold"))
-        self._alpha_text.tag_configure("dim", foreground="gray")
+        self._alpha_text.tag_configure("hdr", font=FONT_SECTION)
+        self._alpha_text.tag_configure("dim", foreground=COLOR_MUTED)
 
     def _refresh_alpha(self):
         if not hasattr(self, "_alpha_text"):
@@ -1291,7 +1295,7 @@ class InsuranceDemographicsWindow(tk.Toplevel):
 
     # ------------------------ helpers: period filter ---------------------
     def _build_period_filter(self, parent: ttk.Frame, *, on_change) -> dict:
-        row = ttk.Frame(parent)
+        row = self._mk_frame(parent, card=True)
         row.pack(fill="x", pady=(0, 8))
 
         months, years = _month_year_choices()
@@ -1299,7 +1303,7 @@ class InsuranceDemographicsWindow(tk.Toplevel):
         month_var = tk.StringVar(value=_MONTH_NAMES[datetime.now().month - 1])
         year_var = tk.StringVar(value=str(datetime.now().year))
 
-        ttk.Label(row, text="Period:").pack(side="left")
+        self._mk_label(row, text="Period:").pack(side="left")
         scope_cb = ttk.Combobox(
             row, textvariable=scope_var,
             values=("All time", "By Year", "By Month"),
@@ -1307,13 +1311,13 @@ class InsuranceDemographicsWindow(tk.Toplevel):
         )
         scope_cb.pack(side="left", padx=(6, 12))
 
-        ttk.Label(row, text="Month:").pack(side="left")
+        self._mk_label(row, text="Month:").pack(side="left")
         month_cb = ttk.Combobox(
             row, textvariable=month_var, values=months, state="readonly", width=12,
         )
         month_cb.pack(side="left", padx=(6, 12))
 
-        ttk.Label(row, text="Year:").pack(side="left")
+        self._mk_label(row, text="Year:").pack(side="left")
         year_cb = ttk.Combobox(
             row, textvariable=year_var, values=years, state="readonly", width=8,
         )
@@ -1355,3 +1359,36 @@ class InsuranceDemographicsWindow(tk.Toplevel):
         if scope == "By Year":
             return f"Year: {f['year'].get()}"
         return f"{f['month'].get()} {f['year'].get()}"
+
+
+class InsuranceDemographicsWindow(tk.Toplevel):
+    """Popup wrapper around :class:`InsuranceDemographicsPanel`."""
+
+    def __init__(
+        self,
+        master,
+        start_tab: str = "patient",
+        *,
+        get_current_patient_fn=None,
+        on_change_callback=None,
+    ):
+        super().__init__(master)
+        self.title("Insurance Demographics & Stats")
+        self.transient(master)
+        self.attributes("-topmost", True)
+
+        sw = self.winfo_screenwidth()
+        sh = self.winfo_screenheight()
+        w = min(1200, int(sw * 0.78))
+        h = min(820,  int(sh * 0.82))
+        self.geometry(f"{w}x{h}")
+        self.minsize(900, 620)
+
+        self._panel = InsuranceDemographicsPanel(
+            self,
+            start_tab,
+            get_current_patient_fn=get_current_patient_fn,
+            on_change_callback=on_change_callback,
+            show_close=True,
+        )
+        self._panel.pack(fill="both", expand=True)
