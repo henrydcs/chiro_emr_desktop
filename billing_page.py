@@ -229,8 +229,11 @@ _BILLING_LAPTOP_TOTALS_BODY_PX = 16
 _BILLING_LAPTOP_ROW_GAP_PX = 6
 _BILLING_LAPTOP_PKG_TREE_ROWS = 3
 _BILLING_LAPTOP_LINES_TREE_ROWS = 3
-_BILLING_LAPTOP_INS_TREE_ROWS = 5
+_BILLING_LAPTOP_INS_TREE_ROWS = 3
+_BILLING_LAPTOP_INS_TREE_ROWS_MIN = 1
 _BILLING_DESKTOP_INS_TREE_ROWS = 5
+_BILLING_LAPTOP_INS_HEADING_PAD_TOP = 7
+_BILLING_LAPTOP_INS_HEADING_PAD_BOTTOM = 0
 _BILLING_LAPTOP_LINES_CARD_PX = 81  # fixed charge-lines band; 25% below prior 108px laptop height
 _BILLING_LAPTOP_CHARGE_GAP_PX = 4  # tiny gap above charge lines
 
@@ -607,6 +610,8 @@ class BillingPage(tk.Frame):
             self.btn_ins_receipt_folder.configure(text="Receipts")
             tree_rows = _BILLING_LAPTOP_INS_TREE_ROWS
             actions_pady = (0, 4)
+            if hasattr(self, "_ins_summary_wrap"):
+                self._ins_summary_wrap.grid_remove()
         else:
             self.btn_ins_auths.configure(text="Authorizations")
             self.btn_ins_copay.configure(text="Collect copay")
@@ -615,6 +620,8 @@ class BillingPage(tk.Frame):
             self.btn_ins_receipt_folder.configure(text="Receipt folder")
             tree_rows = _BILLING_DESKTOP_INS_TREE_ROWS
             actions_pady = (0, 6)
+            if hasattr(self, "_ins_summary_wrap"):
+                self._ins_summary_wrap.grid(row=1, column=0, sticky="ew", pady=(0, 6))
 
         for col, btn in enumerate(row1):
             btn.grid(row=0, column=col, sticky="w", padx=(0, pad), pady=(0, row_gap))
@@ -626,6 +633,34 @@ class BillingPage(tk.Frame):
             self._ins_actions.grid_configure(pady=actions_pady)
         if hasattr(self, "ins_tree"):
             self.ins_tree.configure(height=tree_rows)
+        if hasattr(self, "_ins_body"):
+            self._ins_body.pack_configure(pady=(0, 4 if compact else 12))
+        if compact:
+            self.after_idle(self._fit_laptop_insurance_panel)
+
+    def _fit_laptop_insurance_panel(self) -> None:
+        """Shrink claims tree row count so the card bottom is not clipped."""
+        if not self._billing_layout_compact or not hasattr(self, "ins_tree"):
+            return
+        host = getattr(self, "_panel_host", None)
+        card = getattr(self, "_ins_card", None)
+        if host is None or card is None or not host.winfo_exists() or not card.winfo_exists():
+            return
+        host.update_idletasks()
+        card.update_idletasks()
+        host_h = host.winfo_height()
+        if host_h < 80:
+            self.after_idle(self._fit_laptop_insurance_panel)
+            return
+
+        rows = _BILLING_LAPTOP_INS_TREE_ROWS
+        self.ins_tree.configure(height=rows)
+        card.update_idletasks()
+        budget = max(card.winfo_height(), host_h)
+        while rows > _BILLING_LAPTOP_INS_TREE_ROWS_MIN and card.winfo_reqheight() > budget + 1:
+            rows -= 1
+            self.ins_tree.configure(height=rows)
+            card.update_idletasks()
 
     def _apply_billing_laptop_fixed_geometry(self, *, grid_pady_bottom: int, grid_padx_mid: int) -> None:
         """Laptop grid: row 1 expands; charge lines stay fixed at the bottom."""
@@ -682,6 +717,8 @@ class BillingPage(tk.Frame):
             self._ins_body.rowconfigure(2, weight=0)
         if hasattr(self, "_pkg_card"):
             self._pkg_card.pack_configure(fill="both", expand=True)
+        if hasattr(self, "_ins_card"):
+            self._ins_card.pack_configure(fill="both", expand=True)
         for sp in self._panel_shell_spacers:
             sp.pack_forget()
 
@@ -689,6 +726,7 @@ class BillingPage(tk.Frame):
         self._apply_insurance_panel_layout(True)
         self._lock_laptop_visit_and_panel_frames()
         self.after_idle(self._fit_laptop_totals_display)
+        self.after_idle(self._fit_laptop_insurance_panel)
 
     def _restore_billing_desktop_middle_band(self) -> None:
         """Restore desktop middle band to content-driven sizing."""
@@ -854,11 +892,29 @@ class BillingPage(tk.Frame):
         style = ttk.Style()
         style.configure("Billing.Treeview", font=self._bill_font("base"), rowheight=22 if compact else 24)
         style.configure("Billing.Treeview.Heading", font=self._bill_font("base_bold"))
+        if compact:
+            style.configure(
+                "Billing.Ins.Treeview",
+                font=self._bill_font("base"),
+                rowheight=22,
+            )
+            style.configure(
+                "Billing.Ins.Treeview.Heading",
+                font=self._bill_font("base_bold"),
+                padding=(
+                    6,
+                    _BILLING_LAPTOP_INS_HEADING_PAD_TOP,
+                    6,
+                    _BILLING_LAPTOP_INS_HEADING_PAD_BOTTOM,
+                ),
+            )
         self.lines_tree.configure(style="Billing.Treeview")
         if hasattr(self, "pkg_tree"):
             self.pkg_tree.configure(style="Billing.Treeview")
         if hasattr(self, "ins_tree"):
-            self.ins_tree.configure(style="Billing.Treeview")
+            self.ins_tree.configure(
+                style="Billing.Ins.Treeview" if compact else "Billing.Treeview"
+            )
 
         self._show_billing_panel(self._billing_panel)
 
@@ -899,6 +955,8 @@ class BillingPage(tk.Frame):
         if self._billing_layout_compact:
             self.after_idle(self._place_pkg_row_actions_compact)
             self.after_idle(self._lock_laptop_visit_and_panel_frames)
+            if panel == "insurance":
+                self.after_idle(self._fit_laptop_insurance_panel)
 
     def _build(self) -> None:
         outer = tk.Frame(self, bg=COLOR_BG_APP)
@@ -2251,6 +2309,7 @@ class BillingPage(tk.Frame):
         ).pack(fill="x", anchor="w", padx=10, pady=(2, 6))
 
         tree_wrap = tk.Frame(body, bg=COLOR_CARD)
+        self._ins_tree_wrap = tree_wrap
         tree_wrap.grid(row=2, column=0, sticky="new")
         tree_wrap.columnconfigure(0, weight=1)
         cols = ("claim", "status", "cob", "payer", "dos", "charged", "payer_paid", "patient_resp", "updated")

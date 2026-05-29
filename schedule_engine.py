@@ -138,12 +138,31 @@ def format_time_12h(start_time: str) -> str:
     return f"{h12}:{m:02d} {suffix}"
 
 
+def format_time_short(start_time: str) -> str:
+    """12-hour clock without AM/PM — e.g. 11:30."""
+    mins = parse_start_minutes(start_time)
+    h24 = mins // 60
+    m = mins % 60
+    h12 = h24 % 12 or 12
+    return f"{h12}:{m:02d}"
+
+
 def slot_index(start_time: str) -> int:
     return max(0, (parse_start_minutes(start_time) - DAY_START_HOUR * 60) // SLOT_MINUTES)
 
 
 def slot_span(duration_min: int) -> int:
     return max(1, int(duration_min or SLOT_MINUTES) // SLOT_MINUTES)
+
+
+def calendar_row_span(appt: dict) -> int:
+    """Visual rows on the 15-minute grid (Initial = 2, Chiro Visit = 1)."""
+    label = (appt.get("appt_type") or "").strip().lower()
+    if "initial" in label:
+        return 2
+    if "chiro visit" in label or label == "chiro":
+        return 1
+    return max(1, slot_span(int(appt.get("duration_min") or 15)))
 
 
 def day_slot_count() -> int:
@@ -158,12 +177,7 @@ def time_for_slot(slot: int) -> str:
 
 
 def time_label_for_slot(slot: int) -> str:
-    minutes = DAY_START_HOUR * 60 + slot * SLOT_MINUTES
-    h = minutes // 60
-    m = minutes % 60
-    suffix = "AM" if h < 12 else "PM"
-    h12 = h % 12 or 12
-    return f"{h12}:{m:02d} {suffix}" if m == 0 else f"{h12}:{m:02d}"
+    return format_time_short(time_for_slot(slot))
 
 
 def patient_short_label(appt: dict) -> str:
@@ -171,3 +185,27 @@ def patient_short_label(appt: dict) -> str:
     if label:
         return label.split(",")[0].strip()
     return (appt.get("patient_id") or "Patient").strip()
+
+
+def patient_last_name(appt: dict) -> str:
+    label = (appt.get("patient_label") or "").strip()
+    if label:
+        if "," in label:
+            return label.split(",")[0].strip()
+        parts = label.split()
+        if len(parts) >= 2:
+            return parts[-1]
+        return parts[0]
+    return (appt.get("patient_id") or "Patient").strip()
+
+
+def appt_block_label(appt: dict) -> str:
+    """Single-line calendar label: 11:30 Smith Chiro Visit."""
+    parts = [
+        format_time_short(appt.get("start_time") or ""),
+        patient_last_name(appt),
+    ]
+    appt_type = (appt.get("appt_type") or "").strip()
+    if appt_type:
+        parts.append(appt_type)
+    return " ".join(parts)
