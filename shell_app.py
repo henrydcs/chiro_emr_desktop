@@ -1536,6 +1536,7 @@ class DocumentsPage(tk.Frame):
 # ============================================================
 
 GENDER_CHOICES = ["MALE", "FEMALE", "OTHER"]
+GENDER_SHORTCUTS = {"m": "MALE", "f": "FEMALE", "o": "OTHER"}
 
 
 def _format_address(addr) -> str:
@@ -1863,18 +1864,21 @@ class PatientsPage(tk.Frame):
         email = (profile.get("email") or "").strip()
         phone = (profile.get("phone") or "").strip()
         dob = (profile.get("dob") or rec.get("dob") or "").strip()
+        doi = (profile.get("doi") or "").strip()
         addr = profile.get("address")
 
         field_pair(0, 0, "First name", first)
         field_pair(0, 1, "Last name", last)
         field_pair(1, 0, "Date of birth", dob)
-        field_pair(1, 1, "Gender", gender)
+        field_pair(1, 1, "Date of injury", doi or "—")
+        field_pair(1, 2, "Gender", gender)
         field_pair(2, 0, "Email", email)
         field_pair(2, 1, "Phone", phone)
         field_pair(3, 0, "Address", _format_address(addr))
 
         body.grid_columnconfigure(0, weight=1, uniform="d")
         body.grid_columnconfigure(1, weight=1, uniform="d")
+        body.grid_columnconfigure(2, weight=1, uniform="d")
 
         # Patient ID hint
         tk.Label(wrap, text=f"Patient ID: {rec.get('patient_id', '')}",
@@ -1897,6 +1901,18 @@ class PatientsPage(tk.Frame):
         self._rebuild("form", self._build_form_view)
         self._show("form")
 
+    def _bind_gender_shortcuts(self, combo: ttk.Combobox) -> None:
+        """M / F / O keys select gender when the dropdown has focus."""
+
+        def _on_key(event) -> str | None:
+            val = GENDER_SHORTCUTS.get((event.char or "").lower())
+            if val:
+                self.f_gender.set(val)
+                return "break"
+            return None
+
+        combo.bind("<KeyPress>", _on_key)
+
     def _build_form_view(self, parent: tk.Frame) -> None:
         is_edit = (self._form_mode == "edit")
         rec = self._selected_rec or {}
@@ -1907,6 +1923,7 @@ class PatientsPage(tk.Frame):
         self.f_first = tk.StringVar(value=profile.get("first_name") or "")
         self.f_last = tk.StringVar(value=profile.get("last_name") or "")
         self.f_dob = tk.StringVar(value=profile.get("dob") or "")
+        self.f_doi = tk.StringVar(value=profile.get("doi") or "")
         self.f_gender = tk.StringVar(value=(profile.get("gender") or "").upper())
         self.f_email = tk.StringVar(value=profile.get("email") or "")
         self.f_phone = tk.StringVar(value=profile.get("phone") or "")
@@ -1919,9 +1936,43 @@ class PatientsPage(tk.Frame):
         self.f_zip = tk.StringVar(value=addr.get("zip") or "")
 
         wrap = tk.Frame(parent, bg=COLOR_BG_APP)
-        wrap.pack(fill="both", expand=True, padx=20, pady=20)
+        wrap.pack(fill="both", expand=True, padx=20, pady=(12, 16))
+        wrap.columnconfigure(0, weight=1)
+        wrap.rowconfigure(0, weight=1)
 
-        back = tk.Label(wrap, text="← Back to Patients",
+        scroll_wrap = tk.Frame(wrap, bg=COLOR_BG_APP)
+        scroll_wrap.grid(row=0, column=0, sticky="nsew")
+        scroll_wrap.rowconfigure(0, weight=1)
+        scroll_wrap.columnconfigure(0, weight=1)
+
+        canvas = tk.Canvas(scroll_wrap, bg=COLOR_BG_APP, highlightthickness=0, bd=0)
+        vsb = ttk.Scrollbar(scroll_wrap, orient="vertical", command=canvas.yview)
+        canvas.configure(yscrollcommand=vsb.set)
+        canvas.grid(row=0, column=0, sticky="nsew")
+        vsb.grid(row=0, column=1, sticky="ns")
+
+        inner = tk.Frame(canvas, bg=COLOR_BG_APP)
+        inner_id = canvas.create_window((0, 0), window=inner, anchor="nw")
+
+        def _on_inner_configure(_e=None) -> None:
+            canvas.configure(scrollregion=canvas.bbox("all"))
+
+        def _on_canvas_configure(e) -> None:
+            canvas.itemconfigure(inner_id, width=e.width)
+
+        inner.bind("<Configure>", _on_inner_configure)
+        canvas.bind("<Configure>", _on_canvas_configure)
+
+        def _on_mw(event) -> None:
+            try:
+                canvas.yview_scroll(int(-1 * (event.delta / 120)), "units")
+            except Exception:
+                pass
+
+        canvas.bind("<Enter>", lambda _e: canvas.bind_all("<MouseWheel>", _on_mw))
+        canvas.bind("<Leave>", lambda _e: canvas.unbind_all("<MouseWheel>"))
+
+        back = tk.Label(inner, text="← Back to Patients",
                         bg=COLOR_BG_APP, fg=COLOR_ACCENT,
                         font=("Segoe UI", 9), cursor="hand2")
         back.pack(anchor="w")
@@ -1934,11 +1985,11 @@ class PatientsPage(tk.Frame):
             title = (f"{first} {last}".strip()) or rec.get("label") or "Edit patient"
         else:
             title = "New Patient"
-        tk.Label(wrap, text=title, bg=COLOR_BG_APP, fg=COLOR_TEXT,
+        tk.Label(inner, text=title, bg=COLOR_BG_APP, fg=COLOR_TEXT,
                  font=FONT_TITLE).pack(anchor="w", pady=(8, 14))
 
         # Card
-        card = tk.Frame(wrap, bg=COLOR_CARD,
+        card = tk.Frame(inner, bg=COLOR_CARD,
                         highlightbackground=COLOR_BORDER, highlightthickness=1)
         card.pack(fill="x")
 
@@ -1965,43 +2016,51 @@ class PatientsPage(tk.Frame):
         entry(1, 0, self.f_first)
         entry(1, 1, self.f_last)
 
-        # Row 2: DOB / Gender labels
+        # Row 2: DOB / DOI / Gender labels
         label(2, 0, "Date of Birth", required=True)
-        label(2, 1, "Gender", required=True)
-        # Row 3: DOB / Gender entries
+        label(2, 1, "Date of Injury")
+        label(2, 2, "Gender", required=True)
+        # Row 3: DOB / DOI / Gender entries
         dob_frame = tk.Frame(body, bg=COLOR_CARD)
         dob_frame.grid(row=3, column=0, sticky="ew", padx=(0, 14), pady=(0, 12))
         ttk.Entry(dob_frame, textvariable=self.f_dob, width=24).pack(side="left", fill="x", expand=True)
         tk.Label(dob_frame, text="MM/DD/YYYY", bg=COLOR_CARD, fg=COLOR_MUTED,
                  font=FONT_SMALL).pack(side="left", padx=(8, 0))
 
+        doi_frame = tk.Frame(body, bg=COLOR_CARD)
+        doi_frame.grid(row=3, column=1, sticky="ew", padx=(0, 14), pady=(0, 12))
+        ttk.Entry(doi_frame, textvariable=self.f_doi, width=24).pack(side="left", fill="x", expand=True)
+        tk.Label(doi_frame, text="MM/DD/YYYY", bg=COLOR_CARD, fg=COLOR_MUTED,
+                 font=FONT_SMALL).pack(side="left", padx=(8, 0))
+
         gender_combo = ttk.Combobox(body, textvariable=self.f_gender,
                                     values=GENDER_CHOICES, state="readonly")
-        gender_combo.grid(row=3, column=1, sticky="ew", padx=(0, 14), pady=(0, 12))
+        gender_combo.grid(row=3, column=2, sticky="ew", padx=(0, 14), pady=(0, 12))
+        self._bind_gender_shortcuts(gender_combo)
 
         # Row 4–5: Email
         label(4, 0, "Email")
         entry(5, 0, self.f_email)
         body.grid_rowconfigure(5, weight=0)
-        # span email across both columns visually
-        body.grid_slaves(row=5, column=0)[0].grid_configure(columnspan=2)
-        body.grid_slaves(row=4, column=0)[0].grid_configure(columnspan=2)
+        # span email across all columns
+        body.grid_slaves(row=5, column=0)[0].grid_configure(columnspan=3)
+        body.grid_slaves(row=4, column=0)[0].grid_configure(columnspan=3)
 
         # Row 6–7: Phone
         label(6, 0, "Phone")
         entry(7, 0, self.f_phone)
-        body.grid_slaves(row=7, column=0)[0].grid_configure(columnspan=2)
-        body.grid_slaves(row=6, column=0)[0].grid_configure(columnspan=2)
+        body.grid_slaves(row=7, column=0)[0].grid_configure(columnspan=3)
+        body.grid_slaves(row=6, column=0)[0].grid_configure(columnspan=3)
 
         # Row 8–9: Street (full width)
         label(8, 0, "Address — Street")
         entry(9, 0, self.f_street)
-        body.grid_slaves(row=9, column=0)[0].grid_configure(columnspan=2)
-        body.grid_slaves(row=8, column=0)[0].grid_configure(columnspan=2)
+        body.grid_slaves(row=9, column=0)[0].grid_configure(columnspan=3)
+        body.grid_slaves(row=8, column=0)[0].grid_configure(columnspan=3)
 
         # Row 10: City | State | ZIP labels (3-up)
         addr_lbl = tk.Frame(body, bg=COLOR_CARD)
-        addr_lbl.grid(row=10, column=0, columnspan=2, sticky="ew", pady=(0, 0))
+        addr_lbl.grid(row=10, column=0, columnspan=3, sticky="ew", pady=(0, 0))
         addr_lbl.grid_columnconfigure(0, weight=3, uniform="addr")
         addr_lbl.grid_columnconfigure(1, weight=1, uniform="addr")
         addr_lbl.grid_columnconfigure(2, weight=1, uniform="addr")
@@ -2014,7 +2073,7 @@ class PatientsPage(tk.Frame):
 
         # Row 11: City / State / ZIP entries
         addr_row = tk.Frame(body, bg=COLOR_CARD)
-        addr_row.grid(row=11, column=0, columnspan=2, sticky="ew", pady=(2, 12))
+        addr_row.grid(row=11, column=0, columnspan=3, sticky="ew", pady=(2, 12))
         addr_row.grid_columnconfigure(0, weight=3, uniform="addr")
         addr_row.grid_columnconfigure(1, weight=1, uniform="addr")
         addr_row.grid_columnconfigure(2, weight=1, uniform="addr")
@@ -2024,17 +2083,20 @@ class PatientsPage(tk.Frame):
 
         body.grid_columnconfigure(0, weight=1, uniform="form")
         body.grid_columnconfigure(1, weight=1, uniform="form")
+        body.grid_columnconfigure(2, weight=1, uniform="form")
 
-        # Status / error line
+        # Fixed footer — always visible below the scroll area
+        footer = tk.Frame(wrap, bg=COLOR_BG_APP)
+        footer.grid(row=1, column=0, sticky="ew", pady=(10, 0))
+
         self.form_status_var = tk.StringVar(value="")
-        tk.Label(card, textvariable=self.form_status_var,
-                 bg=COLOR_CARD, fg=COLOR_RED, font=FONT_SMALL,
+        tk.Label(footer, textvariable=self.form_status_var,
+                 bg=COLOR_BG_APP, fg=COLOR_RED, font=FONT_SMALL,
                  wraplength=600, justify="left"
-                 ).pack(anchor="w", padx=20)
+                 ).pack(anchor="w", pady=(0, 6))
 
-        # Buttons
-        btns = tk.Frame(card, bg=COLOR_CARD)
-        btns.pack(fill="x", padx=20, pady=(8, 16))
+        btns = tk.Frame(footer, bg=COLOR_BG_APP)
+        btns.pack(fill="x")
         save_btn = tk.Button(btns, text="Save Changes" if is_edit else "Save",
                              command=self._save_form,
                              bg=COLOR_ACCENT, fg="white",
@@ -2063,6 +2125,7 @@ class PatientsPage(tk.Frame):
         first = (self.f_first.get() or "").strip()
         last = (self.f_last.get() or "").strip()
         dob_raw = (self.f_dob.get() or "").strip()
+        doi_raw = (self.f_doi.get() or "").strip()
         gender = (self.f_gender.get() or "").strip().upper()
         email = (self.f_email.get() or "").strip()
         phone = (self.f_phone.get() or "").strip()
@@ -2088,6 +2151,13 @@ class PatientsPage(tk.Frame):
         if not re.fullmatch(r"\d{2}/\d{2}/\d{4}", dob):
             self.form_status_var.set("Date of Birth must be MM/DD/YYYY (e.g. 02/02/1972).")
             return
+
+        doi = ""
+        if doi_raw:
+            doi = normalize_mmddyyyy(doi_raw)
+            if not re.fullmatch(r"\d{2}/\d{2}/\d{4}", doi):
+                self.form_status_var.set("Date of Injury must be MM/DD/YYYY (e.g. 02/02/1972).")
+                return
 
         # Build profile
         now_iso = datetime.utcnow().isoformat(timespec="seconds") + "Z"
@@ -2115,6 +2185,7 @@ class PatientsPage(tk.Frame):
             "first_name": first,
             "last_name": last,
             "dob": dob,
+            "doi": doi,
             "gender": gender,
             "email": email,
             "phone": phone,

@@ -39,7 +39,7 @@ class DemographicsPage(tk.Frame):
         self._built: set[str] = set()
 
         outer = tk.Frame(self, bg=COLOR_BG_APP)
-        outer.pack(fill="both", expand=True, padx=20, pady=20)
+        outer.pack(fill="both", expand=True, padx=20, pady=(16, 12))
 
         header = tk.Frame(outer, bg=COLOR_BG_APP)
         header.pack(fill="x", pady=(0, 10))
