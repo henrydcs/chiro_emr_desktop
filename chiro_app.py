@@ -1725,6 +1725,178 @@ class App(tk.Tk):
         self._ensure_current_patient_id()
         return True
 
+    # ---- Shell launch: visit-type picker (Documents → SOAP) ----
+
+    _SHELL_VISIT_TYPE_CHOICES: list[tuple[str, str, str]] = [
+        # (kind, button label, exam name prefix)
+        ("initial", "Initial", "Initial"),
+        ("re_exam", "Re-Exam", "Re-Exam"),
+        ("rof", "ROF", "Review of Findings"),
+        ("final", "Final", "Final"),
+        ("chiro", "Chiropractic Visit", "Chiro Visit"),
+    ]
+
+    _SHELL_VISIT_TYPE_COLORS: dict[str, str] = {
+        "initial": "#2563EB",
+        "re_exam": "#7C3AED",
+        "rof": "#0EA5E9",
+        "final": "#DB2777",
+        "chiro": "#16A34A",
+    }
+
+    def _shell_visit_type_display_label(self, exam_name: str) -> str:
+        kind = self._classify_exam_type(exam_name)
+        for k, label, _prefix in self._SHELL_VISIT_TYPE_CHOICES:
+            if k == kind:
+                return label
+        return (exam_name or "Visit").strip()
+
+    def _create_shell_visit_type(self, kind: str) -> None:
+        """Create a new visit of the given type (no confirmation — user chose in picker)."""
+        prefix = None
+        for k, _label, p in self._SHELL_VISIT_TYPE_CHOICES:
+            if k == kind:
+                prefix = p
+                break
+        if not prefix or not self._ensure_patient_for_dynamic_exam():
+            return
+
+        n = _next_number(self.exams, prefix)
+        name = f"{prefix} {n}"
+        self._add_dynamic_exam(name, copy_current=True)
+        self.after(0, lambda: self.switch_exam(name, force=True))
+        if kind == "initial" and n == 1:
+            self.after(150, self._prompt_referral_source_after_initial1)
+        try:
+            self.tk_docs_page.refresh()
+        except Exception:
+            pass
+
+    def _schedule_shell_visit_type_picker(self) -> None:
+        """Show the visit-type picker once after SOAP opens from the EMR shell."""
+        if not getattr(self, "_from_shell", False):
+            return
+        if not (getattr(self, "_startup_open_exam", None)
+                or getattr(self, "_startup_patient_id", None)):
+            return
+        if getattr(self, "_shell_visit_picker_shown", False):
+            return
+        self._shell_visit_picker_shown = True
+        opened = (self.current_exam.get() or "").strip()
+        self.after(120, lambda: self._show_shell_visit_type_picker(opened))
+
+    def _show_shell_visit_type_picker(self, source_exam: str) -> None:
+        """Ask whether to start a new visit type or just review the opened encounter."""
+        source_exam = (source_exam or self.current_exam.get() or "").strip()
+        type_label = self._shell_visit_type_display_label(source_exam)
+        patient = to_last_first(self.last_name_var.get(), self.first_name_var.get()).strip()
+
+        dlg = tk.Toplevel(self)
+        dlg.title("Visit Type")
+        dlg.configure(bg="#FFFFFF")
+        dlg.transient(self)
+        dlg.grab_set()
+        dlg.resizable(False, False)
+
+        wrap = tk.Frame(dlg, bg="#FFFFFF", padx=20, pady=16)
+        wrap.pack(fill="both", expand=True)
+
+        tk.Label(
+            wrap, text="What type of visit will this be?",
+            bg="#FFFFFF", fg="#0F172A", font=("Segoe UI", 12, "bold"),
+        ).pack(anchor="w")
+
+        if patient:
+            tk.Label(
+                wrap, text=patient,
+                bg="#FFFFFF", fg="#2563EB", font=("Segoe UI", 10, "bold"),
+            ).pack(anchor="w", pady=(4, 0))
+
+        if source_exam:
+            tk.Label(
+                wrap,
+                text=f"Opened: {source_exam}  ({type_label})",
+                bg="#FFFFFF", fg="#6B7280", font=("Segoe UI", 9),
+            ).pack(anchor="w", pady=(2, 12))
+        else:
+            tk.Label(
+                wrap, text="Choose a visit type or select Just Review.",
+                bg="#FFFFFF", fg="#6B7280", font=("Segoe UI", 9),
+            ).pack(anchor="w", pady=(2, 12))
+
+        btn_grid = tk.Frame(wrap, bg="#FFFFFF")
+        btn_grid.pack(fill="x", pady=(0, 10))
+
+        def _make_type_btn(parent, row, col, kind, label, *, colspan=1):
+            fg = self._SHELL_VISIT_TYPE_COLORS.get(kind, "#2563EB")
+            btn = tk.Button(
+                parent, text=label, cursor="hand2",
+                bg="#F8FAFC", fg=fg, activebackground="#EEF2FF",
+                activeforeground=fg, relief="solid", bd=1,
+                font=("Segoe UI", 10, "bold"), padx=14, pady=10,
+                highlightthickness=1, highlightbackground="#E5E7EB",
+            )
+            btn.grid(row=row, column=col, columnspan=colspan,
+                     sticky="nsew", padx=4, pady=4)
+
+            def choose(_e=None, _k=kind):
+                try:
+                    dlg.grab_release()
+                except Exception:
+                    pass
+                dlg.destroy()
+                self._create_shell_visit_type(_k)
+
+            btn.configure(command=choose)
+            return btn
+
+        for i in range(2):
+            btn_grid.columnconfigure(i, weight=1)
+
+        _make_type_btn(btn_grid, 0, 0, "initial", "Initial")
+        _make_type_btn(btn_grid, 0, 1, "re_exam", "Re-Exam")
+        _make_type_btn(btn_grid, 1, 0, "rof", "ROF")
+        _make_type_btn(btn_grid, 1, 1, "final", "Final")
+        _make_type_btn(btn_grid, 2, 0, "chiro", "Chiropractic Visit", colspan=2)
+
+        review_text = (
+            f"Just Review — stay on {type_label}"
+            if source_exam else "Just Review"
+        )
+        review_btn = tk.Button(
+            wrap, text=review_text, cursor="hand2",
+            bg="#EEF2FF", fg="#2563EB", activebackground="#DBEAFE",
+            activeforeground="#1D4ED8", relief="solid", bd=1,
+            font=("Segoe UI", 10, "bold"), padx=14, pady=10,
+            highlightthickness=1, highlightbackground="#BFDBFE",
+        )
+        review_btn.pack(fill="x", pady=(4, 0))
+
+        def just_review():
+            try:
+                dlg.grab_release()
+            except Exception:
+                pass
+            dlg.destroy()
+            if source_exam and source_exam in self.exams:
+                self.switch_exam(source_exam, force=True)
+            self.status_var.set(
+                f"Reviewing {source_exam}." if source_exam
+                else "Ready to review."
+            )
+
+        review_btn.configure(command=just_review)
+
+        def on_close():
+            just_review()
+
+        dlg.protocol("WM_DELETE_WINDOW", on_close)
+        dlg.update_idletasks()
+        x = self.winfo_rootx() + max(20, (self.winfo_width() - dlg.winfo_width()) // 2)
+        y = self.winfo_rooty() + max(20, (self.winfo_height() - dlg.winfo_height()) // 2)
+        dlg.geometry(f"+{x}+{y}")
+        dlg.lift()
+        dlg.focus_force()
 
     def add_reexam(self):
         if not self._ensure_patient_for_dynamic_exam():
@@ -5200,6 +5372,7 @@ class App(tk.Tk):
                 except Exception:
                     pass
                 self._mirror_active_patient_to_shell_state()
+                self._schedule_shell_visit_type_picker()
                 return
             except Exception as e:
                 self.status_var.set(f"Could not open requested exam: {e}")
@@ -5251,6 +5424,7 @@ class App(tk.Tk):
                         if not self.exams or len(self.exams) == 1
                         else f"Opened patient: {to_last_first(self.last_name_var.get(), self.first_name_var.get())}"
                     )
+                    self._schedule_shell_visit_type_picker()
                     return
             except Exception as e:
                 self.status_var.set(f"Could not open patient: {e}")
