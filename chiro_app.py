@@ -2512,6 +2512,30 @@ class App(tk.Tk):
             if hasattr(page, "apply_builder_compact_visibility"):
                 page.apply_builder_compact_visibility(compact)
     
+    def _rebuild_all_builder_notes_from_demographics(self) -> None:
+        """Recompose sentence-builder notes from current demographics ({age}, {sex}, …).
+
+        Macro templates often store stale rendered prose (e.g. a fixed age from when
+        the template was saved). Builder dropdown indices remain valid; rebuilding
+        syncs the textbox, live preview, and PDF with the resolved prefix line.
+        """
+        for page in self._family_social_builder_pages():
+            cores = getattr(page, "_cores_by_id", None)
+            if not isinstance(cores, dict):
+                continue
+            for core in list(cores.values()):
+                fn = getattr(core, "_apply_builder_to_note", None)
+                if callable(fn):
+                    try:
+                        fn()
+                    except Exception:
+                        pass
+        try:
+            if hasattr(self, "request_live_preview_refresh"):
+                self.request_live_preview_refresh()
+        except Exception:
+            pass
+
     
     
     def export_exam_pdf(self):
@@ -5871,8 +5895,8 @@ class App(tk.Tk):
         self.current_patient_id = pid
         self.last_name_var.set(patient.get("last_name", "") or "")
         self.first_name_var.set(patient.get("first_name", "") or "")
-        self.dob_var.set(patient.get("dob", "") or "")
-        self.doi_var.set(patient.get("doi", "") or "")
+        self.dob_var.set(normalize_mmddyyyy(patient.get("dob", "")) or (patient.get("dob", "") or ""))
+        self.doi_var.set(normalize_mmddyyyy(patient.get("doi", "")) or (patient.get("doi", "") or ""))
         self.exam_date_var.set(
             normalize_mmddyyyy(patient.get("exam_date", "")) or today_mmddyyyy()
         )
@@ -6887,6 +6911,10 @@ class App(tk.Tk):
             pass
 
         def _finalize_template_load():
+            try:
+                self._rebuild_all_builder_notes_from_demographics()
+            except Exception:
+                pass
             if preserve_dx_from_prior_exam:
                 try:
                     self.diagnosis_page.load_prior_visit_dx_codes(silent=True)
@@ -7667,8 +7695,8 @@ class App(tk.Tk):
 
             self.last_name_var.set(patient.get("last_name", ""))
             self.first_name_var.set(patient.get("first_name", ""))
-            self.dob_var.set(patient.get("dob", ""))
-            self.doi_var.set(patient.get("doi", ""))
+            self.dob_var.set(normalize_mmddyyyy(patient.get("dob", "")) or (patient.get("dob", "") or ""))
+            self.doi_var.set(normalize_mmddyyyy(patient.get("doi", "")) or (patient.get("doi", "") or ""))
 
             self.exam_date_var.set(normalize_mmddyyyy(patient.get("exam_date", "")) or today_mmddyyyy())
             self.claim_var.set(patient.get("claim", ""))
@@ -7692,7 +7720,10 @@ class App(tk.Tk):
                         if (profile.get("first_name") or "").strip():
                             self.first_name_var.set(profile["first_name"])
                         if (profile.get("dob") or "").strip():
-                            self.dob_var.set(profile["dob"])
+                            self.dob_var.set(
+                                normalize_mmddyyyy(profile.get("dob", ""))
+                                or (profile.get("dob", "") or "").strip()
+                            )
                         ppid = (profile.get("patient_id") or "").strip()
                         if ppid:
                             self.current_patient_id = ppid

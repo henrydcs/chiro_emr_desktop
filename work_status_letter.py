@@ -23,7 +23,7 @@ try:
 except Exception:
     LETTER = None  # type: ignore
 
-WORK_STATUS_LETTER_TITLE = "Medical Work Status & Functional Capacity Evaluation"
+WORK_STATUS_LETTER_TITLE = "Functional Work Status"
 
 WORK_STATUS_PATIENT_NAME_TOKEN = "{PATIENT_NAME}"
 WORK_STATUS_FIRST_NAME_TOKEN = "{FIRST_NAME}"
@@ -53,14 +53,12 @@ def work_status_letter_should_generate(payload: dict) -> bool:
 
 
 def _incident_mechanism_text(hoi_struct: dict) -> str:
+    """Letter incident phrase from HOI → Type of Injury → Type (injury_type)."""
     hoi_struct = hoi_struct if isinstance(hoi_struct, dict) else {}
     injury_type = ((hoi_struct.get("type") or {}).get("injury_type") or "").strip()
-    phrase = _injury_event_phrase(hoi_struct)
-    if injury_type and injury_type not in ("(none)", ""):
-        if phrase and phrase.lower() not in injury_type.lower():
-            return f"{injury_type} ({phrase})"
-        return injury_type
-    return phrase or "the reported incident"
+    if not injury_type or injury_type in ("(none)", ""):
+        return "the reported incident"
+    return _injury_event_phrase(hoi_struct) or injury_type
 
 
 def duration_label_to_days(label: str) -> int | None:
@@ -112,7 +110,7 @@ def work_status_letter_dynamic_parts(payload: dict) -> dict[str, str]:
     last = (patient.get("last_name") or "").strip()
     display = (patient.get("display_name") or "").strip() or f"{last}, {first}".strip(", ")
 
-    doi = _doi_for_imaging_letter(patient, hoi)
+    doi = normalize_mmddyyyy((patient.get("doi") or "").strip()) or _doi_for_imaging_letter(patient, hoi)
     eval_date = normalize_mmddyyyy(patient.get("exam_date", "")) or today_mmddyyyy()
     work_status = (dx.get("work_plan") or "").strip()
     duration_label = (dx.get("work_duration") or "").strip()
@@ -165,7 +163,7 @@ def _apply_work_status_tokens(text: str, parts: dict[str, str]) -> str:
 
 def factory_work_status_letter_text(payload: dict) -> str:
     parts = work_status_letter_dynamic_parts(payload)
-    template = f"""RE: Medical Work Status & Functional Capacity Evaluation
+    template = f"""RE: {WORK_STATUS_LETTER_TITLE}
 
 Patient Name: {WORK_STATUS_PATIENT_NAME_TOKEN}
 
@@ -175,7 +173,7 @@ Mechanism of Injury: {WORK_STATUS_INCIDENT_TOKEN}
 
 To Whom It May Concern,
 
-Please be advised that the above-named patient is currently undergoing active clinical management under my care for injuries sustained in the aforementioned incident.
+Please be advised that the above-named patient is currently undergoing active clinical management under my care for injuries sustained in {WORK_STATUS_INCIDENT_TOKEN} on {WORK_STATUS_DOI_TOKEN}.
 
 Following a comprehensive physical evaluation and review of the patient's objective clinical findings, it has been determined that the patient's current functional capacity is restricted. To facilitate proper healing and prevent further exacerbation of their condition, the following medical work status is mandated effective immediately:
 
@@ -212,13 +210,40 @@ def work_status_letter_edited_to_template(edited_text: str, payload: dict) -> st
     parts = work_status_letter_dynamic_parts(payload)
 
     doi = parts.get("date_of_injury") or ""
+    incident = parts.get("incident") or ""
+    if incident and doi:
+        text = text.replace(
+            f"injuries sustained in {incident} on {doi}",
+            f"injuries sustained in {WORK_STATUS_INCIDENT_TOKEN} on {WORK_STATUS_DOI_TOKEN}",
+        )
+    if incident:
+        text = text.replace(
+            f"injuries sustained in {incident}",
+            f"injuries sustained in {WORK_STATUS_INCIDENT_TOKEN} on {WORK_STATUS_DOI_TOKEN}",
+        )
     if doi:
         text = text.replace(f"Date of Injury/Incident: {doi}", f"Date of Injury/Incident: {WORK_STATUS_DOI_TOKEN}")
         text = text.replace(doi, WORK_STATUS_DOI_TOKEN)
 
-    incident = parts.get("incident") or ""
-    if incident and incident in text:
+    if incident:
         text = text.replace(f"Mechanism of Injury: {incident}", f"Mechanism of Injury: {WORK_STATUS_INCIDENT_TOKEN}")
+        text = text.replace(f"injuries sustained in a {incident}", f"injuries sustained in {WORK_STATUS_INCIDENT_TOKEN} on {WORK_STATUS_DOI_TOKEN}")
+        if incident in text:
+            text = text.replace(incident, WORK_STATUS_INCIDENT_TOKEN)
+
+    injury_type = (
+        ((payload.get("soap") or {}).get("hoi_struct") or {}).get("type") or {}
+    ).get("injury_type") or ""
+    injury_type = (injury_type or "").strip()
+    if injury_type and injury_type not in ("(none)", "") and injury_type in text:
+        text = text.replace(injury_type, WORK_STATUS_INCIDENT_TOKEN)
+
+    for legacy in (
+        "the aforementioned incident",
+        "aforementioned incident",
+    ):
+        if legacy in text:
+            text = text.replace(legacy, WORK_STATUS_INCIDENT_TOKEN)
 
     patient_name = parts.get("patient_name") or ""
     if patient_name:
