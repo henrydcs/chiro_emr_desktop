@@ -83,6 +83,14 @@ from pdf_export import (
     referral_provider_types_in_payload,
     _norm_imaging_body_part_key,
 )
+from work_status_letter import (
+    build_work_status_letter_pdf,
+    factory_work_status_letter_text,
+    work_status_letter_dynamic_parts,
+    work_status_letter_edited_to_template,
+    work_status_letter_from_template,
+    work_status_letter_should_generate,
+)
 from pdf_export import diagnosis_struct_to_live_preview_runs
 import copy
 from master_save import MasterSaveController
@@ -373,6 +381,7 @@ class App(tk.Tk):
         self.last_imaging_letter_pdf_paths: dict[str, list[str]] = {}
         self.last_modalities_letter_pdf_paths: dict[str, str] = {}
         self.last_referral_letter_pdf_paths: dict[str, list[str]] = {}
+        self.last_work_status_letter_pdf_paths: dict[str, str] = {}
         self.imaging_letter_dx_selections: dict[str, dict[str, dict[str, str]]] = {}
         self.imaging_letter_text_overrides: dict[str, dict[str, str]] = {}
         # Clinic-wide default letter wording per modality (MRI, X-Ray, …).
@@ -384,6 +393,9 @@ class App(tk.Tk):
         # Clinic-wide default referral letter wording per provider type.
         self.referral_letter_templates: dict[str, str] = {}
         self.referral_letter_content_signatures: dict[str, dict[str, str]] = {}
+        self.work_status_letter_text_overrides: dict[str, str] = {}
+        self.work_status_letter_templates: dict[str, str] = {}
+        self.work_status_letter_content_signatures: dict[str, str] = {}
         self.modalities_letter_text_overrides: dict[str, str] = {}
         # When staff-letter region/exclude mappings change, ignore stale overrides until Save.
         self.modalities_letter_staff_signatures: dict[str, str] = {}
@@ -2073,6 +2085,21 @@ class App(tk.Tk):
         if not hasattr(self, "referral_letter_text_overrides") or not isinstance(self.referral_letter_text_overrides, dict):
             self.referral_letter_text_overrides = {}
         self.referral_letter_text_overrides[exam_name] = {}
+        if not hasattr(self, "last_work_status_letter_pdf_paths") or not isinstance(
+            self.last_work_status_letter_pdf_paths, dict
+        ):
+            self.last_work_status_letter_pdf_paths = {}
+        self.last_work_status_letter_pdf_paths[exam_name] = ""
+        if not hasattr(self, "work_status_letter_text_overrides") or not isinstance(
+            self.work_status_letter_text_overrides, dict
+        ):
+            self.work_status_letter_text_overrides = {}
+        self.work_status_letter_text_overrides[exam_name] = ""
+        if not hasattr(self, "work_status_letter_content_signatures") or not isinstance(
+            self.work_status_letter_content_signatures, dict
+        ):
+            self.work_status_letter_content_signatures = {}
+        self.work_status_letter_content_signatures[exam_name] = ""
         if not hasattr(self, "modalities_letter_text_overrides") or not isinstance(self.modalities_letter_text_overrides, dict):
             self.modalities_letter_text_overrides = {}
         self.modalities_letter_text_overrides[exam_name] = ""
@@ -2252,6 +2279,27 @@ class App(tk.Tk):
         try:
             if hasattr(self, "referral_letter_text_overrides") and isinstance(self.referral_letter_text_overrides, dict):
                 self.referral_letter_text_overrides.pop(exam_name, None)
+        except Exception:
+            pass
+        try:
+            if hasattr(self, "last_work_status_letter_pdf_paths") and isinstance(
+                self.last_work_status_letter_pdf_paths, dict
+            ):
+                self.last_work_status_letter_pdf_paths.pop(exam_name, None)
+        except Exception:
+            pass
+        try:
+            if hasattr(self, "work_status_letter_text_overrides") and isinstance(
+                self.work_status_letter_text_overrides, dict
+            ):
+                self.work_status_letter_text_overrides.pop(exam_name, None)
+        except Exception:
+            pass
+        try:
+            if hasattr(self, "work_status_letter_content_signatures") and isinstance(
+                self.work_status_letter_content_signatures, dict
+            ):
+                self.work_status_letter_content_signatures.pop(exam_name, None)
         except Exception:
             pass
         try:
@@ -3375,6 +3423,385 @@ class App(tk.Tk):
         except Exception:
             pass
 
+    # =====================================================================
+    # Work Status / Disability Letters
+    # =====================================================================
+    _WORK_STATUS_TEMPLATE_KEY = "default"
+
+    def _on_work_status_changed(self) -> None:
+        """After work plan or duration changes, refresh vault PDF and letter state."""
+        self._sync_work_status_letter_after_chart_change()
+
+    @staticmethod
+    def _work_status_letter_content_signature(payload: dict) -> str:
+        parts = work_status_letter_dynamic_parts(payload)
+        try:
+            return json.dumps(
+                {
+                    "work_status": parts.get("work_status") or "",
+                    "duration": parts.get("duration_label") or "",
+                    "duration_days": parts.get("duration_days") or "",
+                    "doi": parts.get("date_of_injury") or "",
+                    "incident": parts.get("incident") or "",
+                    "patient": parts.get("patient_name") or "",
+                    "rtw": parts.get("return_to_work_date") or "",
+                    "eval_date": parts.get("eval_date") or "",
+                },
+                sort_keys=True,
+                default=str,
+            )
+        except Exception:
+            return ""
+
+    def _clear_work_status_letter_visit_override(self, exam: str) -> None:
+        exam = (exam or "").strip()
+        if not exam:
+            return
+        if isinstance(self.work_status_letter_text_overrides, dict):
+            self.work_status_letter_text_overrides.pop(exam, None)
+        if isinstance(self.work_status_letter_content_signatures, dict):
+            self.work_status_letter_content_signatures.pop(exam, None)
+
+    def _effective_work_status_letter_text(
+        self,
+        payload: dict,
+        exam: str | None = None,
+    ) -> str:
+        exam_key = (exam or payload.get("exam") or self.current_exam.get() or "").strip()
+        sig_now = self._work_status_letter_content_signature(payload)
+        if exam_key and sig_now:
+            sig_saved = (
+                (self.work_status_letter_content_signatures.get(exam_key) or "").strip()
+            )
+            if sig_saved and sig_saved == sig_now:
+                override = (
+                    (self.work_status_letter_text_overrides.get(exam_key) or "").replace("\r\n", "\n")
+                )
+                if override.strip():
+                    return override
+
+        tpl_key = self._WORK_STATUS_TEMPLATE_KEY
+        tpl = (self.work_status_letter_templates.get(tpl_key) or "").replace("\r\n", "\n")
+        if tpl.strip():
+            rendered = work_status_letter_from_template(tpl, payload)
+            if rendered.strip():
+                return rendered
+
+        return factory_work_status_letter_text(payload)
+
+    def _sync_work_status_letter_after_chart_change(self) -> None:
+        exam = (self.current_exam.get() or "").strip()
+        payload = self.make_payload() or {}
+        if exam:
+            sig_now = self._work_status_letter_content_signature(payload)
+            sig_saved = (
+                (self.work_status_letter_content_signatures.get(exam) or "").strip()
+            )
+            if sig_saved and sig_saved != sig_now:
+                self._clear_work_status_letter_visit_override(exam)
+        pr = self.get_current_patient_root() or ""
+        try:
+            self._export_work_status_letter_vault(payload, pr)
+        except Exception as e:
+            print("Work status letter sync failed:", e)
+        try:
+            self.write_settings({
+                "last_work_status_letter_pdfs": self.last_work_status_letter_pdf_paths,
+                "work_status_letter_text_overrides": self.work_status_letter_text_overrides,
+                "work_status_letter_templates": self.work_status_letter_templates,
+                "work_status_letter_content_signatures": self.work_status_letter_content_signatures,
+            })
+        except Exception:
+            pass
+        try:
+            self.doc_vault_page.refresh_current_folder()
+        except Exception:
+            pass
+
+    def _open_work_status_letter_editor(self) -> None:
+        """Generate the work status letter PDF (vault/work_status), then open the editor."""
+        exam = (self.current_exam.get() or "").strip()
+        if not exam:
+            return
+        if not self._ensure_reportlab():
+            return
+
+        self._load_global_letter_preferences()
+
+        payload = self.make_payload() or {}
+        if not work_status_letter_should_generate(payload):
+            messagebox.showinfo(
+                "Work Status Letter",
+                "Select a work restriction/disability plan other than Full Duty, then choose a duration.",
+                parent=self,
+            )
+            return
+
+        pr = self.get_current_patient_root() or ""
+        if pr:
+            try:
+                self._export_work_status_letter_vault(payload, pr)
+                try:
+                    self.write_settings({
+                        "last_work_status_letter_pdfs": self.last_work_status_letter_pdf_paths,
+                        "work_status_letter_text_overrides": self.work_status_letter_text_overrides,
+                        "work_status_letter_templates": self.work_status_letter_templates,
+                        "work_status_letter_content_signatures": self.work_status_letter_content_signatures,
+                    })
+                except Exception:
+                    pass
+                try:
+                    self.doc_vault_page.refresh_current_folder()
+                except Exception:
+                    pass
+            except Exception as e:
+                messagebox.showerror(
+                    "Work Status Letter",
+                    f"Could not create the letter PDF:\n\n{e}",
+                    parent=self,
+                )
+
+        current_text = self._effective_work_status_letter_text(payload, exam=exam)
+
+        dlg = tk.Toplevel(self)
+        dlg.title("Work Status / Disability Letter Editor")
+        dlg.transient(self)
+        dlg.grab_set()
+
+        outer = ttk.Frame(dlg, padding=10)
+        outer.grid(row=0, column=0, sticky="nsew")
+        dlg.rowconfigure(0, weight=1)
+        dlg.columnconfigure(0, weight=1)
+        outer.rowconfigure(1, weight=1)
+        outer.columnconfigure(0, weight=1)
+
+        ttk.Label(
+            outer,
+            text="Edit the letter text (from RE: line through signature):",
+        ).grid(row=0, column=0, sticky="w", pady=(0, 6))
+
+        txt = tk.Text(outer, wrap="word", width=92, height=24, font=("Segoe UI", 10))
+        txt.grid(row=1, column=0, sticky="nsew")
+        txt.insert("1.0", current_text)
+
+        btns = ttk.Frame(outer)
+        btns.grid(row=2, column=0, sticky="e", pady=(8, 0))
+
+        tpl_key = self._WORK_STATUS_TEMPLATE_KEY
+
+        def _save_as_default_template():
+            val = txt.get("1.0", "end").replace("\r\n", "\n").rstrip("\n")
+            if not val.strip():
+                messagebox.showwarning(
+                    "Save as default",
+                    "Letter text is empty — nothing to save as the default template.",
+                    parent=dlg,
+                )
+                return
+            tpl = work_status_letter_edited_to_template(val, payload)
+            if not tpl.strip():
+                messagebox.showwarning(
+                    "Save as default",
+                    "Could not build a template from this letter.",
+                    parent=dlg,
+                )
+                return
+            if not hasattr(self, "work_status_letter_templates") or not isinstance(
+                self.work_status_letter_templates, dict
+            ):
+                self.work_status_letter_templates = {}
+            self.work_status_letter_templates[tpl_key] = tpl
+            try:
+                self.write_settings({"work_status_letter_templates": self.work_status_letter_templates})
+            except Exception:
+                pass
+            messagebox.showinfo(
+                "Save as default",
+                "Default template saved for work status / disability letters.\n\n"
+                "New letters will use your wording and spacing. "
+                "Patient name, injury date, work status, duration, and return-to-work date "
+                "will still update from the chart.",
+                parent=dlg,
+            )
+
+        def _save_close():
+            val = txt.get("1.0", "end").replace("\r\n", "\n").rstrip("\n")
+            payload_now = self.make_payload() or {}
+            if val.strip():
+                if not hasattr(self, "work_status_letter_text_overrides") or not isinstance(
+                    self.work_status_letter_text_overrides, dict
+                ):
+                    self.work_status_letter_text_overrides = {}
+                self.work_status_letter_text_overrides[exam] = val
+                if not hasattr(self, "work_status_letter_content_signatures") or not isinstance(
+                    self.work_status_letter_content_signatures, dict
+                ):
+                    self.work_status_letter_content_signatures = {}
+                self.work_status_letter_content_signatures[exam] = (
+                    self._work_status_letter_content_signature(payload_now)
+                )
+                try:
+                    self.write_settings({
+                        "work_status_letter_text_overrides": self.work_status_letter_text_overrides,
+                        "work_status_letter_content_signatures": self.work_status_letter_content_signatures,
+                    })
+                except Exception:
+                    pass
+            else:
+                self._clear_work_status_letter_visit_override(exam)
+                try:
+                    self.write_settings({
+                        "work_status_letter_text_overrides": self.work_status_letter_text_overrides,
+                        "work_status_letter_content_signatures": self.work_status_letter_content_signatures,
+                    })
+                except Exception:
+                    pass
+            pr2 = self.get_current_patient_root() or ""
+            if pr2:
+                try:
+                    self._export_work_status_letter_vault(payload_now, pr2)
+                    self.write_settings({
+                        "last_work_status_letter_pdfs": self.last_work_status_letter_pdf_paths,
+                    })
+                except Exception:
+                    pass
+            dlg.destroy()
+
+        ttk.Button(btns, text="Save as Default", command=_save_as_default_template).pack(
+            side="left", padx=(0, 8)
+        )
+        ttk.Button(btns, text="Cancel", command=dlg.destroy).pack(side="left", padx=(0, 8))
+        ttk.Button(btns, text="Save", command=_save_close).pack(side="left")
+        self.wait_window(dlg)
+
+    def _purge_stale_work_status_letter_vault(self, patient_root: str, exam: str) -> None:
+        exam_slug = safe_slug(exam).lower()
+        vault_dir = os.path.join(patient_root, "vault", "work_status")
+        if not os.path.isdir(vault_dir):
+            return
+        try:
+            for fn in os.listdir(vault_dir):
+                low = fn.lower()
+                if not low.endswith(".pdf"):
+                    continue
+                if f"__{exam_slug}__work_status" in low:
+                    try:
+                        os.remove(os.path.join(vault_dir, fn))
+                    except Exception:
+                        pass
+        except Exception:
+            pass
+
+    def _archive_work_status_letter_off_chart(self, patient_root: str, exam: str) -> None:
+        """Archive work status letter when chart no longer qualifies."""
+        exam_slug = safe_slug(exam).lower()
+        vault_dir = os.path.join(patient_root, "vault", "work_status")
+        if not os.path.isdir(vault_dir):
+            return
+        try:
+            for fn in os.listdir(vault_dir):
+                low = fn.lower()
+                if not low.endswith(".pdf"):
+                    continue
+                if "__archived_" in low:
+                    continue
+                if f"__{exam_slug}__work_status" not in low:
+                    continue
+                path = os.path.join(vault_dir, fn)
+                if os.path.isfile(path):
+                    self._rename_vault_file_archived(path)
+        except Exception:
+            pass
+
+    def _export_work_status_letter_vault(self, payload: dict, patient_root: str) -> str:
+        """Build work status letter PDF into vault/work_status."""
+        exam = (payload.get("exam") or self.current_exam.get() or "").strip()
+        if not exam:
+            return ""
+
+        should = work_status_letter_should_generate(payload)
+        if patient_root and not should:
+            self._archive_work_status_letter_off_chart(patient_root, exam)
+            try:
+                self.last_work_status_letter_pdf_paths[exam] = ""
+                self._clear_work_status_letter_visit_override(exam)
+            except Exception:
+                pass
+            return ""
+
+        if not should or not patient_root or not REPORTLAB_OK:
+            return ""
+
+        ensure_patient_dirs(patient_root)
+        pdf_dir = os.path.join(patient_root, PATIENT_SUBDIR_PDFS)
+        os.makedirs(pdf_dir, exist_ok=True)
+
+        date_str = normalize_mmddyyyy(self.exam_date_var.get()) or today_mmddyyyy()
+        date_slug = safe_slug(date_str)
+        exam_slug = safe_slug(exam)
+        vault_name = f"{date_slug}__{exam_slug}__work_status_letter.pdf"
+        tmp_path = os.path.join(pdf_dir, f".tmp_work_status_letter__{exam_slug}.pdf")
+        self._purge_stale_work_status_letter_vault(patient_root, exam)
+
+        letter_text = self._effective_work_status_letter_text(payload, exam=exam)
+        out_path = ""
+        try:
+            if build_work_status_letter_pdf(tmp_path, payload, letter_text):
+                out_path = upsert_vault_file(patient_root, "work_status", tmp_path, vault_name)
+        except Exception as e:
+            print("Work status letter vault upsert failed:", e)
+            out_path = ""
+        finally:
+            try:
+                if os.path.exists(tmp_path):
+                    os.remove(tmp_path)
+            except Exception:
+                pass
+
+        try:
+            self.last_work_status_letter_pdf_paths[exam] = out_path
+        except Exception:
+            pass
+        return out_path
+
+    def _resolve_work_status_letter_vault_path(self, patient_root: str, exam: str) -> str:
+        exam_slug = safe_slug(exam).lower()
+        vault_dir = os.path.join(patient_root, "vault", "work_status")
+        if not os.path.isdir(vault_dir):
+            return ""
+        matches: list[str] = []
+        try:
+            for fn in os.listdir(vault_dir):
+                low = fn.lower()
+                if not low.endswith(".pdf"):
+                    continue
+                if "__archived_" in low:
+                    continue
+                if f"__{exam_slug}__work_status" in low:
+                    matches.append(os.path.join(vault_dir, fn))
+        except Exception:
+            return ""
+        if not matches:
+            return ""
+        try:
+            return sorted(matches, key=os.path.getmtime)[-1]
+        except Exception:
+            return matches[-1]
+
+    def _filter_active_work_status_letter_path(self, path: str, exam: str) -> str:
+        if not path or not os.path.isfile(path):
+            return ""
+        payload = self.make_payload() or {}
+        if not work_status_letter_should_generate(payload):
+            return ""
+        ex_slug = safe_slug(exam).lower()
+        base = os.path.basename(path).lower()
+        if "__archived_" in base:
+            return ""
+        if f"__{ex_slug}__work_status" not in base:
+            return ""
+        return path
+
     def _factory_imaging_letter_text(
         self,
         payload: dict,
@@ -4012,6 +4439,10 @@ class App(tk.Tk):
             self._export_referral_recommendation_letter_vault(payload, patient_root)
         except Exception as e:
             print("Referral letter export failed:", e)
+        try:
+            self._export_work_status_letter_vault(payload, patient_root)
+        except Exception as e:
+            print("Work status letter export failed:", e)
 
         try:
             self.doc_vault_page.refresh_current_folder()
@@ -4025,9 +4456,12 @@ class App(tk.Tk):
             "last_imaging_letter_pdfs": self.last_imaging_letter_pdf_paths,
             "last_modalities_letter_pdfs": self.last_modalities_letter_pdf_paths,
             "last_referral_letter_pdfs": self.last_referral_letter_pdf_paths,
+            "last_work_status_letter_pdfs": self.last_work_status_letter_pdf_paths,
             "imaging_letter_dx_selections": self.imaging_letter_dx_selections,
             "imaging_letter_text_overrides": self.imaging_letter_text_overrides,
             "referral_letter_text_overrides": self.referral_letter_text_overrides,
+            "work_status_letter_text_overrides": self.work_status_letter_text_overrides,
+            "work_status_letter_content_signatures": self.work_status_letter_content_signatures,
             "modalities_letter_text_overrides": self.modalities_letter_text_overrides,
             "modalities_letter_staff_signatures": self.modalities_letter_staff_signatures,
         })
@@ -4202,6 +4636,22 @@ class App(tk.Tk):
 
         for rp in ref_valid:
             self.open_pdf_file(rp)
+
+        ws_path = self.last_work_status_letter_pdf_paths.get(exam, "")
+        ws_valid = ws_path if (isinstance(ws_path, str) and ws_path and os.path.isfile(ws_path)) else ""
+        if ws_valid:
+            ws_valid = self._filter_active_work_status_letter_path(ws_valid, exam)
+        if not ws_valid:
+            patient_root = self.get_current_patient_root()
+            if patient_root:
+                resolved_ws = self._resolve_work_status_letter_vault_path(patient_root, exam)
+                if resolved_ws:
+                    resolved_ws = self._filter_active_work_status_letter_path(resolved_ws, exam)
+                if resolved_ws:
+                    self.last_work_status_letter_pdf_paths[exam] = resolved_ws
+                    ws_valid = resolved_ws
+        if ws_valid:
+            self.open_pdf_file(ws_valid)
 
     def open_all_exams_pdf(self):
         self.open_pdf_file(self.last_all_exams_pdf_path)
@@ -4542,6 +4992,8 @@ class App(tk.Tk):
             on_click_referral_callback=self._on_referral_clicked,
             on_open_referral_letter_callback=self._open_referral_recommendation_letter_editor,
             on_referrals_removed_callback=self._on_referrals_changed_cleanup,
+            on_open_work_status_letter_callback=self._open_work_status_letter_editor,
+            on_work_status_changed_callback=self._on_work_status_changed,
             on_load_prior_dx_callback=self._get_prior_exam_dx_blocks,
         )
 
@@ -5560,9 +6012,12 @@ class App(tk.Tk):
             self.last_imaging_letter_pdf_paths = {e: [] for e in exams_list}
             self.last_modalities_letter_pdf_paths = {e: "" for e in exams_list}
             self.last_referral_letter_pdf_paths = {e: [] for e in exams_list}
+            self.last_work_status_letter_pdf_paths = {e: "" for e in exams_list}
             self.imaging_letter_dx_selections = {e: {} for e in exams_list}
             self.imaging_letter_text_overrides = {e: {} for e in exams_list}
             self.referral_letter_text_overrides = {e: {} for e in exams_list}
+            self.work_status_letter_text_overrides = {e: "" for e in exams_list}
+            self.work_status_letter_content_signatures = {e: "" for e in exams_list}
             self.modalities_letter_text_overrides = {e: "" for e in exams_list}
             self.modalities_letter_staff_signatures = {e: "" for e in exams_list}
             self._set_current_doc_label()
@@ -5887,6 +6342,49 @@ class App(tk.Tk):
                 if cleaned_sigs:
                     self.referral_letter_content_signatures[exam_clean] = cleaned_sigs
 
+        ws_tpl_map = settings.get("work_status_letter_templates", {})
+        self.work_status_letter_templates = {}
+        if isinstance(ws_tpl_map, dict):
+            for tpl_key, raw_tpl in ws_tpl_map.items():
+                if not isinstance(tpl_key, str) or not isinstance(raw_tpl, str):
+                    continue
+                tk = tpl_key.strip().lower()
+                tpl = raw_tpl.replace("\r\n", "\n")
+                if tk and tpl.strip():
+                    self.work_status_letter_templates[tk] = tpl
+
+        ws_txt_map = settings.get("work_status_letter_text_overrides", {})
+        if isinstance(ws_txt_map, dict):
+            if not hasattr(self, "work_status_letter_text_overrides") or not isinstance(
+                self.work_status_letter_text_overrides, dict
+            ):
+                self.work_status_letter_text_overrides = {}
+            for exam, raw_text in ws_txt_map.items():
+                if isinstance(exam, str) and isinstance(raw_text, str):
+                    ek = exam.strip()
+                    if ek:
+                        self.work_status_letter_text_overrides[ek] = raw_text.replace("\r\n", "\n")
+
+        ws_sig_map = settings.get("work_status_letter_content_signatures", {})
+        if isinstance(ws_sig_map, dict):
+            if not hasattr(self, "work_status_letter_content_signatures") or not isinstance(
+                self.work_status_letter_content_signatures, dict
+            ):
+                self.work_status_letter_content_signatures = {}
+            for exam_key, sig in ws_sig_map.items():
+                if not isinstance(exam_key, str):
+                    continue
+                ek = exam_key.strip()
+                if not ek:
+                    continue
+                if isinstance(sig, str):
+                    self.work_status_letter_content_signatures[ek] = sig.strip()
+                elif sig:
+                    try:
+                        self.work_status_letter_content_signatures[ek] = str(sig).strip()
+                    except Exception:
+                        pass
+
     def autoload_last_case_on_startup(self):
         # Letter templates / dx picks must load even when the shell opens an exam
         # directly (that path used to return before settings were read).
@@ -6040,6 +6538,13 @@ class App(tk.Tk):
                     self.last_referral_letter_pdf_paths[exam] = [v.strip()]
                 else:
                     self.last_referral_letter_pdf_paths[exam] = []
+
+        ws_pdf_map = settings.get("last_work_status_letter_pdfs", {})
+        self.last_work_status_letter_pdf_paths = {}
+        if isinstance(ws_pdf_map, dict):
+            for exam in self.exams:
+                v = ws_pdf_map.get(exam)
+                self.last_work_status_letter_pdf_paths[exam] = v.strip() if isinstance(v, str) else ""
 
         modal_txt_map = settings.get("modalities_letter_text_overrides", {})
         self.modalities_letter_text_overrides = {}
@@ -7422,8 +7927,9 @@ class App(tk.Tk):
                 self._export_imaging_recommendation_letter_vault(payload, pr)
                 self._export_modalities_recommendation_letter_vault(payload, pr)
                 self._export_referral_recommendation_letter_vault(payload, pr)
+                self._export_work_status_letter_vault(payload, pr)
         except Exception as e:
-            print("Imaging / referral letter export failed:", e)
+            print("Imaging / referral / work status letter export failed:", e)
 
         try:
             self.doc_vault_page.refresh_current_folder()
@@ -7437,9 +7943,12 @@ class App(tk.Tk):
             "last_imaging_letter_pdfs": self.last_imaging_letter_pdf_paths,
             "last_modalities_letter_pdfs": self.last_modalities_letter_pdf_paths,
             "last_referral_letter_pdfs": self.last_referral_letter_pdf_paths,
+            "last_work_status_letter_pdfs": self.last_work_status_letter_pdf_paths,
             "imaging_letter_dx_selections": self.imaging_letter_dx_selections,
             "imaging_letter_text_overrides": self.imaging_letter_text_overrides,
             "referral_letter_text_overrides": self.referral_letter_text_overrides,
+            "work_status_letter_text_overrides": self.work_status_letter_text_overrides,
+            "work_status_letter_content_signatures": self.work_status_letter_content_signatures,
             "modalities_letter_text_overrides": self.modalities_letter_text_overrides,
             "modalities_letter_staff_signatures": self.modalities_letter_staff_signatures,
         })
@@ -7586,9 +8095,12 @@ class App(tk.Tk):
         self.last_imaging_letter_pdf_paths = {e: [] for e in self.exams}
         self.last_modalities_letter_pdf_paths = {e: "" for e in self.exams}
         self.last_referral_letter_pdf_paths = {e: [] for e in self.exams}
+        self.last_work_status_letter_pdf_paths = {e: "" for e in self.exams}
         self.imaging_letter_dx_selections = {e: {} for e in self.exams}
         self.imaging_letter_text_overrides = {e: {} for e in self.exams}
         self.referral_letter_text_overrides = {e: {} for e in self.exams}
+        self.work_status_letter_text_overrides = {e: "" for e in self.exams}
+        self.work_status_letter_content_signatures = {e: "" for e in self.exams}
         self.modalities_letter_text_overrides = {e: "" for e in self.exams}
         self.modalities_letter_staff_signatures = {e: "" for e in self.exams}
         self.last_all_exams_pdf_path = ""

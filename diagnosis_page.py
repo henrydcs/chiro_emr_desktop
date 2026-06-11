@@ -5,6 +5,7 @@ import tkinter as tk
 from tkinter import ttk, messagebox
 
 from scrollframe import ScrollFrame
+from work_status_duration_storage import add_custom_duration, all_duration_choices
 
 AUTO_TAG = "[AUTO:DX]"
 
@@ -312,6 +313,8 @@ class DiagnosisPage(ttk.Frame):
         on_click_referral_callback=None,
         on_open_referral_letter_callback=None,
         on_referrals_removed_callback=None,
+        on_open_work_status_letter_callback=None,
+        on_work_status_changed_callback=None,
         on_load_prior_dx_callback=None,
     ):
         super().__init__(parent)
@@ -324,6 +327,8 @@ class DiagnosisPage(ttk.Frame):
         self.on_click_referral_callback = on_click_referral_callback
         self.on_open_referral_letter_callback = on_open_referral_letter_callback
         self.on_referrals_removed_callback = on_referrals_removed_callback
+        self.on_open_work_status_letter_callback = on_open_work_status_letter_callback
+        self.on_work_status_changed_callback = on_work_status_changed_callback
         self.on_load_prior_dx_callback = on_load_prior_dx_callback
         self.max_blocks = max_blocks
 
@@ -597,6 +602,84 @@ class DiagnosisPage(ttk.Frame):
         if callable(cb):
             try:
                 cb(provider_type)
+            except Exception:
+                pass
+
+    def _work_status_letter_ready(self) -> bool:
+        wp = (self.work_plan_var.get() or "").strip()
+        if not wp or wp == "(select)" or wp == "Full Duty (No Restrictions)":
+            return False
+        dur = (self.work_duration_var.get() or "").strip()
+        return bool(dur and dur != "(select)")
+
+    def _refresh_work_status_letter_button(self) -> None:
+        if not hasattr(self, "work_status_letter_btn"):
+            return
+        ready = self._work_status_letter_ready()
+        try:
+            if ready:
+                self.work_status_letter_btn.state(["!disabled"])
+            else:
+                self.work_status_letter_btn.state(["disabled"])
+        except Exception:
+            pass
+
+    def _on_work_status_fields_changed(self) -> None:
+        self._refresh_work_status_letter_button()
+        self._changed()
+        cb = getattr(self, "on_work_status_changed_callback", None)
+        if callable(cb):
+            try:
+                cb()
+            except Exception:
+                pass
+
+    def _refresh_work_duration_cb_values(self) -> None:
+        if not hasattr(self, "work_duration_cb"):
+            return
+        cur = (self.work_duration_var.get() or "").strip()
+        vals = all_duration_choices()
+        self.work_duration_cb["values"] = vals
+        if cur and cur in vals:
+            self.work_duration_var.set(cur)
+
+    def _add_work_duration_from_search(self) -> None:
+        raw = (self.work_duration_search_var.get() or "").strip()
+        if not raw:
+            messagebox.showinfo(
+                "Duration",
+                'Type a duration label first (e.g., "two months").',
+                parent=self.master,
+            )
+            return
+        existing = {x.strip().lower() for x in all_duration_choices()}
+        if raw.lower() in existing:
+            match = next((x for x in all_duration_choices() if x.lower() == raw.lower()), raw)
+            self.work_duration_var.set(match)
+            self.work_duration_search_var.set("")
+            self._refresh_work_duration_cb_values()
+            self._on_work_status_fields_changed()
+            return
+        if not add_custom_duration(raw):
+            messagebox.showinfo("Duration", "That duration is already in the list.", parent=self.master)
+            return
+        self._refresh_work_duration_cb_values()
+        self.work_duration_var.set(raw)
+        self.work_duration_search_var.set("")
+        self._on_work_status_fields_changed()
+
+    def _open_work_status_letter_editor(self) -> None:
+        if not self._work_status_letter_ready():
+            messagebox.showinfo(
+                "Work Status Letter",
+                "Select a work restriction/disability plan other than Full Duty, then choose a duration.",
+                parent=self.master,
+            )
+            return
+        cb = getattr(self, "on_open_work_status_letter_callback", None)
+        if callable(cb):
+            try:
+                cb()
             except Exception:
                 pass
 
@@ -1036,6 +1119,10 @@ class DiagnosisPage(ttk.Frame):
             self.employment_status_var = tk.StringVar(value="(select)")
         if not hasattr(self, "work_plan_var"):
             self.work_plan_var = tk.StringVar(value="(select)")
+        if not hasattr(self, "work_duration_var"):
+            self.work_duration_var = tk.StringVar(value="(select)")
+        if not hasattr(self, "work_duration_search_var"):
+            self.work_duration_search_var = tk.StringVar(value="")
         if not hasattr(self, "employment_notes_var"):
             self.employment_notes_var = tk.StringVar(value="")
         if not hasattr(self, "employment_other_var"):
@@ -1076,10 +1163,43 @@ class DiagnosisPage(ttk.Frame):
         self.work_plan_cb = ttk.Combobox(right_col, textvariable=self.work_plan_var, values=work_plan_choices, state="readonly")
         self._disable_mousewheel_on_cb(self.work_plan_cb)
         self.work_plan_cb.grid(row=1, column=0, sticky="ew", pady=(4, 0))
-        self.work_plan_cb.bind("<<ComboboxSelected>>", lambda e: self._changed())
+        self.work_plan_cb.bind("<<ComboboxSelected>>", lambda e: self._on_work_status_fields_changed())
+
+        ttk.Label(right_col, text="Duration of work status:").grid(row=2, column=0, sticky="w", pady=(10, 0))
+        self.work_duration_cb = ttk.Combobox(
+            right_col,
+            textvariable=self.work_duration_var,
+            values=all_duration_choices(),
+            state="readonly",
+        )
+        self._disable_mousewheel_on_cb(self.work_duration_cb)
+        self.work_duration_cb.grid(row=3, column=0, sticky="ew", pady=(4, 0))
+        self.work_duration_cb.bind("<<ComboboxSelected>>", lambda e: self._on_work_status_fields_changed())
+
+        dur_search_row = ttk.Frame(right_col)
+        dur_search_row.grid(row=4, column=0, sticky="ew", pady=(6, 0))
+        dur_search_row.columnconfigure(0, weight=1)
+        ttk.Label(dur_search_row, text="Add custom duration:").grid(row=0, column=0, columnspan=2, sticky="w")
+        dur_search_entry = ttk.Entry(dur_search_row, textvariable=self.work_duration_search_var)
+        dur_search_entry.grid(row=1, column=0, sticky="ew", pady=(4, 0))
+        ttk.Button(
+            dur_search_row,
+            text="+ Add to List",
+            command=self._add_work_duration_from_search,
+        ).grid(row=1, column=1, padx=(6, 0), pady=(4, 0))
+
+        letter_row = ttk.Frame(body)
+        letter_row.grid(row=1, column=0, sticky="w", pady=(10, 0))
+        self.work_status_letter_btn = ttk.Button(
+            letter_row,
+            text="Work Status / Disability Letter",
+            command=self._open_work_status_letter_editor,
+        )
+        self.work_status_letter_btn.pack(side="left")
+        self._refresh_work_status_letter_button()
 
         self.employment_other_row = ttk.Frame(body)
-        self.employment_other_row.grid(row=1, column=0, sticky="ew", pady=(10, 0))
+        self.employment_other_row.grid(row=2, column=0, sticky="ew", pady=(10, 0))
         self.employment_other_row.columnconfigure(0, weight=1)
         ttk.Label(self.employment_other_row, text="Other employment status:").grid(row=0, column=0, sticky="w")
         ttk.Entry(self.employment_other_row, textvariable=self.employment_other_var).grid(row=1, column=0, sticky="ew", pady=(4, 0))
@@ -1096,10 +1216,10 @@ class DiagnosisPage(ttk.Frame):
         self.employment_status_var.trace_add("write", _refresh_other_visibility)
         _refresh_other_visibility()
 
-        ttk.Label(body, text="Additional notes (optional):").grid(row=2, column=0, sticky="w", pady=(14, 4))
+        ttk.Label(body, text="Additional notes (optional):").grid(row=3, column=0, sticky="w", pady=(14, 4))
         self.employment_notes = tk.Text(body, height=5, wrap="word")
-        self.employment_notes.grid(row=3, column=0, sticky="nsew")
-        body.rowconfigure(3, weight=1)
+        self.employment_notes.grid(row=4, column=0, sticky="nsew")
+        body.rowconfigure(4, weight=1)
 
         self.employment_notes.delete("1.0", "end")
         self.employment_notes.insert("1.0", self.employment_notes_var.get() or "")
@@ -1669,6 +1789,8 @@ class DiagnosisPage(ttk.Frame):
                 self.employment_status_var.set("(select)")
                 self.employment_other_var.set("")
                 self.work_plan_var.set("(select)")
+                self.work_duration_var.set("(select)")
+                self.work_duration_search_var.set("")
                 self.employment_notes_var.set("")
             except Exception:
                 pass
@@ -1705,6 +1827,7 @@ class DiagnosisPage(ttk.Frame):
             "employment_status": self.employment_status_var.get(),
             "employment_other": self.employment_other_var.get(),
             "work_plan": self.work_plan_var.get(),
+            "work_duration": self.work_duration_var.get(),
             "employment_notes": self.employment_notes_var.get(),
             "prognosis": self.prognosis_var.get(),
             "imaging_recs": list(self.imaging_recs),
@@ -1816,10 +1939,13 @@ class DiagnosisPage(ttk.Frame):
                 self.employment_status_var.set(data.get("employment_status") or "(select)")
                 self.employment_other_var.set(data.get("employment_other") or "")
                 self.work_plan_var.set(data.get("work_plan") or "(select)")
+                self.work_duration_var.set(data.get("work_duration") or "(select)")
+                self._refresh_work_duration_cb_values()
                 self.employment_notes_var.set(data.get("employment_notes") or "")
                 if hasattr(self, "employment_notes"):
                     self.employment_notes.delete("1.0", "end")
                     self.employment_notes.insert("1.0", self.employment_notes_var.get() or "")
+                self._refresh_work_status_letter_button()
             except Exception:
                 pass
 
