@@ -100,13 +100,15 @@ else:
     NumberedCanvas = None  # type: ignore[assignment,misc]
 
 
-def _new_pdf_canvas(out_path: str | Path, *, pagesize=LETTER):
+def _new_pdf_canvas(out_path: str | Path, *, pagesize=None):
     """
     Factory for the page-numbered canvas. Use this in place of
     `pdf_canvas.Canvas(out_path, pagesize=...)` so every billing-style PDF
     gets a "Page N of M" footer for free.
     """
     _require_reportlab()
+    if pagesize is None:
+        pagesize = LETTER
     return NumberedCanvas(str(out_path), pagesize=pagesize)
 
 

@@ -620,6 +620,179 @@ def imaging_recommendation_letter_title_and_body(payload: dict) -> tuple[str, st
     return title, body
 
 
+# Placeholders stored in user-defined imaging letter templates. On each new
+# letter, {DOI}, {STUDIES}, and {DIAGNOSTIC_CODES} are replaced with live
+# chart data while the surrounding wording/spacing stays as saved.
+IMAGING_LETTER_DOI_TOKEN = "{DOI}"
+IMAGING_LETTER_STUDIES_TOKEN = "{STUDIES}"
+IMAGING_LETTER_DX_CODES_TOKEN = "{DIAGNOSTIC_CODES}"
+
+
+def _imaging_studies_phrase_from_dx_struct(dx_struct: dict) -> str:
+    """e.g. 'an MRI of the Cervical Spine' from structured imaging recommendations."""
+    if not isinstance(dx_struct, dict):
+        return ""
+    groups = _ordered_imaging_groups(dx_struct)
+    clauses: list[str] = []
+    for mod, body_parts in groups:
+        art = _article_for_modality(mod)
+        if len(body_parts) == 1:
+            clauses.append(f"{art} {mod} of the {body_parts[0]}")
+        else:
+            clauses.append(f"{art} {mod} of the {_join_with_and(body_parts)}")
+    return _join_with_and(clauses)
+
+
+def imaging_recommendation_letter_dynamic_parts(
+    payload: dict,
+    modality: str,
+    selected_icd_by_body_part: dict[str, str] | None = None,
+) -> dict[str, str | list[str]]:
+    """
+    Live values substituted into a saved imaging letter template.
+    Keys: doi_part (str), studies (str), icd_lines (list[str]).
+    """
+    sub = _payload_with_single_imaging_modality(payload, modality)
+    patient = (payload or {}).get("patient") or {}
+    if not isinstance(patient, dict):
+        patient = {}
+    soap = (payload or {}).get("soap") or {}
+    hoi_struct = soap.get("hoi_struct") or {}
+    if not isinstance(hoi_struct, dict):
+        hoi_struct = {}
+
+    doi = _doi_for_imaging_letter(patient, hoi_struct)
+    doi_part = f" The documented date of injury is {doi}." if doi else ""
+
+    sub_dx = (sub.get("soap") or {}).get("diagnosis_struct") or {}
+    studies = _imaging_studies_phrase_from_dx_struct(sub_dx if isinstance(sub_dx, dict) else {})
+
+    full_dx = soap.get("diagnosis_struct") or {}
+    body_parts = (
+        _ordered_imaging_body_parts_unique(sub_dx)
+        if isinstance(sub_dx, dict)
+        else []
+    )
+    icd_lines: list[str] = []
+    if isinstance(full_dx, dict) and body_parts:
+        all_chart_icds = _unique_icds_from_dx_struct(full_dx)
+        for bp in body_parts:
+            picked = ""
+            if selected_icd_by_body_part is not None:
+                picked = _icd_from_body_part_selection_map(selected_icd_by_body_part, bp)
+            if not picked:
+                picked = _icd_first_match_for_single_body_part(full_dx, bp)
+            # Single diagnosis on chart → use it even when body-part matching fails
+            # (e.g. concussion code with cervical MRI).
+            if not picked and len(body_parts) == 1 and len(all_chart_icds) == 1:
+                picked = all_chart_icds[0]
+            icd_lines.append(picked if picked else "—")
+
+    return {"doi_part": doi_part, "studies": studies, "icd_lines": icd_lines}
+
+
+def _unique_icds_from_dx_struct(dx_struct: dict) -> list[str]:
+    """Unique ICD-10 codes from diagnosis blocks, in chart order."""
+    if not isinstance(dx_struct, dict):
+        return []
+    blocks = dx_struct.get("blocks") or []
+    if not isinstance(blocks, list):
+        return []
+    out: list[str] = []
+    seen: set[str] = set()
+    for b in blocks:
+        if not isinstance(b, dict):
+            continue
+        icd = _resolve_icd_from_dx_block(b)
+        if icd and icd not in seen:
+            seen.add(icd)
+            out.append(icd)
+    return out
+
+
+def imaging_recommendation_letter_from_template(
+    template: str,
+    payload: dict,
+    modality: str,
+    selected_icd_by_body_part: dict[str, str] | None = None,
+) -> str:
+    """Render a saved template with current DOI, studies, and diagnostic codes."""
+    tpl = (template or "").replace("\r\n", "\n")
+    if not tpl.strip():
+        return ""
+    parts = imaging_recommendation_letter_dynamic_parts(
+        payload, modality, selected_icd_by_body_part
+    )
+    doi_part = str(parts.get("doi_part") or "")
+    studies = str(parts.get("studies") or "")
+    icd_lines = parts.get("icd_lines") or []
+    icd_block = "\n".join(str(x) for x in icd_lines if str(x).strip())
+
+    text = tpl.replace(IMAGING_LETTER_DOI_TOKEN, doi_part)
+    text = text.replace(IMAGING_LETTER_STUDIES_TOKEN, studies)
+    text = text.replace(IMAGING_LETTER_DX_CODES_TOKEN, icd_block)
+    # Keep user-authored vertical spacing; do not strip blank lines.
+    return text.replace("\r\n", "\n")
+
+
+def imaging_recommendation_letter_edited_to_template(
+    edited_text: str,
+    payload: dict,
+    modality: str,
+    selected_icd_by_body_part: dict[str, str] | None = None,
+) -> str:
+    """
+    Convert edited letter text into a reusable template by replacing live
+    DOI, studies phrase, and diagnostic code lines with placeholders.
+    """
+    text = (edited_text or "").replace("\r\n", "\n").strip()
+    if not text:
+        return ""
+
+    parts = imaging_recommendation_letter_dynamic_parts(
+        payload, modality, selected_icd_by_body_part
+    )
+    doi_part = str(parts.get("doi_part") or "")
+    studies = str(parts.get("studies") or "")
+    icd_lines = [str(x).strip() for x in (parts.get("icd_lines") or []) if str(x).strip()]
+
+    if doi_part and doi_part in text:
+        text = text.replace(doi_part, IMAGING_LETTER_DOI_TOKEN, 1)
+    else:
+        text = re.sub(
+            r" The documented date of injury is \d{1,2}/\d{1,2}/\d{4}\.",
+            IMAGING_LETTER_DOI_TOKEN,
+            text,
+            count=1,
+        )
+
+    if studies and studies in text:
+        text = text.replace(studies, IMAGING_LETTER_STUDIES_TOKEN, 1)
+
+    dx_match = re.search(
+        r"(Diagnostic Codes:\s*\n)(.*?)(\n\s*Sincerely,)",
+        text,
+        flags=re.DOTALL | re.IGNORECASE,
+    )
+    if dx_match:
+        prefix = text[: dx_match.start()]
+        suffix = text[dx_match.end() :]
+        text = (
+            prefix
+            + dx_match.group(1)
+            + IMAGING_LETTER_DX_CODES_TOKEN
+            + "\n"
+            + dx_match.group(3)
+            + suffix
+        )
+    else:
+        for icd in icd_lines:
+            if icd in text:
+                text = text.replace(icd, IMAGING_LETTER_DX_CODES_TOKEN, 1)
+
+    return text.replace("\r\n", "\n")
+
+
 def imaging_recommendation_letter_editable_text(
     payload: dict,
     modality: str,
@@ -1039,6 +1212,110 @@ def referral_letter_editable_text(payload: dict, provider_type: str) -> str:
     return "\n".join(lines).rstrip()
 
 
+# Placeholders for user-defined referral letter templates.
+REFERRAL_LETTER_DOI_TOKEN = "{DOI}"
+REFERRAL_LETTER_PROVIDER_PHRASE_TOKEN = "{PROVIDER_PHRASE}"
+REFERRAL_LETTER_SPECIALIST_LINE_TOKEN = "{SPECIALIST_REFERRAL}"
+
+
+def referral_letter_dynamic_parts(
+    payload: dict,
+    provider_type: str,
+) -> dict[str, str]:
+    """Live values substituted into a saved referral letter template."""
+    payload = payload or {}
+    patient = payload.get("patient") or {}
+    if not isinstance(patient, dict):
+        patient = {}
+    soap = payload.get("soap") or {}
+    hoi_struct = soap.get("hoi_struct") or {}
+    if not isinstance(hoi_struct, dict):
+        hoi_struct = {}
+
+    doi = _doi_for_imaging_letter(patient, hoi_struct)
+    doi_part = f" The documented date of injury is {doi}." if doi else ""
+    provider_phrase = _referral_provider_phrase(provider_type)
+    prov_label = (provider_type or "").strip()
+    specialist_line = (
+        f"{_REFERRAL_BULLET_PREFIX}{prov_label}" if prov_label else ""
+    )
+    return {
+        "doi_part": doi_part,
+        "provider_phrase": provider_phrase,
+        "specialist_line": specialist_line,
+    }
+
+
+def referral_letter_from_template(
+    template: str,
+    payload: dict,
+    provider_type: str,
+) -> str:
+    """Render a saved referral template with current DOI and provider lines."""
+    tpl = (template or "").replace("\r\n", "\n")
+    if not tpl.strip():
+        return ""
+    parts = referral_letter_dynamic_parts(payload, provider_type)
+    text = tpl.replace(REFERRAL_LETTER_DOI_TOKEN, parts.get("doi_part") or "")
+    text = text.replace(
+        REFERRAL_LETTER_PROVIDER_PHRASE_TOKEN, parts.get("provider_phrase") or ""
+    )
+    text = text.replace(
+        REFERRAL_LETTER_SPECIALIST_LINE_TOKEN, parts.get("specialist_line") or ""
+    )
+    return text.replace("\r\n", "\n")
+
+
+def referral_letter_edited_to_template(
+    edited_text: str,
+    payload: dict,
+    provider_type: str,
+) -> str:
+    """Convert edited referral letter text into a reusable template."""
+    text = (edited_text or "").replace("\r\n", "\n").strip()
+    if not text:
+        return ""
+
+    parts = referral_letter_dynamic_parts(payload, provider_type)
+    doi_part = str(parts.get("doi_part") or "")
+    provider_phrase = str(parts.get("provider_phrase") or "")
+    specialist_line = str(parts.get("specialist_line") or "")
+
+    if doi_part and doi_part in text:
+        text = text.replace(doi_part, REFERRAL_LETTER_DOI_TOKEN, 1)
+    else:
+        text = re.sub(
+            r" The documented date of injury is \d{1,2}/\d{1,2}/\d{4}\.",
+            REFERRAL_LETTER_DOI_TOKEN,
+            text,
+            count=1,
+        )
+
+    if provider_phrase and provider_phrase in text:
+        text = text.replace(provider_phrase, REFERRAL_LETTER_PROVIDER_PHRASE_TOKEN, 1)
+
+    spec_match = re.search(
+        rf"({re.escape(_REFERRAL_HEADER_LABEL)}\s*\n)(.*?)(\n\s*Sincerely,)",
+        text,
+        flags=re.DOTALL | re.IGNORECASE,
+    )
+    if spec_match:
+        prefix = text[: spec_match.start()]
+        suffix = text[spec_match.end() :]
+        text = (
+            prefix
+            + spec_match.group(1)
+            + REFERRAL_LETTER_SPECIALIST_LINE_TOKEN
+            + "\n"
+            + spec_match.group(3)
+            + suffix
+        )
+    elif specialist_line and specialist_line in text:
+        text = text.replace(specialist_line, REFERRAL_LETTER_SPECIALIST_LINE_TOKEN, 1)
+
+    return text.replace("\r\n", "\n")
+
+
 def build_referral_letter_pdf(
     path: str,
     payload: dict,
@@ -1125,8 +1402,8 @@ def build_referral_letter_pdf(
         re_safe = xml_escape(re_line.strip()).replace("\n", "<br/>")
         story.append(Paragraph(f"<b>{re_safe}</b>", styles["ReferralLetterBody"]))
 
-        letter_text = (editable_letter_text or "").strip()
-        if not letter_text:
+        letter_text = (editable_letter_text or "").replace("\r\n", "\n")
+        if not letter_text.strip():
             letter_text = referral_letter_editable_text(payload, provider_type)
 
         lines = letter_text.replace("\r\n", "\n").split("\n")
@@ -1260,8 +1537,8 @@ def build_imaging_recommendation_letter_pdf(
         story.append(Spacer(1, 0.12 * inch))
         re_safe = xml_escape(re_line.strip()).replace("\n", "<br/>")
         story.append(Paragraph(f"<b>{re_safe}</b>", styles["ImagingLetterBody"]))
-        letter_text = (editable_letter_text or "").strip()
-        if not letter_text:
+        letter_text = (editable_letter_text or "").replace("\r\n", "\n")
+        if not letter_text.strip():
             letter_text = imaging_recommendation_letter_editable_text(
                 payload,
                 modality,

@@ -69,11 +69,16 @@ from pdf_export import (
     imaging_dx_all_ui_choices,
     imaging_dx_choices_by_body_part,
     imaging_recommendation_letter_editable_text,
+    imaging_recommendation_letter_edited_to_template,
+    imaging_recommendation_letter_from_template,
     imaging_modalities_in_payload,
     imaging_recommendation_letter_should_generate,
     modalities_recommendation_letter_editable_text,
     modalities_recommendation_letter_should_generate,
     referral_letter_editable_text,
+    referral_letter_edited_to_template,
+    referral_letter_from_template,
+    referral_letter_dynamic_parts,
     referral_letter_should_generate,
     referral_provider_types_in_payload,
     _norm_imaging_body_part_key,
@@ -370,7 +375,15 @@ class App(tk.Tk):
         self.last_referral_letter_pdf_paths: dict[str, list[str]] = {}
         self.imaging_letter_dx_selections: dict[str, dict[str, dict[str, str]]] = {}
         self.imaging_letter_text_overrides: dict[str, dict[str, str]] = {}
+        # Clinic-wide default letter wording per modality (MRI, X-Ray, …).
+        self.imaging_letter_templates: dict[str, str] = {}
+        # Visit override validity: when imaging body parts / dx picks change,
+        # stale overrides are ignored (only used when no clinic template exists).
+        self.imaging_letter_content_signatures: dict[str, dict[str, str]] = {}
         self.referral_letter_text_overrides: dict[str, dict[str, str]] = {}
+        # Clinic-wide default referral letter wording per provider type.
+        self.referral_letter_templates: dict[str, str] = {}
+        self.referral_letter_content_signatures: dict[str, dict[str, str]] = {}
         self.modalities_letter_text_overrides: dict[str, str] = {}
         # When staff-letter region/exclude mappings change, ignore stale overrides until Save.
         self.modalities_letter_staff_signatures: dict[str, str] = {}
@@ -2867,6 +2880,7 @@ class App(tk.Tk):
             self.write_settings({"imaging_letter_dx_selections": self.imaging_letter_dx_selections})
         except Exception:
             pass
+        self._sync_imaging_letter_after_chart_change(modality)
 
     def _on_imaging_recommendation_clicked(self, modality: str, body_part: str) -> None:
         """
@@ -2886,11 +2900,8 @@ class App(tk.Tk):
     # (sibling of the imaging-letter system, but provider-type-driven)
     # =====================================================================
     def _on_referral_added(self, provider_type: str) -> None:
-        """Hook fired when the user adds a new referral provider type from
-        the Diagnosis page. The default behavior is a no-op: referral letters
-        autofill with all current diagnosis ICDs, so we don't prompt at add
-        time. Kept as a stub so the symmetry with imaging is obvious."""
-        return None
+        """After a referral row is added, refresh referral letter PDFs."""
+        self._sync_referral_letter_after_chart_change(provider_type)
 
     def _on_referral_clicked(self, provider_type: str) -> None:
         """Double-click on an existing referral row → quick path to the
@@ -2899,20 +2910,136 @@ class App(tk.Tk):
             return
         self._open_referral_recommendation_letter_editor(provider_type)
 
+    def _factory_referral_letter_text(self, payload: dict, provider_type: str) -> str:
+        return referral_letter_editable_text(payload, provider_type)
+
+    @staticmethod
+    def _referral_letter_content_signature(payload: dict, provider_type: str) -> str:
+        parts = referral_letter_dynamic_parts(payload, provider_type)
+        try:
+            return json.dumps(
+                {
+                    "provider": (provider_type or "").strip().lower(),
+                    "doi_part": parts.get("doi_part") or "",
+                    "provider_phrase": parts.get("provider_phrase") or "",
+                },
+                sort_keys=True,
+                default=str,
+            )
+        except Exception:
+            return ""
+
+    def _clear_referral_letter_visit_override(self, exam: str, provider_type: str) -> None:
+        exam = (exam or "").strip()
+        prov_key = (provider_type or "").strip().lower()
+        if not exam or not prov_key:
+            return
+        em = self.referral_letter_text_overrides.get(exam)
+        if isinstance(em, dict):
+            em.pop(prov_key, None)
+        sig_exam = self.referral_letter_content_signatures.get(exam)
+        if isinstance(sig_exam, dict):
+            sig_exam.pop(prov_key, None)
+
+    def _effective_referral_letter_text(
+        self,
+        payload: dict,
+        provider_type: str,
+        *,
+        exam: str | None = None,
+    ) -> str:
+        """
+        Referral letter body for editor/PDF.
+
+        When a clinic template exists (Save as Default), always re-render it so
+        DOI and specialist lines stay current. Without a template, reuse a
+        visit override only while chart referral context is unchanged.
+        """
+        prov_key = (provider_type or "").strip().lower()
+        tpl = (self.referral_letter_templates.get(prov_key) or "").replace("\r\n", "\n")
+        if tpl.strip():
+            rendered = referral_letter_from_template(tpl, payload, provider_type)
+            if rendered:
+                return rendered
+
+        exam_key = (exam or self.current_exam.get() or "").strip()
+        sig_now = self._referral_letter_content_signature(payload, provider_type)
+        sig_saved = ""
+        if exam_key:
+            sig_saved = (
+                (self.referral_letter_content_signatures.get(exam_key) or {}).get(prov_key) or ""
+            ).strip()
+        override = ""
+        if exam_key:
+            override = (
+                (self.referral_letter_text_overrides.get(exam_key) or {}).get(prov_key) or ""
+            ).replace("\r\n", "\n").strip()
+        if override and sig_saved and sig_now == sig_saved:
+            return override.replace("\r\n", "\n")
+
+        return self._factory_referral_letter_text(payload, provider_type)
+
+    def _sync_referral_letter_after_chart_change(
+        self, provider_type: str | None = None,
+    ) -> None:
+        exam = (self.current_exam.get() or "").strip()
+        prov_key = (provider_type or "").strip().lower()
+        if exam and prov_key:
+            tpl = (self.referral_letter_templates.get(prov_key) or "").strip()
+            if tpl:
+                self._clear_referral_letter_visit_override(exam, provider_type or "")
+        payload = self.make_payload() or {}
+        pr = self.get_current_patient_root() or ""
+        if not pr:
+            return
+        try:
+            self._export_referral_recommendation_letter_vault(payload, pr)
+        except Exception as e:
+            print("Referral letter auto-sync failed:", e)
+        try:
+            self.doc_vault_page.refresh_current_folder()
+        except Exception:
+            pass
+
     def _open_referral_recommendation_letter_editor(self, provider_type: str) -> None:
-        """Open editable text popup for a provider-specific medical referral letter."""
+        """Generate the referral letter PDF (vault/referrals), then open the text editor."""
         exam = (self.current_exam.get() or "").strip()
         if not exam:
             return
-        payload = self.make_payload() or {}
-        prov_key = (provider_type or "").strip().lower()
+        if not self._ensure_reportlab():
+            return
 
-        exam_override_map = self.referral_letter_text_overrides.get(exam, {})
-        if not isinstance(exam_override_map, dict):
-            exam_override_map = {}
-        current_text = (exam_override_map.get(prov_key) or "").strip()
-        if not current_text:
-            current_text = referral_letter_editable_text(payload, provider_type)
+        self._load_global_letter_preferences()
+
+        payload = self.make_payload() or {}
+        pr = self.get_current_patient_root() or ""
+        if pr:
+            try:
+                self._export_referral_recommendation_letter_vault(payload, pr)
+                try:
+                    self.write_settings({
+                        "last_referral_letter_pdfs": self.last_referral_letter_pdf_paths,
+                        "referral_letter_text_overrides": self.referral_letter_text_overrides,
+                        "referral_letter_templates": self.referral_letter_templates,
+                        "referral_letter_content_signatures": self.referral_letter_content_signatures,
+                    })
+                except Exception:
+                    pass
+                try:
+                    self.doc_vault_page.refresh_current_folder()
+                except Exception:
+                    pass
+            except Exception as e:
+                messagebox.showerror(
+                    "Referral Letter",
+                    f"Could not create the letter PDF:\n\n{e}",
+                    parent=self,
+                )
+
+        prov_key = (provider_type or "").strip().lower()
+        current_text = self._effective_referral_letter_text(
+            payload, provider_type, exam=exam
+        )
 
         dlg = tk.Toplevel(self)
         dlg.title(f"{provider_type} Referral Letter Editor")
@@ -2938,27 +3065,75 @@ class App(tk.Tk):
         btns = ttk.Frame(outer)
         btns.grid(row=2, column=0, sticky="e", pady=(8, 0))
 
-        def _reset_default():
-            fresh = referral_letter_editable_text(payload, provider_type)
-            txt.delete("1.0", "end")
-            txt.insert("1.0", fresh)
-
-        def _save_close():
+        def _save_as_default_template():
             val = txt.get("1.0", "end").strip()
-            if not hasattr(self, "referral_letter_text_overrides") or not isinstance(self.referral_letter_text_overrides, dict):
-                self.referral_letter_text_overrides = {}
-            em = self.referral_letter_text_overrides.get(exam, {})
-            if not isinstance(em, dict):
-                em = {}
-            em[prov_key] = val
-            self.referral_letter_text_overrides[exam] = em
+            if not val:
+                messagebox.showwarning(
+                    "Save as default",
+                    "Letter text is empty — nothing to save as the default template.",
+                    parent=dlg,
+                )
+                return
+            tpl = referral_letter_edited_to_template(val, payload, provider_type)
+            if not tpl:
+                messagebox.showwarning(
+                    "Save as default",
+                    "Could not build a template from this letter.",
+                    parent=dlg,
+                )
+                return
+            if not hasattr(self, "referral_letter_templates") or not isinstance(
+                self.referral_letter_templates, dict
+            ):
+                self.referral_letter_templates = {}
+            self.referral_letter_templates[prov_key] = tpl
             try:
-                self.write_settings({"referral_letter_text_overrides": self.referral_letter_text_overrides})
+                self.write_settings({"referral_letter_templates": self.referral_letter_templates})
             except Exception:
                 pass
+            messagebox.showinfo(
+                "Save as default",
+                f"Default template saved for {provider_type} referral letters.\n\n"
+                "New letters will use your wording and spacing. "
+                "Date of injury and specialist lines will still update from the chart.",
+                parent=dlg,
+            )
+
+        def _save_close():
+            val = txt.get("1.0", "end").replace("\r\n", "\n").rstrip("\n")
+            has_clinic_tpl = bool(
+                (self.referral_letter_templates.get(prov_key) or "").strip()
+            )
+            if not has_clinic_tpl and val.strip():
+                if not hasattr(self, "referral_letter_text_overrides") or not isinstance(
+                    self.referral_letter_text_overrides, dict
+                ):
+                    self.referral_letter_text_overrides = {}
+                em = self.referral_letter_text_overrides.get(exam, {})
+                if not isinstance(em, dict):
+                    em = {}
+                em[prov_key] = val
+                self.referral_letter_text_overrides[exam] = em
+                if not hasattr(self, "referral_letter_content_signatures") or not isinstance(
+                    self.referral_letter_content_signatures, dict
+                ):
+                    self.referral_letter_content_signatures = {}
+                sig_exam = self.referral_letter_content_signatures.setdefault(exam, {})
+                sig_exam[prov_key] = self._referral_letter_content_signature(
+                    payload, provider_type
+                )
+                try:
+                    self.write_settings({
+                        "referral_letter_text_overrides": self.referral_letter_text_overrides,
+                        "referral_letter_content_signatures": self.referral_letter_content_signatures,
+                    })
+                except Exception:
+                    pass
             dlg.destroy()
 
-        ttk.Button(btns, text="Reset Default", command=_reset_default).grid(row=0, column=0, padx=(0, 6))
+        ttk.Button(btns, text="Save as Default", command=_save_as_default_template).grid(
+            row=0, column=0, padx=(0, 6)
+        )
         ttk.Button(btns, text="Cancel", command=dlg.destroy).grid(row=0, column=1, padx=(0, 6))
         ttk.Button(btns, text="Save", command=_save_close).grid(row=0, column=2)
 
@@ -3072,12 +3247,18 @@ class App(tk.Tk):
             em_ov = {}
         trimmed_ov = {k: v for k, v in em_ov.items() if k in keep_keys}
         self.referral_letter_text_overrides[exam] = trimmed_ov
+        sig_exam = self.referral_letter_content_signatures.get(exam, {})
+        if isinstance(sig_exam, dict):
+            trimmed_sig = {k: v for k, v in sig_exam.items() if k in keep_keys}
+            self.referral_letter_content_signatures[exam] = trimmed_sig
 
         vault_paths: list[str] = []
         for prov in provs:
             prov_slug = safe_slug(prov).lower().replace(" ", "_")
             prov_key = (prov or "").strip().lower()
-            letter_text_override = (trimmed_ov.get(prov_key) or "").strip()
+            letter_text_override = self._effective_referral_letter_text(
+                payload, prov, exam=exam
+            )
             vault_name = f"{date_slug}__{exam_slug}__referral_{prov_slug}.pdf"
             tmp_path = os.path.join(
                 pdf_dir, f".tmp_referral_letter__{exam_slug}__{prov_slug}.pdf",
@@ -3157,10 +3338,24 @@ class App(tk.Tk):
         return out
 
     def _on_referrals_changed_cleanup(self) -> None:
-        """After referral rows are removed in Diagnosis, sync vault PDFs and
-        saved letter state so the chart's referral letters always match the
-        current set of provider types."""
+        """After referral rows change in Diagnosis, sync vault PDFs and letter state."""
+        exam = (self.current_exam.get() or "").strip()
         payload = self.make_payload() or {}
+        soap = (payload.get("soap") or {})
+        dx = soap.get("diagnosis_struct") or {}
+        provs_seen: set[str] = set()
+        for r in (dx.get("referrals") or []) if isinstance(dx, dict) else []:
+            if isinstance(r, dict):
+                pk = (r.get("provider_type") or "").strip().lower()
+                if pk and pk not in ("(select)", "none at this time"):
+                    provs_seen.add(pk)
+        if exam:
+            for pk in list((self.referral_letter_text_overrides.get(exam) or {}).keys()):
+                if pk not in provs_seen:
+                    self._clear_referral_letter_visit_override(exam, pk)
+            for pk in provs_seen:
+                if (self.referral_letter_templates.get(pk) or "").strip():
+                    self._clear_referral_letter_visit_override(exam, pk)
         pr = self.get_current_patient_root() or ""
         try:
             self._export_referral_recommendation_letter_vault(payload, pr)
@@ -3170,6 +3365,8 @@ class App(tk.Tk):
             self.write_settings({
                 "last_referral_letter_pdfs": self.last_referral_letter_pdf_paths,
                 "referral_letter_text_overrides": self.referral_letter_text_overrides,
+                "referral_letter_templates": self.referral_letter_templates,
+                "referral_letter_content_signatures": self.referral_letter_content_signatures,
             })
         except Exception:
             pass
@@ -3178,8 +3375,115 @@ class App(tk.Tk):
         except Exception:
             pass
 
+    def _factory_imaging_letter_text(
+        self,
+        payload: dict,
+        modality: str,
+        selected: dict[str, str],
+    ) -> str:
+        """Built-in letter text before any user-saved template."""
+        return imaging_recommendation_letter_editable_text(payload, modality, selected)
+
+    @staticmethod
+    def _imaging_letter_content_signature(
+        payload: dict,
+        modality: str,
+        selected: dict[str, str],
+    ) -> str:
+        """Fingerprint of imaging body regions + dx picks for one modality."""
+        body_parts, _choices = imaging_dx_choices_by_body_part(payload or {}, modality or "")
+        icd_map = {
+            bp: (selected.get(bp) or "").strip()
+            for bp in body_parts
+        }
+        try:
+            return json.dumps(
+                {"body_parts": list(body_parts), "icds": icd_map},
+                sort_keys=True,
+                default=str,
+            )
+        except Exception:
+            return ""
+
+    def _clear_imaging_letter_visit_override(self, exam: str, modality: str) -> None:
+        """Drop frozen visit letter text so the next render picks up chart changes."""
+        exam = (exam or "").strip()
+        mod_key = (modality or "").strip().lower()
+        if not exam or not mod_key:
+            return
+        em = self.imaging_letter_text_overrides.get(exam)
+        if isinstance(em, dict):
+            em.pop(mod_key, None)
+        sig_exam = self.imaging_letter_content_signatures.get(exam)
+        if isinstance(sig_exam, dict):
+            sig_exam.pop(mod_key, None)
+
+    def _effective_imaging_letter_text(
+        self,
+        payload: dict,
+        modality: str,
+        selected: dict[str, str],
+        *,
+        exam: str | None = None,
+    ) -> str:
+        """
+        Letter body for editor/PDF.
+
+        When a clinic template exists (Save as Default), always re-render it so
+        new body parts, studies phrasing, and diagnostic codes flow in automatically.
+
+        Without a clinic template, reuse a visit-specific override only while
+        imaging regions and dx picks are unchanged.
+        """
+        mod_key = (modality or "").strip().lower()
+        tpl = (self.imaging_letter_templates.get(mod_key) or "").replace("\r\n", "\n")
+        if tpl.strip():
+            rendered = imaging_recommendation_letter_from_template(
+                tpl, payload, modality, selected
+            )
+            if rendered:
+                return rendered
+
+        exam_key = (exam or self.current_exam.get() or "").strip()
+        sig_now = self._imaging_letter_content_signature(payload, modality, selected)
+        sig_saved = ""
+        if exam_key:
+            sig_saved = (
+                (self.imaging_letter_content_signatures.get(exam_key) or {}).get(mod_key) or ""
+            ).strip()
+        override = ""
+        if exam_key:
+            override = (
+                (self.imaging_letter_text_overrides.get(exam_key) or {}).get(mod_key) or ""
+            ).replace("\r\n", "\n").strip()
+        if override and sig_saved and sig_now == sig_saved:
+            return override.replace("\r\n", "\n")
+
+        return self._factory_imaging_letter_text(payload, modality, selected)
+
+    def _sync_imaging_letter_after_chart_change(self, modality: str | None = None) -> None:
+        """Re-export imaging letter PDFs after imaging lines or dx picks change."""
+        exam = (self.current_exam.get() or "").strip()
+        mod_key = (modality or "").strip().lower()
+        if exam and mod_key:
+            tpl = (self.imaging_letter_templates.get(mod_key) or "").strip()
+            if tpl:
+                self._clear_imaging_letter_visit_override(exam, modality or "")
+        payload = self.make_payload() or {}
+        pr = self.get_current_patient_root() or ""
+        if not pr:
+            return
+        try:
+            self._export_imaging_recommendation_letter_vault(payload, pr)
+        except Exception as e:
+            print("Imaging letter auto-sync failed:", e)
+        try:
+            self.doc_vault_page.refresh_current_folder()
+        except Exception:
+            pass
+
     def _open_imaging_recommendation_letter_editor(self, modality: str) -> None:
-        """Generate/open the modality imaging letter PDF (vault/imaging), then open the text editor."""
+        """Generate the modality imaging letter PDF (vault/imaging), then open the text editor."""
         exam = (self.current_exam.get() or "").strip()
         if not exam:
             messagebox.showwarning(
@@ -3190,6 +3494,8 @@ class App(tk.Tk):
             return
         if not self._ensure_reportlab():
             return
+
+        self._load_global_letter_preferences()
 
         payload = self.make_payload() or {}
         pr = self.get_current_patient_root() or ""
@@ -3203,9 +3509,7 @@ class App(tk.Tk):
                     if f"__letter_{mod_slug}.pdf" in low:
                         letter_pdf = pth
                         break
-                if letter_pdf:
-                    self.open_pdf_file(letter_pdf)
-                else:
+                if not letter_pdf:
                     messagebox.showwarning(
                         "Imaging Recommendation Letter",
                         f"No PDF was generated for {modality}.\n\n"
@@ -3245,16 +3549,14 @@ class App(tk.Tk):
         exam_pick_map = self.imaging_letter_dx_selections.get(exam, {})
         if not isinstance(exam_pick_map, dict):
             exam_pick_map = {}
-        selected = exam_pick_map.get(mod_key, {})
-        if not isinstance(selected, dict):
-            selected = {}
+        selected = self._stored_imaging_dx_for_modality(payload, exam, modality)
+        if not selected:
+            raw = exam_pick_map.get(mod_key, {})
+            selected = raw if isinstance(raw, dict) else {}
 
-        exam_override_map = self.imaging_letter_text_overrides.get(exam, {})
-        if not isinstance(exam_override_map, dict):
-            exam_override_map = {}
-        current_text = (exam_override_map.get(mod_key) or "").strip()
-        if not current_text:
-            current_text = imaging_recommendation_letter_editable_text(payload, modality, selected)
+        current_text = self._effective_imaging_letter_text(
+            payload, modality, selected, exam=exam
+        )
 
         dlg = tk.Toplevel(self)
         dlg.title(f"{modality} Recommendation Letter Editor")
@@ -3280,27 +3582,77 @@ class App(tk.Tk):
         btns = ttk.Frame(outer)
         btns.grid(row=2, column=0, sticky="e", pady=(8, 0))
 
-        def _reset_default():
-            fresh = imaging_recommendation_letter_editable_text(payload, modality, selected)
-            txt.delete("1.0", "end")
-            txt.insert("1.0", fresh)
-
-        def _save_close():
+        def _save_as_default_template():
             val = txt.get("1.0", "end").strip()
-            if not hasattr(self, "imaging_letter_text_overrides") or not isinstance(self.imaging_letter_text_overrides, dict):
-                self.imaging_letter_text_overrides = {}
-            em = self.imaging_letter_text_overrides.get(exam, {})
-            if not isinstance(em, dict):
-                em = {}
-            em[mod_key] = val
-            self.imaging_letter_text_overrides[exam] = em
+            if not val:
+                messagebox.showwarning(
+                    "Save as default",
+                    "Letter text is empty — nothing to save as the default template.",
+                    parent=dlg,
+                )
+                return
+            tpl = imaging_recommendation_letter_edited_to_template(
+                val, payload, modality, selected
+            )
+            if not tpl:
+                messagebox.showwarning(
+                    "Save as default",
+                    "Could not build a template from this letter.",
+                    parent=dlg,
+                )
+                return
+            if not hasattr(self, "imaging_letter_templates") or not isinstance(
+                self.imaging_letter_templates, dict
+            ):
+                self.imaging_letter_templates = {}
+            self.imaging_letter_templates[mod_key] = tpl
             try:
-                self.write_settings({"imaging_letter_text_overrides": self.imaging_letter_text_overrides})
+                self.write_settings({"imaging_letter_templates": self.imaging_letter_templates})
             except Exception:
                 pass
+            messagebox.showinfo(
+                "Save as default",
+                f"Default template saved for {modality} letters.\n\n"
+                "New letters will use your wording and spacing. "
+                "Date of injury and diagnostic codes will still update from the chart.",
+                parent=dlg,
+            )
+
+        def _save_close():
+            val = txt.get("1.0", "end").replace("\r\n", "\n").rstrip("\n")
+            has_clinic_tpl = bool(
+                (self.imaging_letter_templates.get(mod_key) or "").strip()
+            )
+            if not has_clinic_tpl and val.strip():
+                if not hasattr(self, "imaging_letter_text_overrides") or not isinstance(
+                    self.imaging_letter_text_overrides, dict
+                ):
+                    self.imaging_letter_text_overrides = {}
+                em = self.imaging_letter_text_overrides.get(exam, {})
+                if not isinstance(em, dict):
+                    em = {}
+                em[mod_key] = val
+                self.imaging_letter_text_overrides[exam] = em
+                if not hasattr(self, "imaging_letter_content_signatures") or not isinstance(
+                    self.imaging_letter_content_signatures, dict
+                ):
+                    self.imaging_letter_content_signatures = {}
+                sig_exam = self.imaging_letter_content_signatures.setdefault(exam, {})
+                sig_exam[mod_key] = self._imaging_letter_content_signature(
+                    payload, modality, selected
+                )
+                try:
+                    self.write_settings({
+                        "imaging_letter_text_overrides": self.imaging_letter_text_overrides,
+                        "imaging_letter_content_signatures": self.imaging_letter_content_signatures,
+                    })
+                except Exception:
+                    pass
             dlg.destroy()
 
-        ttk.Button(btns, text="Reset Default", command=_reset_default).grid(row=0, column=0, padx=(0, 6))
+        ttk.Button(btns, text="Save as Default", command=_save_as_default_template).grid(
+            row=0, column=0, padx=(0, 6)
+        )
         ttk.Button(btns, text="Cancel", command=dlg.destroy).grid(row=0, column=1, padx=(0, 6))
         ttk.Button(btns, text="Save", command=_save_close).grid(row=0, column=2)
 
@@ -3469,6 +3821,10 @@ class App(tk.Tk):
             em_ov = {}
         trimmed_ov = {k: v for k, v in em_ov.items() if k in keep_keys}
         self.imaging_letter_text_overrides[exam] = trimmed_ov
+        sig_exam = self.imaging_letter_content_signatures.get(exam, {})
+        if isinstance(sig_exam, dict):
+            trimmed_sig = {k: v for k, v in sig_exam.items() if k in keep_keys}
+            self.imaging_letter_content_signatures[exam] = trimmed_sig
 
         exam_selection_map: dict[str, dict[str, str]] = {}
         for mod in modalities:
@@ -3476,7 +3832,9 @@ class App(tk.Tk):
             mod_key = (mod or "").strip().lower()
             picked = selected_by_modality.get(mod_key, {})
             exam_selection_map[mod_key] = dict(picked)
-            letter_text_override = (trimmed_ov.get(mod_key) or "").strip()
+            letter_text_override = self._effective_imaging_letter_text(
+                payload, mod, picked, exam=exam
+            )
             vault_name = f"{date_slug}__{exam_slug}__letter_{mod_slug}.pdf"
             tmp_path = os.path.join(pdf_dir, f".tmp_imaging_letter__{exam_slug}__{mod_slug}.pdf")
             try:
@@ -3506,8 +3864,25 @@ class App(tk.Tk):
         return vault_paths
 
     def _on_imaging_recs_changed_cleanup(self) -> None:
-        """After imaging rows are removed in Diagnosis, sync vault PDFs and saved letter state."""
+        """After imaging rows change in Diagnosis, sync vault PDFs and letter state."""
+        exam = (self.current_exam.get() or "").strip()
         payload = self.make_payload() or {}
+        soap = (payload.get("soap") or {})
+        dx = soap.get("diagnosis_struct") or {}
+        recs = dx.get("imaging_recs") or [] if isinstance(dx, dict) else []
+        modalities_seen: set[str] = set()
+        for r in recs:
+            if isinstance(r, dict):
+                mk = (r.get("modality") or "").strip().lower()
+                if mk:
+                    modalities_seen.add(mk)
+        if exam:
+            for mk in list((self.imaging_letter_text_overrides.get(exam) or {}).keys()):
+                if mk not in modalities_seen:
+                    self._clear_imaging_letter_visit_override(exam, mk)
+            for mk in modalities_seen:
+                if (self.imaging_letter_templates.get(mk) or "").strip():
+                    self._clear_imaging_letter_visit_override(exam, mk)
         pr = self.get_current_patient_root() or ""
         try:
             self._export_imaging_recommendation_letter_vault(payload, pr)
@@ -5359,7 +5734,164 @@ class App(tk.Tk):
         filename = f"{safe_slug(exam_name)}.json"
         return os.path.join(patient_root, PATIENT_SUBDIR_EXAMS, filename)
 
+    def _load_global_letter_preferences(self, settings: dict | None = None) -> None:
+        """
+        Load clinic-wide letter templates and per-exam letter state from settings.
+        Must run on every startup path (including shell-launched encounters) so
+        saved MRI/X-ray templates and diagnosis picks are available immediately.
+        """
+        if settings is None:
+            settings = self.read_settings()
+
+        tpl_map = settings.get("imaging_letter_templates", {})
+        self.imaging_letter_templates = {}
+        if isinstance(tpl_map, dict):
+            for mod_key, raw_tpl in tpl_map.items():
+                if not isinstance(mod_key, str) or not isinstance(raw_tpl, str):
+                    continue
+                mk = mod_key.strip().lower()
+                tpl = raw_tpl.replace("\r\n", "\n")
+                if mk and tpl.strip():
+                    self.imaging_letter_templates[mk] = tpl
+
+        sel_map = settings.get("imaging_letter_dx_selections", {})
+        if isinstance(sel_map, dict):
+            if not hasattr(self, "imaging_letter_dx_selections") or not isinstance(
+                self.imaging_letter_dx_selections, dict
+            ):
+                self.imaging_letter_dx_selections = {}
+            for exam, mod_map in sel_map.items():
+                if not isinstance(exam, str) or not isinstance(mod_map, dict):
+                    continue
+                exam_clean = exam.strip()
+                if not exam_clean:
+                    continue
+                cleaned_mods: dict[str, dict[str, str]] = {}
+                for mod_key, bp_map in mod_map.items():
+                    if not isinstance(mod_key, str) or not isinstance(bp_map, dict):
+                        continue
+                    mk = mod_key.strip().lower()
+                    if not mk:
+                        continue
+                    cleaned_bp: dict[str, str] = {}
+                    for bp, icd in bp_map.items():
+                        if not isinstance(bp, str) or not isinstance(icd, str):
+                            continue
+                        bp2 = bp.strip()
+                        icd2 = icd.strip()
+                        if bp2 and icd2:
+                            cleaned_bp[bp2] = icd2
+                    if cleaned_bp:
+                        cleaned_mods[mk] = cleaned_bp
+                if cleaned_mods:
+                    self.imaging_letter_dx_selections[exam_clean] = cleaned_mods
+
+        txt_map = settings.get("imaging_letter_text_overrides", {})
+        if isinstance(txt_map, dict):
+            if not hasattr(self, "imaging_letter_text_overrides") or not isinstance(
+                self.imaging_letter_text_overrides, dict
+            ):
+                self.imaging_letter_text_overrides = {}
+            for exam, mod_map in txt_map.items():
+                if not isinstance(exam, str) or not isinstance(mod_map, dict):
+                    continue
+                exam_clean = exam.strip()
+                if not exam_clean:
+                    continue
+                cleaned_mods: dict[str, str] = {}
+                for mod_key, raw_text in mod_map.items():
+                    if not isinstance(mod_key, str) or not isinstance(raw_text, str):
+                        continue
+                    mk = mod_key.strip().lower()
+                    if mk:
+                        cleaned_mods[mk] = raw_text.replace("\r\n", "\n")
+                if cleaned_mods:
+                    self.imaging_letter_text_overrides[exam_clean] = cleaned_mods
+
+        sig_map = settings.get("imaging_letter_content_signatures", {})
+        if isinstance(sig_map, dict):
+            if not hasattr(self, "imaging_letter_content_signatures") or not isinstance(
+                self.imaging_letter_content_signatures, dict
+            ):
+                self.imaging_letter_content_signatures = {}
+            for exam, mod_map in sig_map.items():
+                if not isinstance(exam, str) or not isinstance(mod_map, dict):
+                    continue
+                exam_clean = exam.strip()
+                if not exam_clean:
+                    continue
+                cleaned_sigs: dict[str, str] = {}
+                for mod_key, sig in mod_map.items():
+                    if not isinstance(mod_key, str) or not isinstance(sig, str):
+                        continue
+                    mk = mod_key.strip().lower()
+                    sig_clean = sig.strip()
+                    if mk and sig_clean:
+                        cleaned_sigs[mk] = sig_clean
+                if cleaned_sigs:
+                    self.imaging_letter_content_signatures[exam_clean] = cleaned_sigs
+
+        ref_tpl_map = settings.get("referral_letter_templates", {})
+        self.referral_letter_templates = {}
+        if isinstance(ref_tpl_map, dict):
+            for prov_key, raw_tpl in ref_tpl_map.items():
+                if not isinstance(prov_key, str) or not isinstance(raw_tpl, str):
+                    continue
+                pk = prov_key.strip().lower()
+                tpl = raw_tpl.replace("\r\n", "\n")
+                if pk and tpl.strip():
+                    self.referral_letter_templates[pk] = tpl
+
+        ref_txt_map = settings.get("referral_letter_text_overrides", {})
+        if isinstance(ref_txt_map, dict):
+            if not hasattr(self, "referral_letter_text_overrides") or not isinstance(
+                self.referral_letter_text_overrides, dict
+            ):
+                self.referral_letter_text_overrides = {}
+            for exam, prov_map in ref_txt_map.items():
+                if not isinstance(exam, str) or not isinstance(prov_map, dict):
+                    continue
+                exam_clean = exam.strip()
+                if not exam_clean:
+                    continue
+                cleaned_provs: dict[str, str] = {}
+                for prov_key, raw_text in prov_map.items():
+                    if not isinstance(prov_key, str) or not isinstance(raw_text, str):
+                        continue
+                    pk = prov_key.strip().lower()
+                    if pk:
+                        cleaned_provs[pk] = raw_text.replace("\r\n", "\n")
+                if cleaned_provs:
+                    self.referral_letter_text_overrides[exam_clean] = cleaned_provs
+
+        ref_sig_map = settings.get("referral_letter_content_signatures", {})
+        if isinstance(ref_sig_map, dict):
+            if not hasattr(self, "referral_letter_content_signatures") or not isinstance(
+                self.referral_letter_content_signatures, dict
+            ):
+                self.referral_letter_content_signatures = {}
+            for exam, prov_map in ref_sig_map.items():
+                if not isinstance(exam, str) or not isinstance(prov_map, dict):
+                    continue
+                exam_clean = exam.strip()
+                if not exam_clean:
+                    continue
+                cleaned_sigs: dict[str, str] = {}
+                for prov_key, sig in prov_map.items():
+                    if not isinstance(prov_key, str) or not isinstance(sig, str):
+                        continue
+                    pk = prov_key.strip().lower()
+                    sig_clean = sig.strip()
+                    if pk and sig_clean:
+                        cleaned_sigs[pk] = sig_clean
+                if cleaned_sigs:
+                    self.referral_letter_content_signatures[exam_clean] = cleaned_sigs
+
     def autoload_last_case_on_startup(self):
+        # Letter templates / dx picks must load even when the shell opens an exam
+        # directly (that path used to return before settings were read).
+        self._load_global_letter_preferences()
+
         # If launched by the shell with a specific exam, prefer that.
         startup_exam = getattr(self, "_startup_open_exam", None)
         if startup_exam and os.path.exists(startup_exam):
@@ -5492,51 +6024,7 @@ class App(tk.Tk):
                 v = mod_map.get(exam)
                 self.last_modalities_letter_pdf_paths[exam] = v.strip() if isinstance(v, str) else ""
 
-        sel_map = settings.get("imaging_letter_dx_selections", {})
-        self.imaging_letter_dx_selections = {}
-        if isinstance(sel_map, dict):
-            for exam, mod_map in sel_map.items():
-                if not isinstance(exam, str) or not isinstance(mod_map, dict):
-                    continue
-                exam_clean = exam.strip()
-                if not exam_clean:
-                    continue
-                cleaned_mods: dict[str, dict[str, str]] = {}
-                for mod_key, bp_map in mod_map.items():
-                    if not isinstance(mod_key, str) or not isinstance(bp_map, dict):
-                        continue
-                    mk = mod_key.strip().lower()
-                    if not mk:
-                        continue
-                    cleaned_bp: dict[str, str] = {}
-                    for bp, icd in bp_map.items():
-                        if not isinstance(bp, str) or not isinstance(icd, str):
-                            continue
-                        bp2 = bp.strip()
-                        icd2 = icd.strip()
-                        if bp2 and icd2:
-                            cleaned_bp[bp2] = icd2
-                    if cleaned_bp:
-                        cleaned_mods[mk] = cleaned_bp
-                self.imaging_letter_dx_selections[exam_clean] = cleaned_mods
-
-        txt_map = settings.get("imaging_letter_text_overrides", {})
-        self.imaging_letter_text_overrides = {}
-        if isinstance(txt_map, dict):
-            for exam, mod_map in txt_map.items():
-                if not isinstance(exam, str) or not isinstance(mod_map, dict):
-                    continue
-                exam_clean = exam.strip()
-                if not exam_clean:
-                    continue
-                cleaned_mods: dict[str, str] = {}
-                for mod_key, raw_text in mod_map.items():
-                    if not isinstance(mod_key, str) or not isinstance(raw_text, str):
-                        continue
-                    mk = mod_key.strip().lower()
-                    if mk:
-                        cleaned_mods[mk] = raw_text
-                self.imaging_letter_text_overrides[exam_clean] = cleaned_mods
+        self._load_global_letter_preferences(settings)
 
         # Referral letter persisted state (paths + text overrides) ---------
         ref_pdf_map = settings.get("last_referral_letter_pdfs", {})
@@ -5552,24 +6040,6 @@ class App(tk.Tk):
                     self.last_referral_letter_pdf_paths[exam] = [v.strip()]
                 else:
                     self.last_referral_letter_pdf_paths[exam] = []
-
-        ref_txt_map = settings.get("referral_letter_text_overrides", {})
-        self.referral_letter_text_overrides = {}
-        if isinstance(ref_txt_map, dict):
-            for exam, prov_map in ref_txt_map.items():
-                if not isinstance(exam, str) or not isinstance(prov_map, dict):
-                    continue
-                exam_clean = exam.strip()
-                if not exam_clean:
-                    continue
-                cleaned_provs: dict[str, str] = {}
-                for prov_key, raw_text in prov_map.items():
-                    if not isinstance(prov_key, str) or not isinstance(raw_text, str):
-                        continue
-                    pk = prov_key.strip().lower()
-                    if pk:
-                        cleaned_provs[pk] = raw_text
-                self.referral_letter_text_overrides[exam_clean] = cleaned_provs
 
         modal_txt_map = settings.get("modalities_letter_text_overrides", {})
         self.modalities_letter_text_overrides = {}
