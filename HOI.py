@@ -479,6 +479,59 @@ class HOIPage(ttk.Frame):
         finally:
             self._loading = False
 
+    _INTRO_EVAL_TYPE_OPTIONS = (
+        "initial chiropractic evaluation",
+        "re-examination",
+        "final evaluation",
+    )
+    _INTRO_PURPOSE_OPTIONS = (
+        "evaluate the nature and extent of the reported injuries",
+        "assess clinical progress since the prior evaluation",
+        "determine maximum medical improvement status",
+    )
+    _INTRO_EXAM_SCOPE_OPTIONS = (
+        "a physical examination including orthopedic, neurological, and functional assessments as clinically indicated",
+        "a focused re-examination of previously identified findings",
+        "a final clinical examination and record review",
+    )
+
+    def apply_rof_intro_preset_for_mode(self, mode: str, *, update_mode: bool = True) -> None:
+        """
+        Set Review of Findings mode and structured intro dropdowns:
+        Initial -> 1st option, Re-Exam -> 2nd, Final -> 3rd (all four dropdowns).
+        """
+        mode_clean = _clean(mode) or ""
+        preset_idx = {"Initial": 0, "Re-Exam": 1, "Final": 2}.get(mode_clean)
+        if preset_idx is None:
+            return
+
+        event_words = list(self.intro_event_options)
+        idx = min(preset_idx, len(event_words) - 1)
+
+        self._loading = True
+        try:
+            if update_mode:
+                self.rof_mode_var.set(mode_clean)
+            self.eval_type_var.set(self._INTRO_EVAL_TYPE_OPTIONS[preset_idx])
+            self.intro_event_word_var.set(event_words[idx])
+            self.eval_purpose_var.set(self._INTRO_PURPOSE_OPTIONS[preset_idx])
+            self.eval_exam_scope_var.set(self._INTRO_EXAM_SCOPE_OPTIONS[preset_idx])
+        finally:
+            self._loading = False
+
+        self._on_rof_input_mode_changed()
+        self._regen_rof_now()
+        self._changed()
+
+    def _on_rof_mode_changed(self) -> None:
+        if self._loading:
+            return
+        mode = _clean(self.rof_mode_var.get()) or "ROF"
+        if mode in ("Initial", "Re-Exam", "Final"):
+            self.apply_rof_intro_preset_for_mode(mode, update_mode=False)
+            return
+        self._on_rof_input_mode_changed()
+
     def _build_intro_structured_panel(self, parent):
         f = ttk.Frame(parent)
 
@@ -495,11 +548,7 @@ class HOIPage(ttk.Frame):
         cb_eval_type = ttk.Combobox(
             grid,
             textvariable=self.eval_type_var,
-            values=[
-                "initial chiropractic evaluation",
-                "re-examination",
-                "final evaluation",
-            ],
+            values=list(self._INTRO_EVAL_TYPE_OPTIONS),
             state="readonly",
             width=28,
         )
@@ -521,11 +570,7 @@ class HOIPage(ttk.Frame):
         cb_purpose = ttk.Combobox(
             grid,
             textvariable=self.eval_purpose_var,
-            values=[
-                "evaluate the nature and extent of the reported injuries",
-                "assess clinical progress since the prior evaluation",
-                "determine maximum medical improvement status",
-            ],
+            values=list(self._INTRO_PURPOSE_OPTIONS),
             width=48,
             state="readonly",  # you can add this if you want it readonly too
         )
@@ -536,11 +581,7 @@ class HOIPage(ttk.Frame):
         cb_exam_scope = ttk.Combobox(
             grid,
             textvariable=self.eval_exam_scope_var,
-            values=[
-                "a physical examination including orthopedic, neurological, and functional assessments as clinically indicated",
-                "a focused re-examination of previously identified findings",
-                "a final clinical examination and record review",
-            ],
+            values=list(self._INTRO_EXAM_SCOPE_OPTIONS),
             width=70,
             state="readonly",  # optional but recommended for consistency
         )
@@ -1084,7 +1125,7 @@ class HOIPage(ttk.Frame):
         self.on_change_callback = on_change_callback
         self._app = app
 
-        self.intro_event_options = ["incident", "accident", "event", "injury"]
+        self.intro_event_options = ["incident", "accident", "incident", "injury"]
         self.intro_event_word_var = tk.StringVar(value=self.intro_event_options[0])
        
         # ROF / Status Update (new structured ROF block)
@@ -1253,8 +1294,8 @@ class HOIPage(ttk.Frame):
                 
         # -------------------------
         # Mode + Entry changes must re-layout the UI first
-        for v in (self.rof_mode_var, self.rof_input_mode_var):
-            v.trace_add("write", lambda *_: self._on_rof_input_mode_changed())
+        self.rof_mode_var.trace_add("write", lambda *_: self._on_rof_mode_changed())
+        self.rof_input_mode_var.trace_add("write", lambda *_: self._on_rof_input_mode_changed())
 
         # Manual paragraph can just regen
         self.rof_manual_paragraph_var.trace_add("write", lambda *_: self._on_rof_struct_changed())

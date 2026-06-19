@@ -1776,6 +1776,24 @@ class App(tk.Tk):
                 return label
         return (exam_name or "Visit").strip()
 
+    def _apply_shell_visit_rof_intro_preset(self, kind: str) -> None:
+        """After shell visit-type picker: sync Review of Findings mode + intro dropdowns."""
+        mode_by_kind = {
+            "initial": "Initial",
+            "re_exam": "Re-Exam",
+            "final": "Final",
+        }
+        mode = mode_by_kind.get((kind or "").strip().lower())
+        if not mode:
+            return
+        hoi = getattr(self, "hoi_page", None)
+        if hoi is None:
+            return
+        try:
+            hoi.apply_rof_intro_preset_for_mode(mode)
+        except Exception:
+            pass
+
     def _create_shell_visit_type(self, kind: str) -> None:
         """Create a new visit of the given type (no confirmation — user chose in picker)."""
         prefix = None
@@ -1790,6 +1808,8 @@ class App(tk.Tk):
         name = f"{prefix} {n}"
         self._add_dynamic_exam(name, copy_current=True)
         self.after(0, lambda: self.switch_exam(name, force=True))
+        if kind in ("initial", "re_exam", "final"):
+            self.after(80, lambda k=kind: self._apply_shell_visit_rof_intro_preset(k))
         if kind == "initial" and n == 1:
             self.after(150, self._prompt_referral_source_after_initial1)
         try:
@@ -1800,6 +1820,9 @@ class App(tk.Tk):
     def _schedule_shell_visit_type_picker(self) -> None:
         """Show the visit-type picker once after SOAP opens from the EMR shell."""
         if not getattr(self, "_from_shell", False):
+            return
+        # Shell "Start Initial Visit" (--patient-id) already chose the visit type.
+        if getattr(self, "_startup_patient_id", None):
             return
         if not (getattr(self, "_startup_open_exam", None)
                 or getattr(self, "_startup_patient_id", None)):
@@ -3869,6 +3892,24 @@ class App(tk.Tk):
         if isinstance(sig_exam, dict):
             sig_exam.pop(mod_key, None)
 
+    def _clear_imaging_letter_modality_overrides_all_exams(self, modality: str) -> None:
+        """Remove visit-specific overrides for one modality so the clinic template applies everywhere."""
+        mod_key = (modality or "").strip().lower()
+        if not mod_key:
+            return
+        for exam_key in list(self.imaging_letter_text_overrides.keys()):
+            em = self.imaging_letter_text_overrides.get(exam_key)
+            if isinstance(em, dict):
+                em.pop(mod_key, None)
+                if not em:
+                    self.imaging_letter_text_overrides.pop(exam_key, None)
+        for exam_key in list(self.imaging_letter_content_signatures.keys()):
+            sig_exam = self.imaging_letter_content_signatures.get(exam_key)
+            if isinstance(sig_exam, dict):
+                sig_exam.pop(mod_key, None)
+                if not sig_exam:
+                    self.imaging_letter_content_signatures.pop(exam_key, None)
+
     def _effective_imaging_letter_text(
         self,
         payload: dict,
@@ -3880,21 +3921,14 @@ class App(tk.Tk):
         """
         Letter body for editor/PDF.
 
-        When a clinic template exists (Save as Default), always re-render it so
-        new body parts, studies phrasing, and diagnostic codes flow in automatically.
+        Visit-specific manual edits (Save) take priority for that exam. Otherwise,
+        when a clinic template exists (Save as Default), re-render it so new body
+        parts, studies phrasing, and diagnostic codes flow in automatically.
 
-        Without a clinic template, reuse a visit-specific override only while
-        imaging regions and dx picks are unchanged.
+        Without either, reuse a visit-specific override only while imaging regions
+        and dx picks are unchanged, then fall back to the factory letter.
         """
         mod_key = (modality or "").strip().lower()
-        tpl = (self.imaging_letter_templates.get(mod_key) or "").replace("\r\n", "\n")
-        if tpl.strip():
-            rendered = imaging_recommendation_letter_from_template(
-                tpl, payload, modality, selected
-            )
-            if rendered:
-                return rendered
-
         exam_key = (exam or self.current_exam.get() or "").strip()
         sig_now = self._imaging_letter_content_signature(payload, modality, selected)
         sig_saved = ""
@@ -3909,6 +3943,14 @@ class App(tk.Tk):
             ).replace("\r\n", "\n").strip()
         if override and sig_saved and sig_now == sig_saved:
             return override.replace("\r\n", "\n")
+
+        tpl = (self.imaging_letter_templates.get(mod_key) or "").replace("\r\n", "\n")
+        if tpl.strip():
+            rendered = imaging_recommendation_letter_from_template(
+                tpl, payload, modality, selected
+            )
+            if rendered:
+                return rendered
 
         return self._factory_imaging_letter_text(payload, modality, selected)
 
@@ -4034,8 +4076,8 @@ class App(tk.Tk):
         btns.grid(row=2, column=0, sticky="e", pady=(8, 0))
 
         def _save_as_default_template():
-            val = txt.get("1.0", "end").strip()
-            if not val:
+            val = txt.get("1.0", "end").replace("\r\n", "\n").rstrip("\n")
+            if not val.strip():
                 messagebox.showwarning(
                     "Save as default",
                     "Letter text is empty — nothing to save as the default template.",
@@ -4057,24 +4099,30 @@ class App(tk.Tk):
             ):
                 self.imaging_letter_templates = {}
             self.imaging_letter_templates[mod_key] = tpl
+            self._clear_imaging_letter_modality_overrides_all_exams(modality)
             try:
-                self.write_settings({"imaging_letter_templates": self.imaging_letter_templates})
+                self.write_settings({
+                    "imaging_letter_templates": self.imaging_letter_templates,
+                    "imaging_letter_text_overrides": self.imaging_letter_text_overrides,
+                    "imaging_letter_content_signatures": self.imaging_letter_content_signatures,
+                })
+            except Exception:
+                pass
+            try:
+                self._sync_imaging_letter_after_chart_change(modality)
             except Exception:
                 pass
             messagebox.showinfo(
                 "Save as default",
                 f"Default template saved for {modality} letters.\n\n"
-                "New letters will use your wording and spacing. "
-                "Date of injury and diagnostic codes will still update from the chart.",
+                "This format will be used for this visit, future visits, and all patients. "
+                "Date of injury, studies, and diagnostic codes will still update from each chart.",
                 parent=dlg,
             )
 
         def _save_close():
             val = txt.get("1.0", "end").replace("\r\n", "\n").rstrip("\n")
-            has_clinic_tpl = bool(
-                (self.imaging_letter_templates.get(mod_key) or "").strip()
-            )
-            if not has_clinic_tpl and val.strip():
+            if val.strip():
                 if not hasattr(self, "imaging_letter_text_overrides") or not isinstance(
                     self.imaging_letter_text_overrides, dict
                 ):
@@ -4097,6 +4145,13 @@ class App(tk.Tk):
                         "imaging_letter_text_overrides": self.imaging_letter_text_overrides,
                         "imaging_letter_content_signatures": self.imaging_letter_content_signatures,
                     })
+                except Exception:
+                    pass
+                try:
+                    payload_now = self.make_payload() or {}
+                    pr = self.get_current_patient_root() or ""
+                    if pr:
+                        self._export_imaging_recommendation_letter_vault(payload_now, pr)
                 except Exception:
                     pass
             dlg.destroy()
@@ -5258,6 +5313,21 @@ class App(tk.Tk):
         self.wait_window(dlg)
         return result
 
+    def _new_exam_auto_clear_selection(self) -> dict:
+        """Sections with on-screen content to clear when opening an unsaved exam."""
+        sel: dict = {}
+        if hasattr(self, "hoi_page") and self.hoi_page.has_content():
+            sel["hoi"] = True
+        if hasattr(self, "subjectives_page") and self.subjectives_page.has_content():
+            sel["subjectives"] = True
+        if hasattr(self, "objectives_page") and self.objectives_page.has_content():
+            sel["objectives"] = True
+        if hasattr(self, "diagnosis_page") and self.diagnosis_page.has_content():
+            sel["diagnosis"] = True
+        if hasattr(self, "plan_page") and self.plan_page.has_content():
+            sel["plan"] = True
+        return sel
+
     def _clear_sections_silent(self, sel: dict):
         # HOI
         if sel.get("hoi"):            
@@ -5341,20 +5411,13 @@ class App(tk.Tk):
             except Exception as e:
                 self.status_var.set(f"Could not load {exam_name}: {e}")
         else:
-            # Target exam has no saved file yet -> treat as "new exam"
-            # Ask once what to clear (default is KEEP everything)
-            sel = self._prompt_new_exam_clear_dialog(exam_name)
-
-            if sel is None:
-                # user cancelled: do not switch
-                return
-
-            # Keep current content unless user chose sections to clear
+            # Target exam has no saved file yet -> auto-clear carried-over sections
+            sel = self._new_exam_auto_clear_selection()
             if sel:
                 self._clear_sections_silent(sel)
 
             self.current_case_path = None
-            self.status_var.set(f"{exam_name} ready (new exam; carry-over kept unless cleared).")
+            self.status_var.set(f"{exam_name} ready (new exam).")
 
         self.write_settings({"last_exam": exam_name})
 
@@ -7763,35 +7826,14 @@ class App(tk.Tk):
         patient demographics or app-level state.
         Safe for Start New Case.
         """
+        self._clear_sections_silent({
+            "hoi": True,
+            "subjectives": True,
+            "objectives": True,
+            "diagnosis": True,
+            "plan": True,
+        })
 
-        # HOI
-        try:
-            self.hoi_page.reset()
-        except Exception:
-            try:
-                self.hoi_page.from_dict({})
-            except Exception:
-                pass
-
-        # Subjectives
-        try:
-            # Whole-exam reset: also wipe the Subjectives on Canvas area.
-            self.subjectives_page.reset(include_canvas=True)
-        except TypeError:
-            try:
-                self.subjectives_page.reset()
-            except Exception:
-                try:
-                    self.subjectives_page.from_dict({})
-                except Exception:
-                    pass
-        except Exception:
-            try:
-                self.subjectives_page.from_dict({})
-            except Exception:
-                pass
-
-        # ✅ NEW: Family/Social History
         try:
             self.family_social_page.reset()
         except Exception:
@@ -7800,36 +7842,6 @@ class App(tk.Tk):
             except Exception:
                 pass
 
-        
-        # Objectives
-        try:
-            self.objectives_page.reset()
-        except Exception:
-            try:
-                self.objectives_page.from_dict({})
-            except Exception:
-                pass
-
-        # Diagnosis
-        try:
-            self.diagnosis_page.reset()
-        except Exception:
-            try:
-                self.diagnosis_page.from_dict({})
-            except Exception:
-                pass
-
-        # Plan
-        try:
-            self.plan_page.reset()
-        except Exception:
-            try:
-                self.plan_page.load_struct({
-                    "auto_enabled": True,
-                    "plan_text": ""
-                })
-            except Exception:
-                pass
         
 
     def reset_current_exam(self):
