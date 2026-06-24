@@ -64,6 +64,8 @@ from pdf_export import (
     REPORTLAB_OK,
     build_combined_pdf,
     build_imaging_recommendation_letter_pdf,
+    build_imaging_rx_prescription_pdf,
+    build_referral_rx_prescription_pdf,
     build_modalities_recommendation_letter_pdf,
     build_referral_letter_pdf,
     imaging_dx_all_ui_choices,
@@ -71,6 +73,21 @@ from pdf_export import (
     imaging_recommendation_letter_editable_text,
     imaging_recommendation_letter_edited_to_template,
     imaging_recommendation_letter_from_template,
+    imaging_rx_prescription_editable_text,
+    imaging_rx_prescription_edited_to_template,
+    imaging_rx_prescription_from_template,
+    imaging_rx_apply_line_spacing_to_text,
+    imaging_rx_dedupe_study_blocks_text,
+    _collapse_rx_orders_token,
+    referral_rx_prescription_editable_text,
+    referral_rx_prescription_edited_to_template,
+    referral_rx_prescription_from_template,
+    referral_rx_text_from_explicit_selection,
+    IMAGING_RX_ORDERS_TOKEN,
+    IMAGING_RX_SYMBOL_TEXT,
+    IMAGING_RX_SYMBOL_TK_FONT,
+    IMAGING_RX_LINE_SPACING_SINGLE,
+    IMAGING_RX_LINE_SPACING_DOUBLE,
     imaging_modalities_in_payload,
     imaging_recommendation_letter_should_generate,
     modalities_recommendation_letter_editable_text,
@@ -81,6 +98,7 @@ from pdf_export import (
     referral_letter_dynamic_parts,
     referral_letter_should_generate,
     referral_provider_types_in_payload,
+    _ordered_referral_body_parts_for_rx,
     _norm_imaging_body_part_key,
 )
 from work_status_letter import (
@@ -389,10 +407,20 @@ class App(tk.Tk):
         # Visit override validity: when imaging body parts / dx picks change,
         # stale overrides are ignored (only used when no clinic template exists).
         self.imaging_letter_content_signatures: dict[str, dict[str, str]] = {}
+        self.imaging_rx_text_overrides: dict[str, dict[str, str]] = {}
+        self.imaging_rx_templates: dict[str, str] = {}
+        self.imaging_rx_line_spacing: dict[str, str] = {}
+        self.imaging_rx_content_signatures: dict[str, dict[str, str]] = {}
         self.referral_letter_text_overrides: dict[str, dict[str, str]] = {}
         # Clinic-wide default referral letter wording per provider type.
         self.referral_letter_templates: dict[str, str] = {}
         self.referral_letter_content_signatures: dict[str, dict[str, str]] = {}
+        self.referral_rx_text_overrides: dict[str, dict[str, str]] = {}
+        self.referral_rx_templates: dict[str, str] = {}
+        self.referral_rx_line_spacing: dict[str, str] = {}
+        self.referral_rx_content_signatures: dict[str, dict[str, str]] = {}
+        # Explicit body-part + ICD selections from the Rx popup dropdowns, keyed by provider key.
+        self.referral_rx_dx_selections: dict[str, dict[str, str]] = {}
         self.work_status_letter_text_overrides: dict[str, str] = {}
         self.work_status_letter_templates: dict[str, str] = {}
         self.work_status_letter_content_signatures: dict[str, str] = {}
@@ -2102,12 +2130,22 @@ class App(tk.Tk):
         if not hasattr(self, "imaging_letter_text_overrides") or not isinstance(self.imaging_letter_text_overrides, dict):
             self.imaging_letter_text_overrides = {}
         self.imaging_letter_text_overrides[exam_name] = {}
+        if not hasattr(self, "imaging_rx_text_overrides") or not isinstance(
+            self.imaging_rx_text_overrides, dict
+        ):
+            self.imaging_rx_text_overrides = {}
+        self.imaging_rx_text_overrides[exam_name] = {}
         if not hasattr(self, "last_referral_letter_pdf_paths") or not isinstance(self.last_referral_letter_pdf_paths, dict):
             self.last_referral_letter_pdf_paths = {}
         self.last_referral_letter_pdf_paths[exam_name] = []
         if not hasattr(self, "referral_letter_text_overrides") or not isinstance(self.referral_letter_text_overrides, dict):
             self.referral_letter_text_overrides = {}
         self.referral_letter_text_overrides[exam_name] = {}
+        if not hasattr(self, "referral_rx_text_overrides") or not isinstance(
+            self.referral_rx_text_overrides, dict
+        ):
+            self.referral_rx_text_overrides = {}
+        self.referral_rx_text_overrides[exam_name] = {}
         if not hasattr(self, "last_work_status_letter_pdf_paths") or not isinstance(
             self.last_work_status_letter_pdf_paths, dict
         ):
@@ -2225,7 +2263,7 @@ class App(tk.Tk):
                         low = fn.lower()
                         if not low.endswith(".pdf"):
                             continue
-                        if f"__{exam_slug}__letter_" in low or low.endswith(f"__{exam_slug}__imaging_recommendation.pdf"):
+                        if f"__{exam_slug}__letter_" in low or f"__{exam_slug}__rx_" in low or low.endswith(f"__{exam_slug}__imaging_recommendation.pdf"):
                             try:
                                 os.remove(os.path.join(vault_img, fn))
                             except Exception:
@@ -2295,6 +2333,11 @@ class App(tk.Tk):
         except Exception:
             pass
         try:
+            if hasattr(self, "imaging_rx_text_overrides") and isinstance(self.imaging_rx_text_overrides, dict):
+                self.imaging_rx_text_overrides.pop(exam_name, None)
+        except Exception:
+            pass
+        try:
             if hasattr(self, "last_referral_letter_pdf_paths") and isinstance(self.last_referral_letter_pdf_paths, dict):
                 self.last_referral_letter_pdf_paths.pop(exam_name, None)
         except Exception:
@@ -2302,6 +2345,13 @@ class App(tk.Tk):
         try:
             if hasattr(self, "referral_letter_text_overrides") and isinstance(self.referral_letter_text_overrides, dict):
                 self.referral_letter_text_overrides.pop(exam_name, None)
+        except Exception:
+            pass
+        try:
+            if hasattr(self, "referral_rx_text_overrides") and isinstance(
+                self.referral_rx_text_overrides, dict
+            ):
+                self.referral_rx_text_overrides.pop(exam_name, None)
         except Exception:
             pass
         try:
@@ -2613,7 +2663,7 @@ class App(tk.Tk):
                 low = fn.lower()
                 if not low.endswith(".pdf"):
                     continue
-                if f"__{exam_slug}__letter_" in low or low.endswith(f"__{exam_slug}__imaging_recommendation.pdf"):
+                if f"__{exam_slug}__letter_" in low or f"__{exam_slug}__rx_" in low or low.endswith(f"__{exam_slug}__imaging_recommendation.pdf"):
                     try:
                         os.remove(os.path.join(vault_dir, fn))
                     except Exception:
@@ -2633,7 +2683,7 @@ class App(tk.Tk):
                 low = fn.lower()
                 if not low.endswith(".pdf"):
                     continue
-                if f"__{exam_slug}__letter_" in low or low.endswith(f"__{exam_slug}__imaging_recommendation.pdf"):
+                if f"__{exam_slug}__letter_" in low or f"__{exam_slug}__rx_" in low or low.endswith(f"__{exam_slug}__imaging_recommendation.pdf"):
                     matches.append(os.path.join(vault_dir, fn))
         except Exception:
             return []
@@ -2669,22 +2719,40 @@ class App(tk.Tk):
             }
 
         marker = "__letter_"
-        if marker not in stem_core:
-            return None
-        idx = stem_core.index(marker)
-        prefix = stem_core[:idx]
-        mod_slug = stem_core[idx + len(marker) :]
-        if not mod_slug:
-            return None
-        parts = prefix.split("__", 1)
-        if len(parts) < 2:
-            return None
-        return {
-            "exam_slug": parts[1],
-            "mod_slug": mod_slug,
-            "is_legacy": False,
-            "is_archived": is_archived,
-        }
+        if marker in stem_core:
+            idx = stem_core.index(marker)
+            prefix = stem_core[:idx]
+            mod_slug = stem_core[idx + len(marker) :]
+            if not mod_slug:
+                return None
+            parts = prefix.split("__", 1)
+            if len(parts) < 2:
+                return None
+            return {
+                "exam_slug": parts[1],
+                "mod_slug": mod_slug,
+                "is_legacy": False,
+                "is_archived": is_archived,
+            }
+
+        rx_marker = "__rx_"
+        if rx_marker in stem_core:
+            idx = stem_core.index(rx_marker)
+            prefix = stem_core[:idx]
+            mod_slug = stem_core[idx + len(rx_marker) :]
+            if not mod_slug:
+                return None
+            parts = prefix.split("__", 1)
+            if len(parts) < 2:
+                return None
+            return {
+                "exam_slug": parts[1],
+                "mod_slug": mod_slug,
+                "is_legacy": False,
+                "is_archived": is_archived,
+            }
+
+        return None
 
     def _unique_archive_suffix(self) -> str:
         return datetime.now().strftime("%Y%m%d_%H%M%S") + "_" + os.urandom(2).hex()
@@ -2725,9 +2793,12 @@ class App(tk.Tk):
                 if low.endswith(f"__{exam_slug}__imaging_recommendation.pdf"):
                     self._rename_vault_file_archived(path)
                     continue
-                if f"__{exam_slug}__letter_" not in low:
+                if f"__{exam_slug}__letter_" not in low and f"__{exam_slug}__rx_" not in low:
                     continue
-                m = re.search(rf"__{re.escape(exam_slug)}__letter_(.+)\.pdf$", low)
+                m = re.search(
+                    rf"__{re.escape(exam_slug)}__(?:letter|rx)_(.+)\.pdf$",
+                    low,
+                )
                 if not m:
                     continue
                 slug = m.group(1)
@@ -2994,8 +3065,111 @@ class App(tk.Tk):
     # Medical Referral Recommendation Letters
     # (sibling of the imaging-letter system, but provider-type-driven)
     # =====================================================================
+
+    def _prompt_referral_rx_bp_dx(self, provider_type: str) -> None:
+        """Show a picker popup so the user can choose the body part and diagnosis
+        code for a specialist referral Rx.  Stores the selection in
+        ``self.referral_rx_dx_selections`` and persists it to settings."""
+        prov_key = (provider_type or "").strip().lower()
+        if not prov_key:
+            return
+
+        payload = self.make_payload() or {}
+        all_choices = imaging_dx_all_ui_choices(payload)
+        display_to_icd: dict[str, str] = {}
+        dx_displays: list[str] = []
+        if all_choices:
+            display_to_icd = {c.get("display", ""): c.get("icd", "") for c in all_choices if isinstance(c, dict)}
+            dx_displays = [c.get("display", "") for c in all_choices if isinstance(c, dict) and c.get("display")]
+
+        body_part_labels: list[str] = list(REGION_LABELS.values())
+
+        # Restore previously stored selections for this provider.
+        stored = (self.referral_rx_dx_selections.get(prov_key) or {})
+        init_bp = (stored.get("body_part") or "").strip()
+        init_icd_str = (stored.get("icd") or "").strip()
+
+        # Find the display string that matches the stored ICD.
+        init_display = dx_displays[0] if dx_displays else ""
+        if init_icd_str:
+            for c in all_choices:
+                if isinstance(c, dict) and (c.get("icd") or "").strip() == init_icd_str:
+                    d = (c.get("display") or "").strip()
+                    if d:
+                        init_display = d
+                        break
+
+        dialog = tk.Toplevel(self)
+        dialog.title(f"Select Body Part & Diagnosis — {provider_type}")
+        dialog.transient(self)
+        dialog.grab_set()
+        dialog.resizable(False, False)
+
+        outer = ttk.Frame(dialog, padding=14)
+        outer.grid(row=0, column=0, sticky="nsew")
+
+        ttk.Label(
+            outer,
+            text=f"Choose the body part and diagnosis code for the {provider_type} referral Rx:",
+            wraplength=480,
+        ).grid(row=0, column=0, columnspan=2, sticky="w", pady=(0, 10))
+
+        ttk.Label(outer, text="Body part:").grid(row=1, column=0, sticky="w", padx=(0, 8))
+        bp_var = tk.StringVar(value=init_bp if init_bp in body_part_labels else (body_part_labels[0] if body_part_labels else ""))
+        bp_cb = ttk.Combobox(outer, textvariable=bp_var, state="readonly", values=body_part_labels, width=34)
+        bp_cb.grid(row=1, column=1, sticky="w")
+
+        ttk.Label(outer, text="Diagnosis code:").grid(row=2, column=0, sticky="w", padx=(0, 8), pady=(8, 0))
+        dx_var = tk.StringVar(value=init_display)
+        dx_cb = ttk.Combobox(outer, textvariable=dx_var, state="readonly", values=dx_displays, width=60)
+        dx_cb.grid(row=2, column=1, sticky="w", pady=(8, 0))
+        if not dx_displays:
+            dx_cb.configure(state="disabled")
+            ttk.Label(
+                outer,
+                text="(No diagnosis codes in chart yet — add diagnoses first)",
+                foreground="gray",
+            ).grid(row=3, column=1, sticky="w", pady=(2, 0))
+
+        picked_result: dict[str, str] | None = None
+
+        def _on_ok():
+            nonlocal picked_result
+            bp = (bp_var.get() or "").strip()
+            if not bp:
+                messagebox.showwarning("Selection Required", "Please select a body part.", parent=dialog)
+                return
+            disp = (dx_var.get() or "").strip()
+            icd = (display_to_icd.get(disp) or "").strip() if disp else ""
+            picked_result = {"body_part": bp, "icd": icd}
+            dialog.destroy()
+
+        def _on_cancel():
+            dialog.destroy()
+
+        btns = ttk.Frame(outer)
+        btns.grid(row=4, column=0, columnspan=2, sticky="e", pady=(12, 0))
+        ttk.Button(btns, text="Cancel", command=_on_cancel).grid(row=0, column=0, padx=(0, 6))
+        ttk.Button(btns, text="OK", command=_on_ok).grid(row=0, column=1)
+        dialog.protocol("WM_DELETE_WINDOW", _on_cancel)
+        self.wait_window(dialog)
+
+        if picked_result is None:
+            return
+
+        if not hasattr(self, "referral_rx_dx_selections") or not isinstance(
+            self.referral_rx_dx_selections, dict
+        ):
+            self.referral_rx_dx_selections = {}
+        self.referral_rx_dx_selections[prov_key] = picked_result
+        try:
+            self.write_settings({"referral_rx_dx_selections": self.referral_rx_dx_selections})
+        except Exception:
+            pass
+
     def _on_referral_added(self, provider_type: str) -> None:
-        """After a referral row is added, refresh referral letter PDFs."""
+        """After a referral row is added, prompt for body part + dx code, then sync letters."""
+        self._prompt_referral_rx_bp_dx(provider_type)
         self._sync_referral_letter_after_chart_change(provider_type)
 
     def _on_referral_clicked(self, provider_type: str) -> None:
@@ -3083,6 +3257,9 @@ class App(tk.Tk):
             tpl = (self.referral_letter_templates.get(prov_key) or "").strip()
             if tpl:
                 self._clear_referral_letter_visit_override(exam, provider_type or "")
+            rx_tpl = (self.referral_rx_templates.get(prov_key) or "").strip()
+            if rx_tpl:
+                self._clear_referral_rx_visit_override(exam, provider_type or "")
         payload = self.make_payload() or {}
         pr = self.get_current_patient_root() or ""
         if not pr:
@@ -3095,6 +3272,164 @@ class App(tk.Tk):
             self.doc_vault_page.refresh_current_folder()
         except Exception:
             pass
+
+    def _merged_referral_rx_dx_selections(self, exam: str) -> dict[str, str]:
+        """Body-part ICD picks for referral Rx (merged from imaging dx selections)."""
+        exam = (exam or "").strip()
+        merged: dict[str, str] = {}
+        exam_map = (self.imaging_letter_dx_selections.get(exam) or {}) if exam else {}
+        if not isinstance(exam_map, dict):
+            return merged
+        for mod_map in exam_map.values():
+            if not isinstance(mod_map, dict):
+                continue
+            for bp, icd in mod_map.items():
+                if not isinstance(bp, str) or not isinstance(icd, str):
+                    continue
+                bp2 = bp.strip()
+                icd2 = icd.strip()
+                if bp2 and icd2 and bp2 not in merged:
+                    merged[bp2] = icd2
+        return merged
+
+    def _referral_rx_content_signature(
+        self,
+        payload: dict,
+        provider_type: str,
+        selected: dict[str, str],
+        explicit_bp: str = "",
+        explicit_icd: str = "",
+    ) -> str:
+        soap = (payload or {}).get("soap") or {}
+        dx = soap.get("diagnosis_struct") or {}
+        body_parts = _ordered_referral_body_parts_for_rx(dx if isinstance(dx, dict) else {})
+        icd_map = {
+            _norm_imaging_body_part_key(bp): (icd or "").strip()
+            for bp, icd in (selected or {}).items()
+            if (bp or "").strip() and (icd or "").strip()
+        }
+        try:
+            return json.dumps(
+                {
+                    "provider": (provider_type or "").strip().lower(),
+                    "body_parts": list(body_parts),
+                    "icds": icd_map,
+                    "explicit_bp": (explicit_bp or "").strip().lower(),
+                    "explicit_icd": (explicit_icd or "").strip().upper(),
+                },
+                sort_keys=True,
+                default=str,
+            )
+        except Exception:
+            return ""
+
+    def _factory_referral_rx_text(
+        self,
+        payload: dict,
+        provider_type: str,
+        selected: dict[str, str],
+        *,
+        line_spacing: str | None = None,
+    ) -> str:
+        prov_key = (provider_type or "").strip().lower()
+        spacing = (line_spacing or "").strip().lower()
+        if spacing not in (IMAGING_RX_LINE_SPACING_SINGLE, IMAGING_RX_LINE_SPACING_DOUBLE):
+            spacing = (self.referral_rx_line_spacing.get(prov_key) or IMAGING_RX_LINE_SPACING_SINGLE)
+        return referral_rx_prescription_editable_text(
+            payload, provider_type, selected, line_spacing=spacing
+        )
+
+    def _referral_rx_line_spacing_for_provider(self, provider_type: str) -> str:
+        prov_key = (provider_type or "").strip().lower()
+        spacing = (self.referral_rx_line_spacing.get(prov_key) or IMAGING_RX_LINE_SPACING_SINGLE).strip().lower()
+        if spacing not in (IMAGING_RX_LINE_SPACING_SINGLE, IMAGING_RX_LINE_SPACING_DOUBLE):
+            return IMAGING_RX_LINE_SPACING_SINGLE
+        return spacing
+
+    def _clear_referral_rx_visit_override(self, exam: str, provider_type: str) -> None:
+        exam = (exam or "").strip()
+        prov_key = (provider_type or "").strip().lower()
+        if not exam or not prov_key:
+            return
+        em = self.referral_rx_text_overrides.get(exam)
+        if isinstance(em, dict):
+            em.pop(prov_key, None)
+        sig_exam = self.referral_rx_content_signatures.get(exam)
+        if isinstance(sig_exam, dict):
+            sig_exam.pop(prov_key, None)
+
+    def _clear_referral_rx_provider_overrides_all_exams(self, provider_type: str) -> None:
+        prov_key = (provider_type or "").strip().lower()
+        if not prov_key:
+            return
+        for exam_key in list(self.referral_rx_text_overrides.keys()):
+            em = self.referral_rx_text_overrides.get(exam_key)
+            if isinstance(em, dict):
+                em.pop(prov_key, None)
+                if not em:
+                    self.referral_rx_text_overrides.pop(exam_key, None)
+        for exam_key in list(self.referral_rx_content_signatures.keys()):
+            sig_exam = self.referral_rx_content_signatures.get(exam_key)
+            if isinstance(sig_exam, dict):
+                sig_exam.pop(prov_key, None)
+                if not sig_exam:
+                    self.referral_rx_content_signatures.pop(exam_key, None)
+
+    def _effective_referral_rx_text(
+        self,
+        payload: dict,
+        provider_type: str,
+        selected: dict[str, str],
+        *,
+        exam: str | None = None,
+    ) -> str:
+        prov_key = (provider_type or "").strip().lower()
+        exam_key = (exam or self.current_exam.get() or "").strip()
+
+        # Explicit body part + ICD selections (set via popup dropdowns or picker).
+        explicit = (self.referral_rx_dx_selections.get(prov_key) or {})
+        explicit_bp = (explicit.get("body_part") or "").strip()
+        explicit_icd = (explicit.get("icd") or "").strip()
+
+        sig_now = self._referral_rx_content_signature(
+            payload, provider_type, selected, explicit_bp, explicit_icd
+        )
+        sig_saved = ""
+        if exam_key:
+            sig_saved = (
+                (self.referral_rx_content_signatures.get(exam_key) or {}).get(prov_key) or ""
+            ).strip()
+        override = ""
+        if exam_key:
+            override = (
+                (self.referral_rx_text_overrides.get(exam_key) or {}).get(prov_key) or ""
+            ).replace("\r\n", "\n").strip()
+        if override and sig_saved and sig_now == sig_saved:
+            spacing = self._referral_rx_line_spacing_for_provider(provider_type)
+            return imaging_rx_dedupe_study_blocks_text(
+                override.replace("\r\n", "\n"), line_spacing=spacing
+            )
+
+        tpl = _collapse_rx_orders_token(
+            (self.referral_rx_templates.get(prov_key) or "").replace("\r\n", "\n")
+        )
+        spacing = self._referral_rx_line_spacing_for_provider(provider_type)
+        if tpl.strip() and IMAGING_RX_ORDERS_TOKEN in tpl:
+            rendered = referral_rx_prescription_from_template(
+                tpl, payload, provider_type, selected, line_spacing=spacing
+            )
+            if rendered:
+                return imaging_rx_dedupe_study_blocks_text(rendered, line_spacing=spacing)
+
+        # If the user has explicitly selected a body part via the popup dropdowns, use that.
+        if explicit_bp:
+            return referral_rx_text_from_explicit_selection(
+                provider_type, explicit_bp, explicit_icd, line_spacing=spacing
+            )
+
+        return self._factory_referral_rx_text(
+            payload, provider_type, selected, line_spacing=spacing
+        )
 
     def _open_referral_recommendation_letter_editor(self, provider_type: str) -> None:
         """Generate the referral letter PDF (vault/referrals), then open the text editor."""
@@ -3234,6 +3569,411 @@ class App(tk.Tk):
 
         self.wait_window(dlg)
 
+    def _resolve_referral_rx_vault_path(self, patient_root: str, exam: str, provider_type: str) -> str:
+        """Newest vault/referrals Rx PDF for this exam + provider type."""
+        exam_slug = safe_slug(exam).lower()
+        prov_slug = safe_slug(provider_type).lower().replace(" ", "_")
+        vault_dir = os.path.join(patient_root, "vault", "referrals")
+        if not os.path.isdir(vault_dir):
+            return ""
+        needle = f"__{exam_slug}__rx_referral_{prov_slug}.pdf"
+        matches: list[str] = []
+        try:
+            for fn in os.listdir(vault_dir):
+                low = fn.lower()
+                if low.endswith(needle) and "__archived_" not in low:
+                    matches.append(os.path.join(vault_dir, fn))
+        except Exception:
+            return ""
+        if not matches:
+            return ""
+        try:
+            return max(matches, key=os.path.getmtime)
+        except Exception:
+            return matches[0]
+
+    def _open_referral_rx_prescription(self, provider_type: str) -> None:
+        """Generate referral Rx PDF (vault/referrals), then open the prescription text editor."""
+        exam = (self.current_exam.get() or "").strip()
+        if not exam:
+            messagebox.showwarning(
+                "Referral Rx Prescription",
+                "No exam (visit) is selected.\n\nChoose an exam tab first.",
+                parent=self,
+            )
+            return
+        if not self._ensure_reportlab():
+            return
+
+        self._load_global_letter_preferences()
+
+        payload = self.make_payload() or {}
+        pr = self.get_current_patient_root() or ""
+        prov_slug = safe_slug(provider_type).lower().replace(" ", "_")
+        if pr:
+            try:
+                vault_paths = self._export_referral_recommendation_letter_vault(payload, pr)
+                rx_pdf = ""
+                for pth in vault_paths or []:
+                    low = os.path.basename(pth).lower()
+                    if f"__rx_referral_{prov_slug}.pdf" in low:
+                        rx_pdf = pth
+                        break
+                if not rx_pdf:
+                    messagebox.showwarning(
+                        "Referral Rx Prescription",
+                        f"No Rx PDF was generated for {provider_type}.\n\n"
+                        "Edit the prescription text below and click 'Save & Print' "
+                        "to generate the PDF and open it.",
+                        parent=self,
+                    )
+                try:
+                    self.write_settings({
+                        "last_referral_letter_pdfs": self.last_referral_letter_pdf_paths,
+                        "referral_letter_text_overrides": self.referral_letter_text_overrides,
+                        "referral_rx_text_overrides": self.referral_rx_text_overrides,
+                    })
+                except Exception:
+                    pass
+                try:
+                    self.doc_vault_page.refresh_current_folder()
+                except Exception:
+                    pass
+            except Exception as e:
+                messagebox.showerror(
+                    "Referral Rx Prescription",
+                    f"Could not create the Rx PDF:\n\n{e}",
+                    parent=self,
+                )
+        else:
+            messagebox.showinfo(
+                "Referral Rx Prescription",
+                "Load or create a patient chart first to generate Rx PDFs "
+                "(they save under Doc Vault → referrals).\n\n"
+                "You can still edit prescription text below.",
+                parent=self,
+            )
+
+        prov_key = (provider_type or "").strip().lower()
+        selected = self._merged_referral_rx_dx_selections(exam)
+
+        # Load any previously stored explicit body-part + ICD selections for this provider.
+        all_dx_choices = imaging_dx_all_ui_choices(payload)
+        display_to_icd: dict[str, str] = {}
+        dx_displays: list[str] = []
+        if all_dx_choices:
+            display_to_icd = {
+                c.get("display", ""): c.get("icd", "")
+                for c in all_dx_choices if isinstance(c, dict)
+            }
+            dx_displays = [
+                c.get("display", "") for c in all_dx_choices
+                if isinstance(c, dict) and c.get("display")
+            ]
+
+        body_part_labels: list[str] = list(REGION_LABELS.values())
+        stored_sel = (self.referral_rx_dx_selections.get(prov_key) or {})
+        init_bp = (stored_sel.get("body_part") or "").strip()
+        init_icd_val = (stored_sel.get("icd") or "").strip()
+
+        # Find the display string matching the stored ICD.
+        init_disp = dx_displays[0] if dx_displays else ""
+        if init_icd_val:
+            for c in all_dx_choices:
+                if isinstance(c, dict) and (c.get("icd") or "").strip() == init_icd_val:
+                    d = (c.get("display") or "").strip()
+                    if d:
+                        init_disp = d
+                        break
+
+        current_text = self._effective_referral_rx_text(
+            payload, provider_type, selected, exam=exam
+        )
+
+        dlg = tk.Toplevel(self)
+        dlg.title(f"{provider_type} Rx Prescription Editor")
+        dlg.transient(self)
+        dlg.grab_set()
+
+        outer = ttk.Frame(dlg, padding=10)
+        outer.grid(row=0, column=0, sticky="nsew")
+        dlg.rowconfigure(0, weight=1)
+        dlg.columnconfigure(0, weight=1)
+        outer.rowconfigure(4, weight=1)
+        outer.columnconfigure(0, weight=1)
+
+        tk.Label(
+            outer,
+            text=IMAGING_RX_SYMBOL_TEXT,
+            font=IMAGING_RX_SYMBOL_TK_FONT,
+            anchor="w",
+        ).grid(row=0, column=0, sticky="w", pady=(0, 4))
+
+        # ── Body part & Dx code selection row ──────────────────────────────
+        sel_frame = ttk.LabelFrame(outer, text="Referral details", padding=(8, 4))
+        sel_frame.grid(row=1, column=0, sticky="ew", pady=(0, 8))
+        sel_frame.columnconfigure(1, weight=1)
+        sel_frame.columnconfigure(3, weight=2)
+
+        ttk.Label(sel_frame, text="Body part:").grid(row=0, column=0, sticky="w", padx=(0, 6))
+        bp_var = tk.StringVar(value=init_bp if init_bp in body_part_labels else (body_part_labels[0] if body_part_labels else ""))
+        bp_cb = ttk.Combobox(
+            sel_frame, textvariable=bp_var, state="readonly", values=body_part_labels, width=28
+        )
+        bp_cb.grid(row=0, column=1, sticky="w")
+
+        ttk.Label(sel_frame, text="Dx code:").grid(row=0, column=2, sticky="w", padx=(16, 6))
+        dx_var = tk.StringVar(value=init_disp)
+        dx_cb = ttk.Combobox(
+            sel_frame, textvariable=dx_var, state="readonly" if dx_displays else "disabled",
+            values=dx_displays, width=50
+        )
+        dx_cb.grid(row=0, column=3, sticky="w")
+
+        def _refresh_text_from_dropdowns(*_args):
+            bp = (bp_var.get() or "").strip()
+            disp = (dx_var.get() or "").strip()
+            icd = (display_to_icd.get(disp) or "").strip() if disp else ""
+            try:
+                spacing = spacing_var.get()
+            except Exception:
+                spacing = self._referral_rx_line_spacing_for_provider(provider_type)
+            new_text = referral_rx_text_from_explicit_selection(
+                provider_type, bp, icd, line_spacing=spacing
+            )
+            if new_text:
+                txt.delete("1.0", "end")
+                txt.insert("1.0", new_text)
+
+        bp_cb.bind("<<ComboboxSelected>>", _refresh_text_from_dropdowns)
+        dx_cb.bind("<<ComboboxSelected>>", _refresh_text_from_dropdowns)
+
+        # ── Edit label ─────────────────────────────────────────────────────
+        ttk.Label(
+            outer,
+            text="Edit the prescription order text:",
+        ).grid(row=2, column=0, sticky="w", pady=(0, 4))
+
+        spacing_row = ttk.Frame(outer)
+        spacing_row.grid(row=3, column=0, sticky="w", pady=(0, 6))
+        ttk.Label(spacing_row, text="Line spacing:").pack(side="left")
+        spacing_var = tk.StringVar(value=self._referral_rx_line_spacing_for_provider(provider_type))
+
+        def _apply_spacing_choice(*_args):
+            val = txt.get("1.0", "end").replace("\r\n", "\n").rstrip("\n")
+            new_val = imaging_rx_apply_line_spacing_to_text(val, spacing_var.get())
+            txt.delete("1.0", "end")
+            txt.insert("1.0", new_val)
+
+        ttk.Radiobutton(
+            spacing_row,
+            text="Single",
+            variable=spacing_var,
+            value=IMAGING_RX_LINE_SPACING_SINGLE,
+            command=_apply_spacing_choice,
+        ).pack(side="left", padx=(8, 0))
+        ttk.Radiobutton(
+            spacing_row,
+            text="Double",
+            variable=spacing_var,
+            value=IMAGING_RX_LINE_SPACING_DOUBLE,
+            command=_apply_spacing_choice,
+        ).pack(side="left", padx=(8, 0))
+
+        txt = tk.Text(outer, wrap="word", width=92, height=16, font=("Segoe UI", 10))
+        txt.grid(row=4, column=0, sticky="nsew")
+        txt.insert("1.0", current_text)
+
+        btns = ttk.Frame(outer)
+        btns.grid(row=5, column=0, sticky="e", pady=(8, 0))
+
+        def _persist_rx_line_spacing():
+            chosen = (spacing_var.get() or IMAGING_RX_LINE_SPACING_SINGLE).strip().lower()
+            if chosen not in (IMAGING_RX_LINE_SPACING_SINGLE, IMAGING_RX_LINE_SPACING_DOUBLE):
+                chosen = IMAGING_RX_LINE_SPACING_SINGLE
+            if not hasattr(self, "referral_rx_line_spacing") or not isinstance(
+                self.referral_rx_line_spacing, dict
+            ):
+                self.referral_rx_line_spacing = {}
+            self.referral_rx_line_spacing[prov_key] = chosen
+            try:
+                self.write_settings({"referral_rx_line_spacing": self.referral_rx_line_spacing})
+            except Exception:
+                pass
+
+        def _save_as_default_template():
+            _persist_rx_line_spacing()
+            val = txt.get("1.0", "end").replace("\r\n", "\n").rstrip("\n")
+            if not val.strip():
+                messagebox.showwarning(
+                    "Save as default",
+                    "Prescription text is empty — nothing to save as the default template.",
+                    parent=dlg,
+                )
+                return
+            tpl = referral_rx_prescription_edited_to_template(
+                val, payload, provider_type, selected
+            )
+            if not tpl:
+                messagebox.showwarning(
+                    "Save as default",
+                    "Could not build a template from this prescription.",
+                    parent=dlg,
+                )
+                return
+            if not hasattr(self, "referral_rx_templates") or not isinstance(
+                self.referral_rx_templates, dict
+            ):
+                self.referral_rx_templates = {}
+            self.referral_rx_templates[prov_key] = tpl
+            self._clear_referral_rx_provider_overrides_all_exams(provider_type)
+            _persist_popup_selections()
+            try:
+                self.write_settings({
+                    "referral_rx_templates": self.referral_rx_templates,
+                    "referral_rx_line_spacing": self.referral_rx_line_spacing,
+                    "referral_rx_text_overrides": self.referral_rx_text_overrides,
+                    "referral_rx_content_signatures": self.referral_rx_content_signatures,
+                    "referral_rx_dx_selections": self.referral_rx_dx_selections,
+                })
+            except Exception:
+                pass
+            try:
+                self._sync_referral_letter_after_chart_change(provider_type)
+            except Exception:
+                pass
+            messagebox.showinfo(
+                "Save as default",
+                f"Default template saved for {provider_type} Rx prescriptions.\n\n"
+                "This format will be used for this visit, future visits, and all patients. "
+                "Order lines will still update from each chart when you use {ORDERS}.",
+                parent=dlg,
+            )
+
+        def _get_popup_explicit_bp_icd() -> tuple[str, str]:
+            """Return (body_part, icd) from the popup dropdowns."""
+            bp = (bp_var.get() or "").strip()
+            disp = (dx_var.get() or "").strip()
+            icd = (display_to_icd.get(disp) or "").strip() if disp else ""
+            return bp, icd
+
+        def _persist_popup_selections():
+            """Save the body part + ICD selection from the popup dropdowns."""
+            bp, icd = _get_popup_explicit_bp_icd()
+            if not bp:
+                return
+            if not hasattr(self, "referral_rx_dx_selections") or not isinstance(
+                self.referral_rx_dx_selections, dict
+            ):
+                self.referral_rx_dx_selections = {}
+            self.referral_rx_dx_selections[prov_key] = {"body_part": bp, "icd": icd}
+            try:
+                self.write_settings({"referral_rx_dx_selections": self.referral_rx_dx_selections})
+            except Exception:
+                pass
+
+        def _save_close():
+            _persist_rx_line_spacing()
+            _persist_popup_selections()
+            bp_now, icd_now = _get_popup_explicit_bp_icd()
+            val = txt.get("1.0", "end").replace("\r\n", "\n").rstrip("\n")
+            if not val.strip():
+                messagebox.showwarning(
+                    "Save & Print",
+                    "Prescription text is empty — nothing to save or print.\n\n"
+                    "Edit the text above, then click 'Save & Print'.",
+                    parent=dlg,
+                )
+                return
+            if not hasattr(self, "referral_rx_text_overrides") or not isinstance(
+                self.referral_rx_text_overrides, dict
+            ):
+                self.referral_rx_text_overrides = {}
+            em = self.referral_rx_text_overrides.get(exam, {})
+            if not isinstance(em, dict):
+                em = {}
+            em[prov_key] = val
+            self.referral_rx_text_overrides[exam] = em
+            if not hasattr(self, "referral_rx_content_signatures") or not isinstance(
+                self.referral_rx_content_signatures, dict
+            ):
+                self.referral_rx_content_signatures = {}
+            sig_exam = self.referral_rx_content_signatures.setdefault(exam, {})
+            sig_exam[prov_key] = self._referral_rx_content_signature(
+                payload, provider_type, selected, bp_now, icd_now
+            )
+            try:
+                self.write_settings({
+                    "referral_rx_text_overrides": self.referral_rx_text_overrides,
+                    "referral_rx_content_signatures": self.referral_rx_content_signatures,
+                    "referral_rx_dx_selections": self.referral_rx_dx_selections,
+                })
+            except Exception:
+                pass
+            rx_pdf_path = ""
+            try:
+                payload_now = self.make_payload() or {}
+                pr_now = self.get_current_patient_root() or ""
+                if pr_now:
+                    new_vault_paths = self._export_referral_recommendation_letter_vault(payload_now, pr_now)
+                    for vp in new_vault_paths or []:
+                        if f"__rx_referral_{prov_slug}.pdf" in os.path.basename(vp).lower():
+                            rx_pdf_path = vp
+                            break
+                    try:
+                        self.doc_vault_page.refresh_current_folder()
+                    except Exception:
+                        pass
+                else:
+                    messagebox.showwarning(
+                        "No Patient Loaded",
+                        "No patient chart is currently loaded.\n\n"
+                        "Load a patient first so the Rx PDF can be saved to the vault.",
+                        parent=dlg,
+                    )
+            except Exception as exc:
+                messagebox.showerror(
+                    "Rx PDF Error",
+                    f"Could not generate the Rx PDF:\n\n{exc}",
+                    parent=dlg,
+                )
+            # Fall back to the most recent vault PDF if the export didn't produce a new one.
+            if not rx_pdf_path and pr:
+                rx_pdf_path = self._resolve_referral_rx_vault_path(pr, exam, provider_type)
+            dlg.destroy()
+            if rx_pdf_path and os.path.isfile(rx_pdf_path):
+                try:
+                    open_with_default_app(rx_pdf_path)
+                except Exception:
+                    pass
+
+        def _open_existing_rx_pdf():
+            """Open the most recently generated Rx PDF for this provider."""
+            rx_pdf = self._resolve_referral_rx_vault_path(pr, exam, provider_type) if pr else ""
+            if rx_pdf and os.path.isfile(rx_pdf):
+                try:
+                    open_with_default_app(rx_pdf)
+                except Exception as exc:
+                    messagebox.showerror("Open PDF", str(exc), parent=dlg)
+            else:
+                messagebox.showinfo(
+                    "No PDF Yet",
+                    "No Rx PDF has been generated yet for this provider.\n\n"
+                    "Click 'Save & Print' to generate and open the PDF.",
+                    parent=dlg,
+                )
+
+        ttk.Button(btns, text="Save as Default", command=_save_as_default_template).grid(
+            row=0, column=0, padx=(0, 6)
+        )
+        ttk.Button(btns, text="Open PDF", command=_open_existing_rx_pdf).grid(
+            row=0, column=1, padx=(0, 6)
+        )
+        ttk.Button(btns, text="Cancel", command=dlg.destroy).grid(row=0, column=2, padx=(0, 6))
+        ttk.Button(btns, text="Save & Print", command=_save_close).grid(row=0, column=3)
+
+        self.wait_window(dlg)
+
     def _purge_stale_referral_letters_vault(self, patient_root: str, exam: str) -> None:
         """Remove every prior referral-letter PDF for this exam in vault/referrals
         (and any legacy copies still sitting in vault/messages from earlier builds).
@@ -3249,7 +3989,10 @@ class App(tk.Tk):
                     low = fn.lower()
                     if not low.endswith(".pdf"):
                         continue
-                    if f"__{exam_slug}__referral_" in low:
+                    if (
+                        f"__{exam_slug}__referral_" in low
+                        or f"__{exam_slug}__rx_referral_" in low
+                    ):
                         try:
                             os.remove(os.path.join(vault_dir, fn))
                         except Exception:
@@ -3280,12 +4023,21 @@ class App(tk.Tk):
                         continue
                     if "__archived_" in low:
                         continue
-                    if f"__{exam_slug}__referral_" not in low:
-                        continue
                     path = os.path.join(vault_dir, fn)
                     if not os.path.isfile(path):
                         continue
-                    m = re.search(rf"__{re.escape(exam_slug)}__referral_(.+)\.pdf$", low)
+                    if f"__{exam_slug}__rx_referral_" in low:
+                        m = re.search(
+                            rf"__{re.escape(exam_slug)}__rx_referral_(.+)\.pdf$",
+                            low,
+                        )
+                    elif f"__{exam_slug}__referral_" in low:
+                        m = re.search(
+                            rf"__{re.escape(exam_slug)}__referral_(.+)\.pdf$",
+                            low,
+                        )
+                    else:
+                        continue
                     if not m:
                         continue
                     slug = m.group(1)
@@ -3320,6 +4072,7 @@ class App(tk.Tk):
             try:
                 self.last_referral_letter_pdf_paths[exam] = []
                 self.referral_letter_text_overrides[exam] = {}
+                self.referral_rx_text_overrides[exam] = {}
             except Exception:
                 pass
             return []
@@ -3346,13 +4099,26 @@ class App(tk.Tk):
         if isinstance(sig_exam, dict):
             trimmed_sig = {k: v for k, v in sig_exam.items() if k in keep_keys}
             self.referral_letter_content_signatures[exam] = trimmed_sig
+        rx_ov = self.referral_rx_text_overrides.get(exam, {})
+        if not isinstance(rx_ov, dict):
+            rx_ov = {}
+        self.referral_rx_text_overrides[exam] = {k: v for k, v in rx_ov.items() if k in keep_keys}
+        rx_sig_exam = self.referral_rx_content_signatures.get(exam, {})
+        if isinstance(rx_sig_exam, dict):
+            self.referral_rx_content_signatures[exam] = {
+                k: v for k, v in rx_sig_exam.items() if k in keep_keys
+            }
 
+        selected_dx = self._merged_referral_rx_dx_selections(exam)
         vault_paths: list[str] = []
         for prov in provs:
             prov_slug = safe_slug(prov).lower().replace(" ", "_")
             prov_key = (prov or "").strip().lower()
             letter_text_override = self._effective_referral_letter_text(
                 payload, prov, exam=exam
+            )
+            rx_text_override = self._effective_referral_rx_text(
+                payload, prov, selected_dx, exam=exam
             )
             vault_name = f"{date_slug}__{exam_slug}__referral_{prov_slug}.pdf"
             tmp_path = os.path.join(
@@ -3370,6 +4136,32 @@ class App(tk.Tk):
                 try:
                     if os.path.exists(tmp_path):
                         os.remove(tmp_path)
+                except Exception:
+                    pass
+
+            rx_vault_name = f"{date_slug}__{exam_slug}__rx_referral_{prov_slug}.pdf"
+            rx_tmp_path = os.path.join(
+                pdf_dir, f".tmp_referral_rx__{exam_slug}__{prov_slug}.pdf",
+            )
+            try:
+                if build_referral_rx_prescription_pdf(
+                    rx_tmp_path,
+                    payload,
+                    prov,
+                    selected_dx,
+                    rx_text_override,
+                    line_spacing=self._referral_rx_line_spacing_for_provider(prov),
+                ):
+                    vp_rx = upsert_vault_file(
+                        patient_root, "referrals", rx_tmp_path, rx_vault_name
+                    )
+                    vault_paths.append(vp_rx)
+            except Exception as e:
+                print("Referral Rx prescription vault upsert failed:", e)
+            finally:
+                try:
+                    if os.path.exists(rx_tmp_path):
+                        os.remove(rx_tmp_path)
                 except Exception:
                     pass
 
@@ -3393,6 +4185,8 @@ class App(tk.Tk):
                 if not low.endswith(".pdf"):
                     continue
                 if "__archived_" in low:
+                    continue
+                if f"__{exam_slug}__rx_referral_" in low:
                     continue
                 if f"__{exam_slug}__referral_" in low:
                     matches.append(os.path.join(vault_dir, fn))
@@ -3423,6 +4217,8 @@ class App(tk.Tk):
             base = os.path.basename(p).lower()
             if "__archived_" in base:
                 continue
+            if f"__rx_referral_" in base:
+                continue
             m = re.search(rf"__{re.escape(ex_slug)}__referral_(.+)\.pdf$", base)
             if not m:
                 continue
@@ -3448,9 +4244,14 @@ class App(tk.Tk):
             for pk in list((self.referral_letter_text_overrides.get(exam) or {}).keys()):
                 if pk not in provs_seen:
                     self._clear_referral_letter_visit_override(exam, pk)
+            for pk in list((self.referral_rx_text_overrides.get(exam) or {}).keys()):
+                if pk not in provs_seen:
+                    self._clear_referral_rx_visit_override(exam, pk)
             for pk in provs_seen:
                 if (self.referral_letter_templates.get(pk) or "").strip():
                     self._clear_referral_letter_visit_override(exam, pk)
+                if (self.referral_rx_templates.get(pk) or "").strip():
+                    self._clear_referral_rx_visit_override(exam, pk)
         pr = self.get_current_patient_root() or ""
         try:
             self._export_referral_recommendation_letter_vault(payload, pr)
@@ -3462,6 +4263,7 @@ class App(tk.Tk):
                 "referral_letter_text_overrides": self.referral_letter_text_overrides,
                 "referral_letter_templates": self.referral_letter_templates,
                 "referral_letter_content_signatures": self.referral_letter_content_signatures,
+                "referral_rx_text_overrides": self.referral_rx_text_overrides,
             })
         except Exception:
             pass
@@ -3954,6 +4756,98 @@ class App(tk.Tk):
 
         return self._factory_imaging_letter_text(payload, modality, selected)
 
+    def _factory_imaging_rx_text(
+        self,
+        payload: dict,
+        modality: str,
+        selected: dict[str, str],
+        *,
+        line_spacing: str | None = None,
+    ) -> str:
+        mod_key = (modality or "").strip().lower()
+        spacing = (line_spacing or "").strip().lower()
+        if spacing not in (IMAGING_RX_LINE_SPACING_SINGLE, IMAGING_RX_LINE_SPACING_DOUBLE):
+            spacing = (self.imaging_rx_line_spacing.get(mod_key) or IMAGING_RX_LINE_SPACING_SINGLE)
+        return imaging_rx_prescription_editable_text(
+            payload, modality, selected, line_spacing=spacing
+        )
+
+    def _imaging_rx_line_spacing_for_modality(self, modality: str) -> str:
+        mod_key = (modality or "").strip().lower()
+        spacing = (self.imaging_rx_line_spacing.get(mod_key) or IMAGING_RX_LINE_SPACING_SINGLE).strip().lower()
+        if spacing not in (IMAGING_RX_LINE_SPACING_SINGLE, IMAGING_RX_LINE_SPACING_DOUBLE):
+            return IMAGING_RX_LINE_SPACING_SINGLE
+        return spacing
+
+    def _clear_imaging_rx_visit_override(self, exam: str, modality: str) -> None:
+        exam = (exam or "").strip()
+        mod_key = (modality or "").strip().lower()
+        if not exam or not mod_key:
+            return
+        em = self.imaging_rx_text_overrides.get(exam)
+        if isinstance(em, dict):
+            em.pop(mod_key, None)
+        sig_exam = self.imaging_rx_content_signatures.get(exam)
+        if isinstance(sig_exam, dict):
+            sig_exam.pop(mod_key, None)
+
+    def _clear_imaging_rx_modality_overrides_all_exams(self, modality: str) -> None:
+        mod_key = (modality or "").strip().lower()
+        if not mod_key:
+            return
+        for exam_key in list(self.imaging_rx_text_overrides.keys()):
+            em = self.imaging_rx_text_overrides.get(exam_key)
+            if isinstance(em, dict):
+                em.pop(mod_key, None)
+                if not em:
+                    self.imaging_rx_text_overrides.pop(exam_key, None)
+        for exam_key in list(self.imaging_rx_content_signatures.keys()):
+            sig_exam = self.imaging_rx_content_signatures.get(exam_key)
+            if isinstance(sig_exam, dict):
+                sig_exam.pop(mod_key, None)
+                if not sig_exam:
+                    self.imaging_rx_content_signatures.pop(exam_key, None)
+
+    def _effective_imaging_rx_text(
+        self,
+        payload: dict,
+        modality: str,
+        selected: dict[str, str],
+        *,
+        exam: str | None = None,
+    ) -> str:
+        mod_key = (modality or "").strip().lower()
+        exam_key = (exam or self.current_exam.get() or "").strip()
+        sig_now = self._imaging_letter_content_signature(payload, modality, selected)
+        sig_saved = ""
+        if exam_key:
+            sig_saved = (
+                (self.imaging_rx_content_signatures.get(exam_key) or {}).get(mod_key) or ""
+            ).strip()
+        override = ""
+        if exam_key:
+            override = (
+                (self.imaging_rx_text_overrides.get(exam_key) or {}).get(mod_key) or ""
+            ).replace("\r\n", "\n").strip()
+        if override and sig_saved and sig_now == sig_saved:
+            spacing = self._imaging_rx_line_spacing_for_modality(modality)
+            return imaging_rx_dedupe_study_blocks_text(
+                override.replace("\r\n", "\n"), line_spacing=spacing
+            )
+
+        tpl = _collapse_rx_orders_token(
+            (self.imaging_rx_templates.get(mod_key) or "").replace("\r\n", "\n")
+        )
+        spacing = self._imaging_rx_line_spacing_for_modality(modality)
+        if tpl.strip() and IMAGING_RX_ORDERS_TOKEN in tpl:
+            rendered = imaging_rx_prescription_from_template(
+                tpl, payload, modality, selected, line_spacing=spacing
+            )
+            if rendered:
+                return imaging_rx_dedupe_study_blocks_text(rendered, line_spacing=spacing)
+
+        return self._factory_imaging_rx_text(payload, modality, selected, line_spacing=spacing)
+
     def _sync_imaging_letter_after_chart_change(self, modality: str | None = None) -> None:
         """Re-export imaging letter PDFs after imaging lines or dx picks change."""
         exam = (self.current_exam.get() or "").strip()
@@ -3962,6 +4856,9 @@ class App(tk.Tk):
             tpl = (self.imaging_letter_templates.get(mod_key) or "").strip()
             if tpl:
                 self._clear_imaging_letter_visit_override(exam, modality or "")
+            rx_tpl = (self.imaging_rx_templates.get(mod_key) or "").strip()
+            if rx_tpl:
+                self._clear_imaging_rx_visit_override(exam, modality or "")
         payload = self.make_payload() or {}
         pr = self.get_current_patient_root() or ""
         if not pr:
@@ -4164,6 +5061,263 @@ class App(tk.Tk):
 
         self.wait_window(dlg)
 
+    def _resolve_imaging_rx_vault_path(self, patient_root: str, exam: str, modality: str) -> str:
+        """Newest vault/imaging Rx PDF for this exam + modality."""
+        exam_slug = safe_slug(exam).lower()
+        mod_slug = safe_slug(modality).lower().replace(" ", "_")
+        vault_dir = os.path.join(patient_root, "vault", "imaging")
+        if not os.path.isdir(vault_dir):
+            return ""
+        needle = f"__{exam_slug}__rx_{mod_slug}.pdf"
+        matches: list[str] = []
+        try:
+            for fn in os.listdir(vault_dir):
+                low = fn.lower()
+                if low.endswith(needle) and "__archived_" not in low:
+                    matches.append(os.path.join(vault_dir, fn))
+        except Exception:
+            return ""
+        if not matches:
+            return ""
+        try:
+            return max(matches, key=os.path.getmtime)
+        except Exception:
+            return matches[0]
+
+    def _open_imaging_rx_prescription(self, modality: str) -> None:
+        """Generate Rx PDF (vault/imaging), then open the prescription text editor."""
+        exam = (self.current_exam.get() or "").strip()
+        if not exam:
+            messagebox.showwarning(
+                "Imaging Rx Prescription",
+                "No exam (visit) is selected.\n\nChoose an exam tab first.",
+                parent=self,
+            )
+            return
+        if not self._ensure_reportlab():
+            return
+
+        self._load_global_letter_preferences()
+
+        payload = self.make_payload() or {}
+        pr = self.get_current_patient_root() or ""
+        if pr:
+            try:
+                vault_paths = self._export_imaging_recommendation_letter_vault(payload, pr)
+                mod_slug = safe_slug(modality).lower().replace(" ", "_")
+                rx_pdf = ""
+                for pth in vault_paths or []:
+                    low = os.path.basename(pth).lower()
+                    if f"__rx_{mod_slug}.pdf" in low:
+                        rx_pdf = pth
+                        break
+                if not rx_pdf:
+                    messagebox.showwarning(
+                        "Imaging Rx Prescription",
+                        f"No Rx PDF was generated for {modality}.\n\n"
+                        "Add this modality under Imaging Recommendations on the Diagnosis page, "
+                        "then try again (or use Master Save).",
+                        parent=self,
+                    )
+                try:
+                    self.write_settings({
+                        "last_imaging_letter_pdfs": self.last_imaging_letter_pdf_paths,
+                        "imaging_letter_dx_selections": self.imaging_letter_dx_selections,
+                        "imaging_letter_text_overrides": self.imaging_letter_text_overrides,
+                        "imaging_rx_text_overrides": self.imaging_rx_text_overrides,
+                    })
+                except Exception:
+                    pass
+                try:
+                    self.doc_vault_page.refresh_current_folder()
+                except Exception:
+                    pass
+            except Exception as e:
+                messagebox.showerror(
+                    "Imaging Rx Prescription",
+                    f"Could not create the Rx PDF:\n\n{e}",
+                    parent=self,
+                )
+        else:
+            messagebox.showinfo(
+                "Imaging Rx Prescription",
+                "Load or create a patient chart first to generate Rx PDFs "
+                "(they save under Doc Vault → imaging).\n\n"
+                "You can still edit prescription text below.",
+                parent=self,
+            )
+
+        mod_key = (modality or "").strip().lower()
+        selected = self._stored_imaging_dx_for_modality(payload, exam, modality)
+        if not selected:
+            raw = (self.imaging_letter_dx_selections.get(exam, {}) or {}).get(mod_key, {})
+            selected = raw if isinstance(raw, dict) else {}
+
+        current_text = self._effective_imaging_rx_text(payload, modality, selected, exam=exam)
+
+        dlg = tk.Toplevel(self)
+        dlg.title(f"{modality} Rx Prescription Editor")
+        dlg.transient(self)
+        dlg.grab_set()
+
+        outer = ttk.Frame(dlg, padding=10)
+        outer.grid(row=0, column=0, sticky="nsew")
+        dlg.rowconfigure(0, weight=1)
+        dlg.columnconfigure(0, weight=1)
+        outer.rowconfigure(3, weight=1)
+        outer.columnconfigure(0, weight=1)
+
+        tk.Label(
+            outer,
+            text=IMAGING_RX_SYMBOL_TEXT,
+            font=IMAGING_RX_SYMBOL_TK_FONT,
+            anchor="w",
+        ).grid(row=0, column=0, sticky="w", pady=(0, 4))
+
+        ttk.Label(
+            outer,
+            text="Edit the prescription order text (one study block per region):",
+        ).grid(row=1, column=0, sticky="w", pady=(0, 6))
+
+        spacing_row = ttk.Frame(outer)
+        spacing_row.grid(row=2, column=0, sticky="w", pady=(0, 6))
+        ttk.Label(spacing_row, text="Line spacing:").pack(side="left")
+        spacing_var = tk.StringVar(value=self._imaging_rx_line_spacing_for_modality(modality))
+
+        def _apply_spacing_choice(*_args):
+            val = txt.get("1.0", "end").replace("\r\n", "\n").rstrip("\n")
+            new_val = imaging_rx_apply_line_spacing_to_text(val, spacing_var.get())
+            txt.delete("1.0", "end")
+            txt.insert("1.0", new_val)
+
+        ttk.Radiobutton(
+            spacing_row,
+            text="Single",
+            variable=spacing_var,
+            value=IMAGING_RX_LINE_SPACING_SINGLE,
+            command=_apply_spacing_choice,
+        ).pack(side="left", padx=(8, 0))
+        ttk.Radiobutton(
+            spacing_row,
+            text="Double",
+            variable=spacing_var,
+            value=IMAGING_RX_LINE_SPACING_DOUBLE,
+            command=_apply_spacing_choice,
+        ).pack(side="left", padx=(8, 0))
+
+        txt = tk.Text(outer, wrap="word", width=92, height=16, font=("Segoe UI", 10))
+        txt.grid(row=3, column=0, sticky="nsew")
+        txt.insert("1.0", current_text)
+
+        btns = ttk.Frame(outer)
+        btns.grid(row=4, column=0, sticky="e", pady=(8, 0))
+
+        def _persist_rx_line_spacing():
+            chosen = (spacing_var.get() or IMAGING_RX_LINE_SPACING_SINGLE).strip().lower()
+            if chosen not in (IMAGING_RX_LINE_SPACING_SINGLE, IMAGING_RX_LINE_SPACING_DOUBLE):
+                chosen = IMAGING_RX_LINE_SPACING_SINGLE
+            if not hasattr(self, "imaging_rx_line_spacing") or not isinstance(
+                self.imaging_rx_line_spacing, dict
+            ):
+                self.imaging_rx_line_spacing = {}
+            self.imaging_rx_line_spacing[mod_key] = chosen
+            try:
+                self.write_settings({"imaging_rx_line_spacing": self.imaging_rx_line_spacing})
+            except Exception:
+                pass
+
+        def _save_as_default_template():
+            _persist_rx_line_spacing()
+            val = txt.get("1.0", "end").replace("\r\n", "\n").rstrip("\n")
+            if not val.strip():
+                messagebox.showwarning(
+                    "Save as default",
+                    "Prescription text is empty — nothing to save as the default template.",
+                    parent=dlg,
+                )
+                return
+            tpl = imaging_rx_prescription_edited_to_template(
+                val, payload, modality, selected
+            )
+            if not tpl:
+                messagebox.showwarning(
+                    "Save as default",
+                    "Could not build a template from this prescription.",
+                    parent=dlg,
+                )
+                return
+            if not hasattr(self, "imaging_rx_templates") or not isinstance(
+                self.imaging_rx_templates, dict
+            ):
+                self.imaging_rx_templates = {}
+            self.imaging_rx_templates[mod_key] = tpl
+            self._clear_imaging_rx_modality_overrides_all_exams(modality)
+            try:
+                self.write_settings({
+                    "imaging_rx_templates": self.imaging_rx_templates,
+                    "imaging_rx_line_spacing": self.imaging_rx_line_spacing,
+                    "imaging_rx_text_overrides": self.imaging_rx_text_overrides,
+                    "imaging_rx_content_signatures": self.imaging_rx_content_signatures,
+                })
+            except Exception:
+                pass
+            try:
+                self._sync_imaging_letter_after_chart_change(modality)
+            except Exception:
+                pass
+            messagebox.showinfo(
+                "Save as default",
+                f"Default template saved for {modality} Rx prescriptions.\n\n"
+                "This format will be used for this visit, future visits, and all patients. "
+                "Order lines will still update from each chart when you use {ORDERS}.",
+                parent=dlg,
+            )
+
+        def _save_close():
+            _persist_rx_line_spacing()
+            val = txt.get("1.0", "end").replace("\r\n", "\n").rstrip("\n")
+            if val.strip():
+                if not hasattr(self, "imaging_rx_text_overrides") or not isinstance(
+                    self.imaging_rx_text_overrides, dict
+                ):
+                    self.imaging_rx_text_overrides = {}
+                em = self.imaging_rx_text_overrides.get(exam, {})
+                if not isinstance(em, dict):
+                    em = {}
+                em[mod_key] = val
+                self.imaging_rx_text_overrides[exam] = em
+                if not hasattr(self, "imaging_rx_content_signatures") or not isinstance(
+                    self.imaging_rx_content_signatures, dict
+                ):
+                    self.imaging_rx_content_signatures = {}
+                sig_exam = self.imaging_rx_content_signatures.setdefault(exam, {})
+                sig_exam[mod_key] = self._imaging_letter_content_signature(
+                    payload, modality, selected
+                )
+                try:
+                    self.write_settings({
+                        "imaging_rx_text_overrides": self.imaging_rx_text_overrides,
+                        "imaging_rx_content_signatures": self.imaging_rx_content_signatures,
+                    })
+                except Exception:
+                    pass
+                try:
+                    payload_now = self.make_payload() or {}
+                    pr_now = self.get_current_patient_root() or ""
+                    if pr_now:
+                        self._export_imaging_recommendation_letter_vault(payload_now, pr_now)
+                except Exception:
+                    pass
+            dlg.destroy()
+
+        ttk.Button(btns, text="Save as Default", command=_save_as_default_template).grid(
+            row=0, column=0, padx=(0, 6)
+        )
+        ttk.Button(btns, text="Cancel", command=dlg.destroy).grid(row=0, column=1, padx=(0, 6))
+        ttk.Button(btns, text="Save", command=_save_close).grid(row=0, column=2)
+
+        self.wait_window(dlg)
+
     @staticmethod
     def _staff_modalities_signature_from_payload(payload: dict) -> str:
         """Stable fingerprint of staff letter mappings (regions + exclusions)."""
@@ -4299,6 +5453,7 @@ class App(tk.Tk):
                 self.last_imaging_letter_pdf_paths[exam] = []
                 self.imaging_letter_dx_selections[exam] = {}
                 self.imaging_letter_text_overrides[exam] = {}
+                self.imaging_rx_text_overrides[exam] = {}
             except Exception:
                 pass
             return []
@@ -4327,10 +5482,19 @@ class App(tk.Tk):
             em_ov = {}
         trimmed_ov = {k: v for k, v in em_ov.items() if k in keep_keys}
         self.imaging_letter_text_overrides[exam] = trimmed_ov
+        rx_ov = self.imaging_rx_text_overrides.get(exam, {})
+        if not isinstance(rx_ov, dict):
+            rx_ov = {}
+        self.imaging_rx_text_overrides[exam] = {k: v for k, v in rx_ov.items() if k in keep_keys}
         sig_exam = self.imaging_letter_content_signatures.get(exam, {})
         if isinstance(sig_exam, dict):
             trimmed_sig = {k: v for k, v in sig_exam.items() if k in keep_keys}
             self.imaging_letter_content_signatures[exam] = trimmed_sig
+        rx_sig_exam = self.imaging_rx_content_signatures.get(exam, {})
+        if isinstance(rx_sig_exam, dict):
+            self.imaging_rx_content_signatures[exam] = {
+                k: v for k, v in rx_sig_exam.items() if k in keep_keys
+            }
 
         exam_selection_map: dict[str, dict[str, str]] = {}
         for mod in modalities:
@@ -4339,6 +5503,9 @@ class App(tk.Tk):
             picked = selected_by_modality.get(mod_key, {})
             exam_selection_map[mod_key] = dict(picked)
             letter_text_override = self._effective_imaging_letter_text(
+                payload, mod, picked, exam=exam
+            )
+            rx_text_override = self._effective_imaging_rx_text(
                 payload, mod, picked, exam=exam
             )
             vault_name = f"{date_slug}__{exam_slug}__letter_{mod_slug}.pdf"
@@ -4359,6 +5526,28 @@ class App(tk.Tk):
                 try:
                     if os.path.exists(tmp_path):
                         os.remove(tmp_path)
+                except Exception:
+                    pass
+
+            rx_vault_name = f"{date_slug}__{exam_slug}__rx_{mod_slug}.pdf"
+            rx_tmp_path = os.path.join(pdf_dir, f".tmp_imaging_rx__{exam_slug}__{mod_slug}.pdf")
+            try:
+                if build_imaging_rx_prescription_pdf(
+                    rx_tmp_path,
+                    payload,
+                    mod,
+                    picked,
+                    rx_text_override,
+                    line_spacing=self._imaging_rx_line_spacing_for_modality(mod),
+                ):
+                    vp_rx = upsert_vault_file(patient_root, "imaging", rx_tmp_path, rx_vault_name)
+                    vault_paths.append(vp_rx)
+            except Exception as e:
+                print("Imaging Rx prescription vault upsert failed:", e)
+            finally:
+                try:
+                    if os.path.exists(rx_tmp_path):
+                        os.remove(rx_tmp_path)
                 except Exception:
                     pass
 
@@ -4386,9 +5575,14 @@ class App(tk.Tk):
             for mk in list((self.imaging_letter_text_overrides.get(exam) or {}).keys()):
                 if mk not in modalities_seen:
                     self._clear_imaging_letter_visit_override(exam, mk)
+            for mk in list((self.imaging_rx_text_overrides.get(exam) or {}).keys()):
+                if mk not in modalities_seen:
+                    self._clear_imaging_rx_visit_override(exam, mk)
             for mk in modalities_seen:
                 if (self.imaging_letter_templates.get(mk) or "").strip():
                     self._clear_imaging_letter_visit_override(exam, mk)
+                if (self.imaging_rx_templates.get(mk) or "").strip():
+                    self._clear_imaging_rx_visit_override(exam, mk)
         pr = self.get_current_patient_root() or ""
         try:
             self._export_imaging_recommendation_letter_vault(payload, pr)
@@ -4399,6 +5593,7 @@ class App(tk.Tk):
                 "last_imaging_letter_pdfs": self.last_imaging_letter_pdf_paths,
                 "imaging_letter_dx_selections": self.imaging_letter_dx_selections,
                 "imaging_letter_text_overrides": self.imaging_letter_text_overrides,
+                "imaging_rx_text_overrides": self.imaging_rx_text_overrides,
             })
         except Exception:
             pass
@@ -4538,7 +5733,10 @@ class App(tk.Tk):
             "last_work_status_letter_pdfs": self.last_work_status_letter_pdf_paths,
             "imaging_letter_dx_selections": self.imaging_letter_dx_selections,
             "imaging_letter_text_overrides": self.imaging_letter_text_overrides,
+            "imaging_rx_text_overrides": self.imaging_rx_text_overrides,
             "referral_letter_text_overrides": self.referral_letter_text_overrides,
+            "referral_rx_text_overrides": self.referral_rx_text_overrides,
+            "referral_rx_dx_selections": self.referral_rx_dx_selections,
             "work_status_letter_text_overrides": self.work_status_letter_text_overrides,
             "work_status_letter_content_signatures": self.work_status_letter_content_signatures,
             "modalities_letter_text_overrides": self.modalities_letter_text_overrides,
@@ -5066,10 +6264,12 @@ class App(tk.Tk):
             on_add_imaging_callback=self._on_imaging_recommendation_added,
             on_click_imaging_callback=self._on_imaging_recommendation_clicked,
             on_open_imaging_letter_callback=self._open_imaging_recommendation_letter_editor,
+            on_open_imaging_rx_callback=self._open_imaging_rx_prescription,
             on_imaging_recs_removed_callback=self._on_imaging_recs_changed_cleanup,
             on_add_referral_callback=self._on_referral_added,
             on_click_referral_callback=self._on_referral_clicked,
             on_open_referral_letter_callback=self._open_referral_recommendation_letter_editor,
+            on_open_referral_rx_callback=self._open_referral_rx_prescription,
             on_referrals_removed_callback=self._on_referrals_changed_cleanup,
             on_open_work_status_letter_callback=self._open_work_status_letter_editor,
             on_work_status_changed_callback=self._on_work_status_changed,
@@ -6102,6 +7302,7 @@ class App(tk.Tk):
             self.last_work_status_letter_pdf_paths = {e: "" for e in exams_list}
             self.imaging_letter_dx_selections = {e: {} for e in exams_list}
             self.imaging_letter_text_overrides = {e: {} for e in exams_list}
+            self.imaging_rx_text_overrides = {e: {} for e in exams_list}
             self.referral_letter_text_overrides = {e: {} for e in exams_list}
             self.work_status_letter_text_overrides = {e: "" for e in exams_list}
             self.work_status_letter_content_signatures = {e: "" for e in exams_list}
@@ -6373,6 +7574,73 @@ class App(tk.Tk):
                 if cleaned_sigs:
                     self.imaging_letter_content_signatures[exam_clean] = cleaned_sigs
 
+        rx_tpl_map = settings.get("imaging_rx_templates", {})
+        self.imaging_rx_templates = {}
+        if isinstance(rx_tpl_map, dict):
+            for mod_key, raw_tpl in rx_tpl_map.items():
+                if not isinstance(mod_key, str) or not isinstance(raw_tpl, str):
+                    continue
+                mk = mod_key.strip().lower()
+                tpl = _collapse_rx_orders_token(raw_tpl.replace("\r\n", "\n"))
+                if mk and tpl.strip():
+                    self.imaging_rx_templates[mk] = tpl
+
+        rx_spacing_map = settings.get("imaging_rx_line_spacing", {})
+        self.imaging_rx_line_spacing = {}
+        if isinstance(rx_spacing_map, dict):
+            for mod_key, raw_spacing in rx_spacing_map.items():
+                if not isinstance(mod_key, str) or not isinstance(raw_spacing, str):
+                    continue
+                mk = mod_key.strip().lower()
+                sp = raw_spacing.strip().lower()
+                if mk and sp in (IMAGING_RX_LINE_SPACING_SINGLE, IMAGING_RX_LINE_SPACING_DOUBLE):
+                    self.imaging_rx_line_spacing[mk] = sp
+
+        rx_txt_map = settings.get("imaging_rx_text_overrides", {})
+        if isinstance(rx_txt_map, dict):
+            if not hasattr(self, "imaging_rx_text_overrides") or not isinstance(
+                self.imaging_rx_text_overrides, dict
+            ):
+                self.imaging_rx_text_overrides = {}
+            for exam, mod_map in rx_txt_map.items():
+                if not isinstance(exam, str) or not isinstance(mod_map, dict):
+                    continue
+                exam_clean = exam.strip()
+                if not exam_clean:
+                    continue
+                cleaned_mods: dict[str, str] = {}
+                for mod_key, raw_text in mod_map.items():
+                    if not isinstance(mod_key, str) or not isinstance(raw_text, str):
+                        continue
+                    mk = mod_key.strip().lower()
+                    if mk:
+                        cleaned_mods[mk] = raw_text.replace("\r\n", "\n")
+                if cleaned_mods:
+                    self.imaging_rx_text_overrides[exam_clean] = cleaned_mods
+
+        rx_sig_map = settings.get("imaging_rx_content_signatures", {})
+        if isinstance(rx_sig_map, dict):
+            if not hasattr(self, "imaging_rx_content_signatures") or not isinstance(
+                self.imaging_rx_content_signatures, dict
+            ):
+                self.imaging_rx_content_signatures = {}
+            for exam, mod_map in rx_sig_map.items():
+                if not isinstance(exam, str) or not isinstance(mod_map, dict):
+                    continue
+                exam_clean = exam.strip()
+                if not exam_clean:
+                    continue
+                cleaned_sigs: dict[str, str] = {}
+                for mod_key, sig in mod_map.items():
+                    if not isinstance(mod_key, str) or not isinstance(sig, str):
+                        continue
+                    mk = mod_key.strip().lower()
+                    sig_clean = sig.strip()
+                    if mk and sig_clean:
+                        cleaned_sigs[mk] = sig_clean
+                if cleaned_sigs:
+                    self.imaging_rx_content_signatures[exam_clean] = cleaned_sigs
+
         ref_tpl_map = settings.get("referral_letter_templates", {})
         self.referral_letter_templates = {}
         if isinstance(ref_tpl_map, dict):
@@ -6428,6 +7696,88 @@ class App(tk.Tk):
                         cleaned_sigs[pk] = sig_clean
                 if cleaned_sigs:
                     self.referral_letter_content_signatures[exam_clean] = cleaned_sigs
+
+        ref_rx_tpl_map = settings.get("referral_rx_templates", {})
+        self.referral_rx_templates = {}
+        if isinstance(ref_rx_tpl_map, dict):
+            for prov_key, raw_tpl in ref_rx_tpl_map.items():
+                if not isinstance(prov_key, str) or not isinstance(raw_tpl, str):
+                    continue
+                pk = prov_key.strip().lower()
+                tpl = _collapse_rx_orders_token(raw_tpl.replace("\r\n", "\n"))
+                if pk and tpl.strip():
+                    self.referral_rx_templates[pk] = tpl
+
+        ref_rx_spacing_map = settings.get("referral_rx_line_spacing", {})
+        self.referral_rx_line_spacing = {}
+        if isinstance(ref_rx_spacing_map, dict):
+            for prov_key, raw_spacing in ref_rx_spacing_map.items():
+                if not isinstance(prov_key, str) or not isinstance(raw_spacing, str):
+                    continue
+                pk = prov_key.strip().lower()
+                sp = raw_spacing.strip().lower()
+                if pk and sp in (IMAGING_RX_LINE_SPACING_SINGLE, IMAGING_RX_LINE_SPACING_DOUBLE):
+                    self.referral_rx_line_spacing[pk] = sp
+
+        ref_rx_txt_map = settings.get("referral_rx_text_overrides", {})
+        if isinstance(ref_rx_txt_map, dict):
+            if not hasattr(self, "referral_rx_text_overrides") or not isinstance(
+                self.referral_rx_text_overrides, dict
+            ):
+                self.referral_rx_text_overrides = {}
+            for exam, prov_map in ref_rx_txt_map.items():
+                if not isinstance(exam, str) or not isinstance(prov_map, dict):
+                    continue
+                exam_clean = exam.strip()
+                if not exam_clean:
+                    continue
+                cleaned_provs: dict[str, str] = {}
+                for prov_key, raw_text in prov_map.items():
+                    if not isinstance(prov_key, str) or not isinstance(raw_text, str):
+                        continue
+                    pk = prov_key.strip().lower()
+                    if pk:
+                        cleaned_provs[pk] = raw_text.replace("\r\n", "\n")
+                if cleaned_provs:
+                    self.referral_rx_text_overrides[exam_clean] = cleaned_provs
+
+        ref_rx_sig_map = settings.get("referral_rx_content_signatures", {})
+        if isinstance(ref_rx_sig_map, dict):
+            if not hasattr(self, "referral_rx_content_signatures") or not isinstance(
+                self.referral_rx_content_signatures, dict
+            ):
+                self.referral_rx_content_signatures = {}
+            for exam, prov_map in ref_rx_sig_map.items():
+                if not isinstance(exam, str) or not isinstance(prov_map, dict):
+                    continue
+                exam_clean = exam.strip()
+                if not exam_clean:
+                    continue
+                cleaned_sigs: dict[str, str] = {}
+                for prov_key, sig in prov_map.items():
+                    if not isinstance(prov_key, str) or not isinstance(sig, str):
+                        continue
+                    pk = prov_key.strip().lower()
+                    sig_clean = sig.strip()
+                    if pk and sig_clean:
+                        cleaned_sigs[pk] = sig_clean
+                if cleaned_sigs:
+                    self.referral_rx_content_signatures[exam_clean] = cleaned_sigs
+
+        ref_rx_bp_dx_map = settings.get("referral_rx_dx_selections", {})
+        if isinstance(ref_rx_bp_dx_map, dict):
+            if not hasattr(self, "referral_rx_dx_selections") or not isinstance(
+                self.referral_rx_dx_selections, dict
+            ):
+                self.referral_rx_dx_selections = {}
+            for prov_key, sel in ref_rx_bp_dx_map.items():
+                if not isinstance(prov_key, str) or not isinstance(sel, dict):
+                    continue
+                pk = prov_key.strip().lower()
+                bp = (sel.get("body_part") or "").strip()
+                icd = (sel.get("icd") or "").strip()
+                if pk and bp:
+                    self.referral_rx_dx_selections[pk] = {"body_part": bp, "icd": icd}
 
         ws_tpl_map = settings.get("work_status_letter_templates", {})
         self.work_status_letter_templates = {}
@@ -7989,7 +9339,10 @@ class App(tk.Tk):
             "last_work_status_letter_pdfs": self.last_work_status_letter_pdf_paths,
             "imaging_letter_dx_selections": self.imaging_letter_dx_selections,
             "imaging_letter_text_overrides": self.imaging_letter_text_overrides,
+            "imaging_rx_text_overrides": self.imaging_rx_text_overrides,
             "referral_letter_text_overrides": self.referral_letter_text_overrides,
+            "referral_rx_text_overrides": self.referral_rx_text_overrides,
+            "referral_rx_dx_selections": self.referral_rx_dx_selections,
             "work_status_letter_text_overrides": self.work_status_letter_text_overrides,
             "work_status_letter_content_signatures": self.work_status_letter_content_signatures,
             "modalities_letter_text_overrides": self.modalities_letter_text_overrides,
@@ -8141,6 +9494,7 @@ class App(tk.Tk):
         self.last_work_status_letter_pdf_paths = {e: "" for e in self.exams}
         self.imaging_letter_dx_selections = {e: {} for e in self.exams}
         self.imaging_letter_text_overrides = {e: {} for e in self.exams}
+        self.imaging_rx_text_overrides = {e: {} for e in self.exams}
         self.referral_letter_text_overrides = {e: {} for e in self.exams}
         self.work_status_letter_text_overrides = {e: "" for e in self.exams}
         self.work_status_letter_content_signatures = {e: "" for e in self.exams}

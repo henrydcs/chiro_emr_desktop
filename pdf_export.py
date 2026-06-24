@@ -361,8 +361,9 @@ def _ordered_imaging_body_parts_unique(dx_struct: dict) -> list[str]:
         bp = (r.get("body_part") or "").strip()
         if not bp or bp == "(select)":
             continue
-        if bp not in seen:
-            seen.add(bp)
+        nk = _norm_imaging_body_part_key(bp)
+        if nk not in seen:
+            seen.add(nk)
             out.append(bp)
     return out
 
@@ -1572,6 +1573,614 @@ def build_imaging_recommendation_letter_pdf(
         return True
     except Exception:
         return False
+
+
+def _ordered_referral_body_parts_for_rx(dx_struct: dict) -> list[str]:
+    """Clinical regions for referral Rx orders (imaging regions first, else dx-matched)."""
+    if not isinstance(dx_struct, dict):
+        return []
+    parts = _ordered_imaging_body_parts_unique(dx_struct)
+    if parts:
+        return parts
+    out: list[str] = []
+    blocks = dx_struct.get("blocks") or []
+    if not isinstance(blocks, list):
+        return out
+    for bp in _IMAGING_BODY_PART_MATCH_HINTS:
+        for b in blocks:
+            if isinstance(b, dict) and _diagnosis_block_matches_imaging_body_part(b, bp):
+                out.append(bp)
+                break
+    return out
+
+
+IMAGING_RX_ORDERS_TOKEN = "{ORDERS}"
+IMAGING_RX_SYMBOL_TEXT = "Rx"
+IMAGING_RX_SYMBOL_FONT = "Times-Bold"
+IMAGING_RX_SYMBOL_SIZE = 38
+IMAGING_RX_SYMBOL_TK_FONT = ("Times New Roman", IMAGING_RX_SYMBOL_SIZE, "bold")
+IMAGING_RX_LINE_SPACING_SINGLE = "single"
+IMAGING_RX_LINE_SPACING_DOUBLE = "double"
+
+
+def _collapse_rx_orders_token(text: str) -> str:
+    """One {ORDERS} token — legacy templates may have duplicated placeholders."""
+    tpl = (text or "").replace("\r\n", "\n")
+    token = IMAGING_RX_ORDERS_TOKEN
+    while f"{token}\n{token}" in tpl:
+        tpl = tpl.replace(f"{token}\n{token}", token)
+    return tpl
+
+
+def _rx_edited_text_to_orders_template(
+    edited_text: str,
+    study_blocks: list[list[str]],
+) -> str | None:
+    """Replace one or more contiguous factory order blocks with a single {ORDERS} token."""
+    text = (edited_text or "").replace("\r\n", "\n").strip()
+    if not text or not study_blocks:
+        return None
+    lines = text.split("\n")
+    out: list[str] = []
+    i = 0
+    orders_seen = False
+    while i < len(lines):
+        matched = False
+        for block in study_blocks:
+            blines = [(ln or "").strip() for ln in block if (ln or "").strip()]
+            if not blines:
+                continue
+            n = len(blines)
+            if i + n > len(lines):
+                continue
+            chunk = [(lines[i + j] or "").strip() for j in range(n)]
+            if chunk == blines:
+                if not orders_seen:
+                    out.append(IMAGING_RX_ORDERS_TOKEN)
+                    orders_seen = True
+                i += n
+                while i < len(lines) and not (lines[i] or "").strip():
+                    i += 1
+                matched = True
+                break
+        if not matched:
+            out.append(lines[i])
+            i += 1
+    if not orders_seen:
+        return None
+    return "\n".join(out).replace("\r\n", "\n")
+
+
+def imaging_rx_prescription_study_blocks(
+    payload: dict,
+    modality: str,
+    selected_icd_by_body_part: dict[str, str] | None = None,
+) -> list[list[str]]:
+    """One block per body part: ['MRI of the Cervical Spine', 'Dx Code: M50.20'], ..."""
+    sub = _payload_with_single_imaging_modality(payload, modality)
+    sub_dx = (sub.get("soap") or {}).get("diagnosis_struct") or {}
+    if not isinstance(sub_dx, dict):
+        return []
+    body_parts = _ordered_imaging_body_parts_unique(sub_dx)
+    if not body_parts:
+        return []
+
+    full_dx = (payload.get("soap") or {}).get("diagnosis_struct") or {}
+    mod = (modality or "").strip()
+    all_chart_icds = _unique_icds_from_dx_struct(full_dx) if isinstance(full_dx, dict) else []
+    blocks: list[list[str]] = []
+    for bp in body_parts:
+        picked = ""
+        if selected_icd_by_body_part is not None:
+            picked = _icd_from_body_part_selection_map(selected_icd_by_body_part, bp)
+        if not picked and isinstance(full_dx, dict):
+            picked = _icd_first_match_for_single_body_part(full_dx, bp)
+        if not picked and len(body_parts) == 1 and len(all_chart_icds) == 1:
+            picked = all_chart_icds[0]
+        block = [f"{mod} of the {bp}"]
+        if picked:
+            block.append(f"Dx Code: {picked}")
+        blocks.append(block)
+    return blocks
+
+
+def imaging_rx_join_study_blocks(
+    blocks: list[list[str]],
+    line_spacing: str = IMAGING_RX_LINE_SPACING_SINGLE,
+) -> str:
+    """Join study blocks; double spacing inserts a blank line between blocks."""
+    parts: list[str] = []
+    spacing = (line_spacing or IMAGING_RX_LINE_SPACING_SINGLE).strip().lower()
+    for i, block in enumerate(blocks):
+        parts.extend(ln for ln in block if (ln or "").strip())
+        if i < len(blocks) - 1 and spacing == IMAGING_RX_LINE_SPACING_DOUBLE:
+            parts.append("")
+    return "\n".join(parts)
+
+
+def imaging_rx_regroup_editable_text(text: str) -> list[list[str]]:
+    """
+    Parse Rx editor/PDF text into study blocks.
+    A new block starts on a study line ('… of the …') that is not a Dx Code line.
+    """
+    blocks: list[list[str]] = []
+    current: list[str] = []
+    for raw in (text or "").replace("\r\n", "\n").split("\n"):
+        line = raw.strip()
+        if not line:
+            if current:
+                blocks.append(current)
+                current = []
+            continue
+        is_dx = line.lower().startswith("dx code")
+        low = line.lower()
+        is_study = (
+            ((" of the " in low) or low.startswith("refer to"))
+            and not is_dx
+        )
+        if is_study and current:
+            blocks.append(current)
+            current = [line]
+        else:
+            current.append(line)
+    if current:
+        blocks.append(current)
+    return blocks
+
+
+def imaging_rx_apply_line_spacing_to_text(
+    text: str,
+    line_spacing: str = IMAGING_RX_LINE_SPACING_SINGLE,
+) -> str:
+    blocks = imaging_rx_regroup_editable_text(text)
+    if not blocks:
+        return (text or "").replace("\r\n", "\n").strip()
+    return imaging_rx_join_study_blocks(blocks, line_spacing)
+
+
+def imaging_rx_dedupe_study_blocks_text(
+    text: str,
+    line_spacing: str = IMAGING_RX_LINE_SPACING_SINGLE,
+) -> str:
+    """Remove duplicate study blocks (e.g. legacy templates that expanded {ORDERS} twice)."""
+    blocks = imaging_rx_regroup_editable_text(text)
+    if not blocks:
+        return (text or "").replace("\r\n", "\n").strip()
+    seen: set[tuple[str, ...]] = set()
+    unique: list[list[str]] = []
+    for block in blocks:
+        key = tuple((ln or "").strip() for ln in block if (ln or "").strip())
+        if not key or key in seen:
+            continue
+        seen.add(key)
+        unique.append([(ln or "").strip() for ln in block if (ln or "").strip()])
+    if not unique:
+        return (text or "").replace("\r\n", "\n").strip()
+    return imaging_rx_join_study_blocks(unique, line_spacing)
+
+
+def imaging_rx_prescription_lines(
+    payload: dict,
+    modality: str,
+    selected_icd_by_body_part: dict[str, str] | None = None,
+) -> list[str]:
+    """Flat non-empty lines for one prescription (one block per body part)."""
+    blocks = imaging_rx_prescription_study_blocks(payload, modality, selected_icd_by_body_part)
+    return [ln for block in blocks for ln in block]
+
+
+def imaging_rx_prescription_should_generate(payload: dict, modality: str) -> bool:
+    return bool(imaging_rx_prescription_study_blocks(payload, modality))
+
+
+def imaging_rx_prescription_editable_text(
+    payload: dict,
+    modality: str,
+    selected_icd_by_body_part: dict[str, str] | None = None,
+    *,
+    line_spacing: str = IMAGING_RX_LINE_SPACING_SINGLE,
+) -> str:
+    """Default Rx body for editor and PDF."""
+    blocks = imaging_rx_prescription_study_blocks(payload, modality, selected_icd_by_body_part)
+    return imaging_rx_join_study_blocks(blocks, line_spacing)
+
+
+def imaging_rx_prescription_from_template(
+    template: str,
+    payload: dict,
+    modality: str,
+    selected_icd_by_body_part: dict[str, str] | None = None,
+    *,
+    line_spacing: str = IMAGING_RX_LINE_SPACING_SINGLE,
+) -> str:
+    tpl = _collapse_rx_orders_token((template or "").replace("\r\n", "\n"))
+    if not tpl.strip() or IMAGING_RX_ORDERS_TOKEN not in tpl:
+        return ""
+    orders = imaging_rx_prescription_editable_text(
+        payload, modality, selected_icd_by_body_part, line_spacing=line_spacing
+    )
+    return tpl.replace(IMAGING_RX_ORDERS_TOKEN, orders, 1).replace("\r\n", "\n")
+
+
+def imaging_rx_prescription_edited_to_template(
+    edited_text: str,
+    payload: dict,
+    modality: str,
+    selected_icd_by_body_part: dict[str, str] | None = None,
+) -> str:
+    text = (edited_text or "").replace("\r\n", "\n").strip()
+    if not text:
+        return ""
+    for spacing in (IMAGING_RX_LINE_SPACING_SINGLE, IMAGING_RX_LINE_SPACING_DOUBLE):
+        orders = imaging_rx_prescription_editable_text(
+            payload, modality, selected_icd_by_body_part, line_spacing=spacing
+        )
+        if orders and orders in text:
+            return text.replace(orders, IMAGING_RX_ORDERS_TOKEN, 1)
+    blocks = imaging_rx_prescription_study_blocks(payload, modality, selected_icd_by_body_part)
+    mapped = _rx_edited_text_to_orders_template(text, blocks)
+    if mapped is not None:
+        return mapped
+    return text.replace("\r\n", "\n")
+
+
+def referral_rx_prescription_study_blocks(
+    payload: dict,
+    provider_type: str,
+    selected_icd_by_body_part: dict[str, str] | None = None,
+) -> list[list[str]]:
+    """One consolidated block for the provider: all body parts joined on a single referral
+    line, each Dx code on its own line.  A specialist referral covers all regions in one
+    order — the provider name must not repeat once per region."""
+    prov = (provider_type or "").strip()
+    if not prov:
+        return []
+
+    dx_struct = ((payload or {}).get("soap") or {}).get("diagnosis_struct") or {}
+    if not isinstance(dx_struct, dict):
+        return []
+
+    body_parts = _ordered_referral_body_parts_for_rx(dx_struct)
+    full_dx = dx_struct
+    all_chart_icds = _unique_icds_from_dx_struct(full_dx)
+
+    if not body_parts:
+        picked = all_chart_icds[0] if len(all_chart_icds) == 1 else ""
+        block = [f"Refer to {prov} for specialist evaluation"]
+        if picked:
+            block.append(f"Dx Code: {picked}")
+        return [block]
+
+    # Collect one ICD per body part.
+    bp_icd_pairs: list[tuple[str, str]] = []
+    for bp in body_parts:
+        picked = ""
+        if selected_icd_by_body_part is not None:
+            picked = _icd_from_body_part_selection_map(selected_icd_by_body_part, bp)
+        if not picked:
+            picked = _icd_first_match_for_single_body_part(full_dx, bp)
+        if not picked and len(body_parts) == 1 and len(all_chart_icds) == 1:
+            picked = all_chart_icds[0]
+        bp_icd_pairs.append((bp, picked))
+
+    # Build a single "Refer to …" line that names all regions.
+    if len(bp_icd_pairs) == 1:
+        bp, picked = bp_icd_pairs[0]
+        block = [f"Refer to {prov} for evaluation of the {bp}"]
+        if picked:
+            block.append(f"Dx Code: {picked}")
+    else:
+        parts_list = [bp for bp, _ in bp_icd_pairs]
+        if len(parts_list) == 2:
+            region_phrase = f"{parts_list[0]} and {parts_list[1]}"
+        else:
+            region_phrase = ", ".join(parts_list[:-1]) + ", and " + parts_list[-1]
+        block = [f"Refer to {prov} for evaluation of the {region_phrase}"]
+        for _, picked in bp_icd_pairs:
+            if picked:
+                block.append(f"Dx Code: {picked}")
+
+    return [block]
+
+
+def referral_rx_prescription_should_generate(payload: dict, provider_type: str) -> bool:
+    return bool(referral_rx_prescription_study_blocks(payload, provider_type))
+
+
+def referral_rx_prescription_editable_text(
+    payload: dict,
+    provider_type: str,
+    selected_icd_by_body_part: dict[str, str] | None = None,
+    *,
+    line_spacing: str = IMAGING_RX_LINE_SPACING_SINGLE,
+) -> str:
+    blocks = referral_rx_prescription_study_blocks(
+        payload, provider_type, selected_icd_by_body_part
+    )
+    return imaging_rx_join_study_blocks(blocks, line_spacing)
+
+
+def referral_rx_text_from_explicit_selection(
+    provider_type: str,
+    body_part: str,
+    icd: str = "",
+    *,
+    line_spacing: str = IMAGING_RX_LINE_SPACING_SINGLE,
+) -> str:
+    """Build referral Rx order text from a user-chosen body part + ICD.
+
+    Produces a single-block Rx (one referral line + optional Dx Code line).
+    The *line_spacing* parameter is accepted for interface symmetry but does
+    not affect the generated text (no blank lines are inserted in a single
+    block).
+    """
+    prov = (provider_type or "").strip()
+    bp = (body_part or "").strip()
+    icd_clean = (icd or "").strip()
+    if not prov:
+        return ""
+    if bp:
+        lines = [f"Refer to {prov} for evaluation of the {bp}"]
+    else:
+        lines = [f"Refer to {prov} for specialist evaluation"]
+    if icd_clean:
+        lines.append(f"Dx Code: {icd_clean}")
+    return "\n".join(lines)
+
+
+def referral_rx_prescription_from_template(
+    template: str,
+    payload: dict,
+    provider_type: str,
+    selected_icd_by_body_part: dict[str, str] | None = None,
+    *,
+    line_spacing: str = IMAGING_RX_LINE_SPACING_SINGLE,
+) -> str:
+    tpl = _collapse_rx_orders_token((template or "").replace("\r\n", "\n"))
+    if not tpl.strip() or IMAGING_RX_ORDERS_TOKEN not in tpl:
+        return ""
+    orders = referral_rx_prescription_editable_text(
+        payload, provider_type, selected_icd_by_body_part, line_spacing=line_spacing
+    )
+    return tpl.replace(IMAGING_RX_ORDERS_TOKEN, orders, 1).replace("\r\n", "\n")
+
+
+def referral_rx_prescription_edited_to_template(
+    edited_text: str,
+    payload: dict,
+    provider_type: str,
+    selected_icd_by_body_part: dict[str, str] | None = None,
+) -> str:
+    text = (edited_text or "").replace("\r\n", "\n").strip()
+    if not text:
+        return ""
+    for spacing in (IMAGING_RX_LINE_SPACING_SINGLE, IMAGING_RX_LINE_SPACING_DOUBLE):
+        orders = referral_rx_prescription_editable_text(
+            payload, provider_type, selected_icd_by_body_part, line_spacing=spacing
+        )
+        if orders and orders in text:
+            return text.replace(orders, IMAGING_RX_ORDERS_TOKEN, 1)
+    blocks = referral_rx_prescription_study_blocks(
+        payload, provider_type, selected_icd_by_body_part
+    )
+    mapped = _rx_edited_text_to_orders_template(text, blocks)
+    if mapped is not None:
+        return mapped
+    return text.replace("\r\n", "\n")
+
+
+def _draw_imaging_rx_double_rule(canvas_obj, left: float, right: float, y: float) -> None:
+    """Thick + thin rule pair (prescription pad style)."""
+    canvas_obj.setLineWidth(2.0)
+    canvas_obj.line(left, y, right, y)
+    canvas_obj.setLineWidth(0.5)
+    canvas_obj.line(left, y - 4, right, y - 4)
+
+
+def _draw_imaging_rx_prescription_page(
+    canvas_obj,
+    doc,
+    *,
+    patient_name: str,
+    dob: str,
+    exam_date: str,
+    provider: str,
+) -> None:
+    """Stationery for official Rx-style imaging prescription (header, footer)."""
+    page_w, page_h = LETTER
+    left = 72
+    right = page_w - 72
+    center_x = page_w / 2.0
+    clinic = (CLINIC_NAME or "").strip()
+    addr = (CLINIC_ADDR or "").strip()
+
+    # Clinic name + address centered under header band
+    name_y = page_h - 42
+    if clinic:
+        canvas_obj.setFont("Times-Bold", 15)
+        canvas_obj.drawCentredString(center_x, name_y, clinic.upper())
+    if addr:
+        canvas_obj.setFont("Times-Roman", 11)
+        canvas_obj.drawCentredString(center_x, name_y - 16, addr)
+
+    # PRESCRIPTION title (centered; Rx symbol is drawn below the patient rule)
+    title_y = page_h - 95
+    canvas_obj.setFont("Times-Bold", 18)
+    try:
+        canvas_obj.setCharSpace(3.5)
+        canvas_obj.drawCentredString(center_x, title_y, "PRESCRIPTION")
+        canvas_obj.setCharSpace(0)
+    except Exception:
+        canvas_obj.drawCentredString(center_x, title_y, "PRESCRIPTION")
+
+    # Patient name + DOB — value text aligned to a common column
+    field_font = "Times-Roman"
+    field_size = 12
+    field_y = page_h - 142
+    canvas_obj.setFont(field_font, field_size)
+    try:
+        from reportlab.pdfbase.pdfmetrics import stringWidth
+        value_x = left + stringWidth("Patient Name:", field_font, field_size) + 8
+    except Exception:
+        value_x = left + 92
+
+    canvas_obj.drawString(left, field_y, "Patient Name:")
+    if patient_name:
+        canvas_obj.drawString(value_x + 2, field_y, patient_name)
+    canvas_obj.setLineWidth(0.75)
+    canvas_obj.line(value_x, field_y - 3, right, field_y - 3)
+
+    field_y -= 26
+    canvas_obj.drawString(left, field_y, "DOB:")
+    if dob:
+        canvas_obj.drawString(value_x + 2, field_y, dob)
+    canvas_obj.line(value_x, field_y - 3, right, field_y - 3)
+
+    field_y -= 26
+    canvas_obj.drawString(left, field_y, "Date:")
+    if exam_date:
+        canvas_obj.drawString(value_x + 2, field_y, exam_date)
+    canvas_obj.line(value_x, field_y - 3, right, field_y - 3)
+
+    rule_y = field_y - 10
+    _draw_imaging_rx_double_rule(canvas_obj, left, right, rule_y)
+
+    # Rx below the rule, above the order text (body flowables)
+    rx_baseline = rule_y - 48
+    canvas_obj.setFont(IMAGING_RX_SYMBOL_FONT, IMAGING_RX_SYMBOL_SIZE)
+    canvas_obj.drawString(left + 4, rx_baseline, IMAGING_RX_SYMBOL_TEXT)
+
+    footer_y = 98
+    canvas_obj.setFont("Times-Roman", 12)
+    canvas_obj.drawString(left, footer_y, "Date:")
+    date_x = left + 38
+    if exam_date:
+        canvas_obj.drawString(date_x + 2, footer_y, exam_date)
+    canvas_obj.setLineWidth(0.75)
+    canvas_obj.line(date_x, footer_y - 3, left + 210, footer_y - 3)
+
+    sig_label_x = right - 220
+    canvas_obj.drawString(sig_label_x, footer_y, "Signature:")
+    sig_x = sig_label_x + 72
+    sig_line_y = footer_y - 3
+    canvas_obj.line(sig_x, sig_line_y, right, sig_line_y)
+    if provider:
+        canvas_obj.drawString(sig_x + 2, sig_line_y - 16, provider)
+
+
+def _build_rx_style_prescription_pdf(
+    path: str,
+    payload: dict,
+    raw_lines: list[str],
+) -> bool:
+    """Shared Rx pad PDF body (imaging + provider referral prescriptions)."""
+    if not REPORTLAB_OK:
+        return False
+    if not any((ln or "").strip() for ln in raw_lines):
+        return False
+
+    patient = payload.get("patient") or {}
+    if not isinstance(patient, dict):
+        patient = {}
+    last = (patient.get("last_name") or "").strip()
+    first = (patient.get("first_name") or "").strip()
+    display = (patient.get("display_name") or "").strip() or f"{last}, {first}".strip(", ")
+    dob = normalize_mmddyyyy(patient.get("dob", "")) or (patient.get("dob") or "").strip()
+    exam_date = normalize_mmddyyyy(patient.get("exam_date", "")) or (patient.get("exam_date") or "").strip()
+    provider = (patient.get("provider") or PROVIDER_NAME or "").strip()
+
+    try:
+        styles = getSampleStyleSheet()
+        rx_body = ParagraphStyle(
+            name="ImagingRxBody",
+            parent=styles["BodyText"],
+            fontName="Times-Roman",
+            fontSize=14,
+            leading=16,
+            alignment=TA_LEFT,
+            spaceAfter=2,
+        )
+        if "ImagingRxBody" not in styles.byName:
+            styles.add(rx_body)
+
+        story: list = []
+        story.append(Spacer(1, 0.55 * inch))
+        for line in raw_lines:
+            if not (line or "").strip():
+                story.append(Spacer(1, 16))
+                continue
+            safe = xml_escape(line.strip())
+            story.append(Paragraph(safe, styles["ImagingRxBody"]))
+
+        def _on_page(c, d):
+            _draw_imaging_rx_prescription_page(
+                c,
+                d,
+                patient_name=display,
+                dob=dob,
+                exam_date=exam_date,
+                provider=provider,
+            )
+
+        doc = SimpleDocTemplate(
+            path,
+            pagesize=LETTER,
+            rightMargin=72,
+            leftMargin=72,
+            topMargin=304,
+            bottomMargin=120,
+        )
+        doc.build(story, onFirstPage=_on_page, onLaterPages=_on_page)
+        return True
+    except Exception:
+        return False
+
+
+def build_imaging_rx_prescription_pdf(
+    path: str,
+    payload: dict,
+    modality: str,
+    selected_icd_by_body_part: dict[str, str] | None = None,
+    editable_body_text: str | None = None,
+    line_spacing: str = IMAGING_RX_LINE_SPACING_SINGLE,
+) -> bool:
+    """
+    One-page Rx-style imaging prescription for a single modality.
+    Layout matches clinic prescription pad: clinic name/address, patient, orders, date/signature.
+    """
+    spacing = (line_spacing or IMAGING_RX_LINE_SPACING_SINGLE).strip().lower()
+    if spacing not in (IMAGING_RX_LINE_SPACING_SINGLE, IMAGING_RX_LINE_SPACING_DOUBLE):
+        spacing = IMAGING_RX_LINE_SPACING_SINGLE
+    body_src = (editable_body_text or "").replace("\r\n", "\n").rstrip("\n")
+    if body_src:
+        raw_lines = imaging_rx_dedupe_study_blocks_text(body_src, spacing).split("\n")
+    else:
+        raw_lines = imaging_rx_prescription_editable_text(
+            payload, modality, selected_icd_by_body_part, line_spacing=spacing
+        ).split("\n")
+    return _build_rx_style_prescription_pdf(path, payload, raw_lines)
+
+
+def build_referral_rx_prescription_pdf(
+    path: str,
+    payload: dict,
+    provider_type: str,
+    selected_icd_by_body_part: dict[str, str] | None = None,
+    editable_body_text: str | None = None,
+    line_spacing: str = IMAGING_RX_LINE_SPACING_SINGLE,
+) -> bool:
+    """One-page Rx-style provider referral prescription (Pain Management, Neurologist, etc.)."""
+    spacing = (line_spacing or IMAGING_RX_LINE_SPACING_SINGLE).strip().lower()
+    if spacing not in (IMAGING_RX_LINE_SPACING_SINGLE, IMAGING_RX_LINE_SPACING_DOUBLE):
+        spacing = IMAGING_RX_LINE_SPACING_SINGLE
+    body_src = (editable_body_text or "").replace("\r\n", "\n").rstrip("\n")
+    if body_src:
+        raw_lines = imaging_rx_dedupe_study_blocks_text(body_src, spacing).split("\n")
+    else:
+        raw_lines = referral_rx_prescription_editable_text(
+            payload, provider_type, selected_icd_by_body_part, line_spacing=spacing
+        ).split("\n")
+    return _build_rx_style_prescription_pdf(path, payload, raw_lines)
 
 
 # =======================================================

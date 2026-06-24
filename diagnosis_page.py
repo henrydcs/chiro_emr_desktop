@@ -308,10 +308,12 @@ class DiagnosisPage(ttk.Frame):
         on_add_imaging_callback=None,
         on_click_imaging_callback=None,
         on_open_imaging_letter_callback=None,
+        on_open_imaging_rx_callback=None,
         on_imaging_recs_removed_callback=None,
         on_add_referral_callback=None,
         on_click_referral_callback=None,
         on_open_referral_letter_callback=None,
+        on_open_referral_rx_callback=None,
         on_referrals_removed_callback=None,
         on_open_work_status_letter_callback=None,
         on_work_status_changed_callback=None,
@@ -322,10 +324,12 @@ class DiagnosisPage(ttk.Frame):
         self.on_add_imaging_callback = on_add_imaging_callback
         self.on_click_imaging_callback = on_click_imaging_callback
         self.on_open_imaging_letter_callback = on_open_imaging_letter_callback
+        self.on_open_imaging_rx_callback = on_open_imaging_rx_callback
         self.on_imaging_recs_removed_callback = on_imaging_recs_removed_callback
         self.on_add_referral_callback = on_add_referral_callback
         self.on_click_referral_callback = on_click_referral_callback
         self.on_open_referral_letter_callback = on_open_referral_letter_callback
+        self.on_open_referral_rx_callback = on_open_referral_rx_callback
         self.on_referrals_removed_callback = on_referrals_removed_callback
         self.on_open_work_status_letter_callback = on_open_work_status_letter_callback
         self.on_work_status_changed_callback = on_work_status_changed_callback
@@ -481,6 +485,26 @@ class DiagnosisPage(ttk.Frame):
                 text=f"{mod} Recommendation Letter",
                 command=lambda m=mod: self._open_imaging_letter_editor(m),
             ).pack(side="left", padx=(8, 0))
+            ttk.Button(
+                self.imaging_letter_btns,
+                text=f"{mod} Rx",
+                command=lambda m=mod: self._open_imaging_rx_prescription(m),
+            ).pack(side="left", padx=(4, 0))
+
+    def _open_imaging_rx_prescription(self, modality: str):
+        cb = getattr(self, "on_open_imaging_rx_callback", None)
+        if callable(cb):
+            try:
+                cb(modality)
+            except Exception as e:
+                try:
+                    messagebox.showerror(
+                        "Imaging Rx Prescription",
+                        f"Could not open the Rx prescription:\n\n{e}",
+                        parent=self.winfo_toplevel(),
+                    )
+                except Exception:
+                    pass
 
     def _open_imaging_letter_editor(self, modality: str):
         cb = getattr(self, "on_open_imaging_letter_callback", None)
@@ -596,6 +620,26 @@ class DiagnosisPage(ttk.Frame):
                 text=f"{p} Referral Letter",
                 command=lambda pp=p: self._open_referral_letter_editor(pp),
             ).pack(side="left", padx=(8, 0))
+            ttk.Button(
+                self.referral_letter_btns,
+                text=f"{p} Rx",
+                command=lambda pp=p: self._open_referral_rx_prescription(pp),
+            ).pack(side="left", padx=(4, 0))
+
+    def _open_referral_rx_prescription(self, provider_type: str):
+        cb = getattr(self, "on_open_referral_rx_callback", None)
+        if callable(cb):
+            try:
+                cb(provider_type)
+            except Exception as e:
+                try:
+                    messagebox.showerror(
+                        "Referral Rx Prescription",
+                        f"Could not open the Rx prescription:\n\n{e}",
+                        parent=self.winfo_toplevel(),
+                    )
+                except Exception:
+                    pass
 
     def _open_referral_letter_editor(self, provider_type: str):
         cb = getattr(self, "on_open_referral_letter_callback", None)
