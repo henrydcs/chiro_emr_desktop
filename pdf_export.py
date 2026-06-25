@@ -1928,6 +1928,49 @@ def referral_rx_text_from_explicit_selection(
     return "\n".join(lines)
 
 
+def referral_rx_text_from_explicit_selections(
+    provider_type: str,
+    selections: list,
+    *,
+    line_spacing: str = IMAGING_RX_LINE_SPACING_SINGLE,
+) -> str:
+    """Build referral Rx text from a list of {body_part, icd} dicts.
+
+    Multiple body parts are joined on a single referral line; each ICD code
+    appears on its own ``Dx Code:`` line.  Falls back to
+    ``referral_rx_text_from_explicit_selection`` for zero or one entries.
+    """
+    prov = (provider_type or "").strip()
+    if not prov:
+        return ""
+
+    valid: list[tuple[str, str]] = []
+    for item in selections or []:
+        bp = (item.get("body_part") or "").strip() if isinstance(item, dict) else ""
+        icd = (item.get("icd") or "").strip() if isinstance(item, dict) else ""
+        if bp:
+            valid.append((bp, icd))
+
+    if not valid:
+        return referral_rx_text_from_explicit_selection(provider_type, "", "", line_spacing=line_spacing)
+    if len(valid) == 1:
+        bp, icd = valid[0]
+        return referral_rx_text_from_explicit_selection(provider_type, bp, icd, line_spacing=line_spacing)
+
+    bps = [bp for bp, _ in valid]
+    if len(bps) == 2:
+        region_phrase = f"{bps[0]} and {bps[1]}"
+    else:
+        region_phrase = ", ".join(bps[:-1]) + ", and " + bps[-1]
+
+    block: list[str] = [f"Refer to {prov} for evaluation of the {region_phrase}"]
+    for _, icd in valid:
+        if icd:
+            block.append(f"Dx Code: {icd}")
+
+    return imaging_rx_join_study_blocks([block], line_spacing)
+
+
 def referral_rx_prescription_from_template(
     template: str,
     payload: dict,

@@ -83,6 +83,7 @@ from pdf_export import (
     referral_rx_prescription_edited_to_template,
     referral_rx_prescription_from_template,
     referral_rx_text_from_explicit_selection,
+    referral_rx_text_from_explicit_selections,
     IMAGING_RX_ORDERS_TOKEN,
     IMAGING_RX_SYMBOL_TEXT,
     IMAGING_RX_SYMBOL_TK_FONT,
@@ -420,7 +421,7 @@ class App(tk.Tk):
         self.referral_rx_line_spacing: dict[str, str] = {}
         self.referral_rx_content_signatures: dict[str, dict[str, str]] = {}
         # Explicit body-part + ICD selections from the Rx popup dropdowns, keyed by provider key.
-        self.referral_rx_dx_selections: dict[str, dict[str, str]] = {}
+        self.referral_rx_dx_selections: dict[str, list] = {}
         self.work_status_letter_text_overrides: dict[str, str] = {}
         self.work_status_letter_templates: dict[str, str] = {}
         self.work_status_letter_content_signatures: dict[str, str] = {}
@@ -3067,8 +3068,8 @@ class App(tk.Tk):
     # =====================================================================
 
     def _prompt_referral_rx_bp_dx(self, provider_type: str) -> None:
-        """Show a picker popup so the user can choose the body part and diagnosis
-        code for a specialist referral Rx.  Stores the selection in
+        """Show a picker popup so the user can choose one or more body parts and
+        diagnosis codes for a specialist referral Rx.  Stores the selection list in
         ``self.referral_rx_dx_selections`` and persists it to settings."""
         prov_key = (provider_type or "").strip().lower()
         if not prov_key:
@@ -3084,23 +3085,11 @@ class App(tk.Tk):
 
         body_part_labels: list[str] = list(REGION_LABELS.values())
 
-        # Restore previously stored selections for this provider.
-        stored = (self.referral_rx_dx_selections.get(prov_key) or {})
-        init_bp = (stored.get("body_part") or "").strip()
-        init_icd_str = (stored.get("icd") or "").strip()
-
-        # Find the display string that matches the stored ICD.
-        init_display = dx_displays[0] if dx_displays else ""
-        if init_icd_str:
-            for c in all_choices:
-                if isinstance(c, dict) and (c.get("icd") or "").strip() == init_icd_str:
-                    d = (c.get("display") or "").strip()
-                    if d:
-                        init_display = d
-                        break
+        # Restore previously stored selections for this provider (list format).
+        init_selections: list[dict] = self._get_referral_rx_selections(prov_key)
 
         dialog = tk.Toplevel(self)
-        dialog.title(f"Select Body Part & Diagnosis — {provider_type}")
+        dialog.title(f"Select Body Part(s) & Diagnosis Code(s) — {provider_type}")
         dialog.transient(self)
         dialog.grab_set()
         dialog.resizable(False, False)
@@ -3110,58 +3099,115 @@ class App(tk.Tk):
 
         ttk.Label(
             outer,
-            text=f"Choose the body part and diagnosis code for the {provider_type} referral Rx:",
-            wraplength=480,
-        ).grid(row=0, column=0, columnspan=2, sticky="w", pady=(0, 10))
+            text=f"Add one or more body parts and diagnosis codes for the {provider_type} referral Rx:",
+            wraplength=520,
+        ).grid(row=0, column=0, columnspan=4, sticky="w", pady=(0, 10))
 
-        ttk.Label(outer, text="Body part:").grid(row=1, column=0, sticky="w", padx=(0, 8))
-        bp_var = tk.StringVar(value=init_bp if init_bp in body_part_labels else (body_part_labels[0] if body_part_labels else ""))
-        bp_cb = ttk.Combobox(outer, textvariable=bp_var, state="readonly", values=body_part_labels, width=34)
-        bp_cb.grid(row=1, column=1, sticky="w")
+        # ── Selections list ──────────────────────────────────────────────
+        list_frame = ttk.LabelFrame(outer, text="Selections", padding=6)
+        list_frame.grid(row=1, column=0, columnspan=4, sticky="nsew", pady=(0, 8))
 
-        ttk.Label(outer, text="Diagnosis code:").grid(row=2, column=0, sticky="w", padx=(0, 8), pady=(8, 0))
-        dx_var = tk.StringVar(value=init_display)
-        dx_cb = ttk.Combobox(outer, textvariable=dx_var, state="readonly", values=dx_displays, width=60)
-        dx_cb.grid(row=2, column=1, sticky="w", pady=(8, 0))
-        if not dx_displays:
-            dx_cb.configure(state="disabled")
-            ttk.Label(
-                outer,
-                text="(No diagnosis codes in chart yet — add diagnoses first)",
-                foreground="gray",
-            ).grid(row=3, column=1, sticky="w", pady=(2, 0))
+        sel_listbox = tk.Listbox(list_frame, height=5, width=70, selectmode="single", activestyle="dotbox")
+        sel_listbox.grid(row=0, column=0, sticky="nsew")
+        sel_sb = ttk.Scrollbar(list_frame, orient="vertical", command=sel_listbox.yview)
+        sel_sb.grid(row=0, column=1, sticky="ns")
+        sel_listbox.configure(yscrollcommand=sel_sb.set)
 
-        picked_result: dict[str, str] | None = None
+        # Internal state: list of {body_part, icd} dicts mirroring the listbox.
+        current_selections: list[dict] = list(init_selections)
 
-        def _on_ok():
-            nonlocal picked_result
+        def _refresh_listbox():
+            sel_listbox.delete(0, "end")
+            for s in current_selections:
+                bp = s.get("body_part") or ""
+                icd = s.get("icd") or ""
+                label = f"{bp} — {icd}" if icd else bp
+                sel_listbox.insert("end", label)
+
+        _refresh_listbox()
+
+        # ── Remove button ─────────────────────────────────────────────────
+        def _remove_selected():
+            idx = sel_listbox.curselection()
+            if not idx:
+                return
+            i = idx[0]
+            if 0 <= i < len(current_selections):
+                current_selections.pop(i)
+                _refresh_listbox()
+
+        ttk.Button(list_frame, text="Remove selected", command=_remove_selected).grid(
+            row=1, column=0, sticky="w", pady=(4, 0)
+        )
+
+        # ── Add row ───────────────────────────────────────────────────────
+        add_frame = ttk.LabelFrame(outer, text="Add entry", padding=6)
+        add_frame.grid(row=2, column=0, columnspan=4, sticky="ew", pady=(0, 8))
+
+        ttk.Label(add_frame, text="Body part:").grid(row=0, column=0, sticky="w", padx=(0, 4))
+        bp_var = tk.StringVar(value=body_part_labels[0] if body_part_labels else "")
+        bp_cb = ttk.Combobox(add_frame, textvariable=bp_var, state="readonly", values=body_part_labels, width=28)
+        bp_cb.grid(row=0, column=1, sticky="w", padx=(0, 10))
+
+        ttk.Label(add_frame, text="Dx code:").grid(row=0, column=2, sticky="w", padx=(0, 4))
+        dx_var = tk.StringVar(value=dx_displays[0] if dx_displays else "")
+        dx_cb = ttk.Combobox(add_frame, textvariable=dx_var, state="readonly" if dx_displays else "disabled",
+                             values=dx_displays, width=42)
+        dx_cb.grid(row=0, column=3, sticky="w", padx=(0, 8))
+
+        def _add_entry():
             bp = (bp_var.get() or "").strip()
             if not bp:
                 messagebox.showwarning("Selection Required", "Please select a body part.", parent=dialog)
                 return
             disp = (dx_var.get() or "").strip()
             icd = (display_to_icd.get(disp) or "").strip() if disp else ""
-            picked_result = {"body_part": bp, "icd": icd}
+            current_selections.append({"body_part": bp, "icd": icd})
+            _refresh_listbox()
+            sel_listbox.see("end")
+
+        ttk.Button(add_frame, text="Add", command=_add_entry).grid(row=0, column=4, padx=(0, 2))
+
+        if not dx_displays:
+            ttk.Label(
+                add_frame,
+                text="(No diagnosis codes in chart yet — add diagnoses first)",
+                foreground="gray",
+            ).grid(row=1, column=2, columnspan=3, sticky="w", pady=(2, 0))
+
+        # ── OK / Cancel ───────────────────────────────────────────────────
+        confirmed = [False]
+
+        def _on_ok():
+            if not current_selections:
+                messagebox.showwarning(
+                    "No Selection",
+                    "Please add at least one body part before clicking OK.",
+                    parent=dialog,
+                )
+                return
+            confirmed[0] = True
             dialog.destroy()
 
         def _on_cancel():
             dialog.destroy()
 
         btns = ttk.Frame(outer)
-        btns.grid(row=4, column=0, columnspan=2, sticky="e", pady=(12, 0))
+        btns.grid(row=3, column=0, columnspan=4, sticky="e", pady=(4, 0))
         ttk.Button(btns, text="Cancel", command=_on_cancel).grid(row=0, column=0, padx=(0, 6))
-        ttk.Button(btns, text="OK", command=_on_ok).grid(row=0, column=1)
+        ttk.Button(btns, text="OK", command=_on_ok, default="active").grid(row=0, column=1)
         dialog.protocol("WM_DELETE_WINDOW", _on_cancel)
+        dialog.bind("<Return>", lambda _e: _on_ok())
         self.wait_window(dialog)
 
-        if picked_result is None:
+        if not confirmed[0]:
             return
 
         if not hasattr(self, "referral_rx_dx_selections") or not isinstance(
             self.referral_rx_dx_selections, dict
         ):
             self.referral_rx_dx_selections = {}
-        self.referral_rx_dx_selections[prov_key] = picked_result
+        self.referral_rx_dx_selections[prov_key] = current_selections
         try:
             self.write_settings({"referral_rx_dx_selections": self.referral_rx_dx_selections})
         except Exception:
@@ -3297,8 +3343,7 @@ class App(tk.Tk):
         payload: dict,
         provider_type: str,
         selected: dict[str, str],
-        explicit_bp: str = "",
-        explicit_icd: str = "",
+        explicit_selections: list | None = None,
     ) -> str:
         soap = (payload or {}).get("soap") or {}
         dx = soap.get("diagnosis_struct") or {}
@@ -3308,14 +3353,22 @@ class App(tk.Tk):
             for bp, icd in (selected or {}).items()
             if (bp or "").strip() and (icd or "").strip()
         }
+        # Normalise explicit selections to a sorted tuple-of-tuples for stable hashing.
+        explicit_norm = sorted(
+            (
+                (s.get("body_part") or "").strip().lower(),
+                (s.get("icd") or "").strip().upper(),
+            )
+            for s in (explicit_selections or [])
+            if isinstance(s, dict) and (s.get("body_part") or "").strip()
+        )
         try:
             return json.dumps(
                 {
                     "provider": (provider_type or "").strip().lower(),
                     "body_parts": list(body_parts),
                     "icds": icd_map,
-                    "explicit_bp": (explicit_bp or "").strip().lower(),
-                    "explicit_icd": (explicit_icd or "").strip().upper(),
+                    "explicit_selections": explicit_norm,
                 },
                 sort_keys=True,
                 default=str,
@@ -3375,6 +3428,25 @@ class App(tk.Tk):
                 if not sig_exam:
                     self.referral_rx_content_signatures.pop(exam_key, None)
 
+    def _get_referral_rx_selections(self, prov_key: str) -> list:
+        """Return normalised list[{body_part, icd}] for *prov_key*, handling both
+        the old single-dict format and the new list format transparently."""
+        raw = self.referral_rx_dx_selections.get(prov_key)
+        if isinstance(raw, dict):
+            bp = (raw.get("body_part") or "").strip()
+            icd = (raw.get("icd") or "").strip()
+            return [{"body_part": bp, "icd": icd}] if bp else []
+        if isinstance(raw, list):
+            result = []
+            for item in raw:
+                if isinstance(item, dict):
+                    bp = (item.get("body_part") or "").strip()
+                    icd = (item.get("icd") or "").strip()
+                    if bp:
+                        result.append({"body_part": bp, "icd": icd})
+            return result
+        return []
+
     def _effective_referral_rx_text(
         self,
         payload: dict,
@@ -3386,13 +3458,11 @@ class App(tk.Tk):
         prov_key = (provider_type or "").strip().lower()
         exam_key = (exam or self.current_exam.get() or "").strip()
 
-        # Explicit body part + ICD selections (set via popup dropdowns or picker).
-        explicit = (self.referral_rx_dx_selections.get(prov_key) or {})
-        explicit_bp = (explicit.get("body_part") or "").strip()
-        explicit_icd = (explicit.get("icd") or "").strip()
+        # Explicit body-part + ICD selections (list format, backward-compat).
+        explicit_selections = self._get_referral_rx_selections(prov_key)
 
         sig_now = self._referral_rx_content_signature(
-            payload, provider_type, selected, explicit_bp, explicit_icd
+            payload, provider_type, selected, explicit_selections
         )
         sig_saved = ""
         if exam_key:
@@ -3414,6 +3484,8 @@ class App(tk.Tk):
             (self.referral_rx_templates.get(prov_key) or "").replace("\r\n", "\n")
         )
         spacing = self._referral_rx_line_spacing_for_provider(provider_type)
+
+        # Dynamic template ({ORDERS} present) — always render from chart data.
         if tpl.strip() and IMAGING_RX_ORDERS_TOKEN in tpl:
             rendered = referral_rx_prescription_from_template(
                 tpl, payload, provider_type, selected, line_spacing=spacing
@@ -3421,11 +3493,16 @@ class App(tk.Tk):
             if rendered:
                 return imaging_rx_dedupe_study_blocks_text(rendered, line_spacing=spacing)
 
-        # If the user has explicitly selected a body part via the popup dropdowns, use that.
-        if explicit_bp:
-            return referral_rx_text_from_explicit_selection(
-                provider_type, explicit_bp, explicit_icd, line_spacing=spacing
+        # Explicit body-part / ICD selections take priority over any saved static
+        # template so that a new selection always overrides an old default.
+        if explicit_selections:
+            return referral_rx_text_from_explicit_selections(
+                provider_type, explicit_selections, line_spacing=spacing
             )
+
+        # Static template (no {ORDERS}) — last resort before factory fallback.
+        if tpl.strip():
+            return imaging_rx_apply_line_spacing_to_text(tpl, spacing)
 
         return self._factory_referral_rx_text(
             payload, provider_type, selected, line_spacing=spacing
@@ -3672,19 +3749,9 @@ class App(tk.Tk):
             ]
 
         body_part_labels: list[str] = list(REGION_LABELS.values())
-        stored_sel = (self.referral_rx_dx_selections.get(prov_key) or {})
-        init_bp = (stored_sel.get("body_part") or "").strip()
-        init_icd_val = (stored_sel.get("icd") or "").strip()
 
-        # Find the display string matching the stored ICD.
-        init_disp = dx_displays[0] if dx_displays else ""
-        if init_icd_val:
-            for c in all_dx_choices:
-                if isinstance(c, dict) and (c.get("icd") or "").strip() == init_icd_val:
-                    d = (c.get("display") or "").strip()
-                    if d:
-                        init_disp = d
-                        break
+        # Load stored selections (list format, backward-compat).
+        init_selections: list[dict] = self._get_referral_rx_selections(prov_key)
 
         current_text = self._effective_referral_rx_text(
             payload, provider_type, selected, exam=exam
@@ -3709,44 +3776,96 @@ class App(tk.Tk):
             anchor="w",
         ).grid(row=0, column=0, sticky="w", pady=(0, 4))
 
-        # ── Body part & Dx code selection row ──────────────────────────────
-        sel_frame = ttk.LabelFrame(outer, text="Referral details", padding=(8, 4))
+        # ── Multi-selection "Referral details" panel ────────────────────────
+        sel_frame = ttk.LabelFrame(outer, text="Referral details", padding=(8, 6))
         sel_frame.grid(row=1, column=0, sticky="ew", pady=(0, 8))
-        sel_frame.columnconfigure(1, weight=1)
-        sel_frame.columnconfigure(3, weight=2)
+        sel_frame.columnconfigure(0, weight=1)
 
-        ttk.Label(sel_frame, text="Body part:").grid(row=0, column=0, sticky="w", padx=(0, 6))
-        bp_var = tk.StringVar(value=init_bp if init_bp in body_part_labels else (body_part_labels[0] if body_part_labels else ""))
-        bp_cb = ttk.Combobox(
-            sel_frame, textvariable=bp_var, state="readonly", values=body_part_labels, width=28
-        )
-        bp_cb.grid(row=0, column=1, sticky="w")
+        # Listbox showing added (body_part, icd) pairs.
+        lbx_frame = ttk.Frame(sel_frame)
+        lbx_frame.grid(row=0, column=0, columnspan=5, sticky="ew", pady=(0, 4))
+        lbx_frame.columnconfigure(0, weight=1)
 
-        ttk.Label(sel_frame, text="Dx code:").grid(row=0, column=2, sticky="w", padx=(16, 6))
-        dx_var = tk.StringVar(value=init_disp)
-        dx_cb = ttk.Combobox(
-            sel_frame, textvariable=dx_var, state="readonly" if dx_displays else "disabled",
-            values=dx_displays, width=50
-        )
-        dx_cb.grid(row=0, column=3, sticky="w")
+        sel_listbox = tk.Listbox(lbx_frame, height=4, selectmode="single", activestyle="dotbox",
+                                 font=("Segoe UI", 9))
+        sel_listbox.grid(row=0, column=0, sticky="ew")
+        sel_lbx_sb = ttk.Scrollbar(lbx_frame, orient="vertical", command=sel_listbox.yview)
+        sel_lbx_sb.grid(row=0, column=1, sticky="ns")
+        sel_listbox.configure(yscrollcommand=sel_lbx_sb.set)
 
-        def _refresh_text_from_dropdowns(*_args):
-            bp = (bp_var.get() or "").strip()
-            disp = (dx_var.get() or "").strip()
-            icd = (display_to_icd.get(disp) or "").strip() if disp else ""
+        # Internal list mirrors the listbox.
+        popup_selections: list[dict] = list(init_selections)
+
+        def _refresh_sel_listbox():
+            sel_listbox.delete(0, "end")
+            for s in popup_selections:
+                bp_s = s.get("body_part") or ""
+                icd_s = s.get("icd") or ""
+                sel_listbox.insert("end", f"{bp_s} — {icd_s}" if icd_s else bp_s)
+
+        _refresh_sel_listbox()
+
+        def _refresh_text_from_selections():
             try:
                 spacing = spacing_var.get()
             except Exception:
                 spacing = self._referral_rx_line_spacing_for_provider(provider_type)
-            new_text = referral_rx_text_from_explicit_selection(
-                provider_type, bp, icd, line_spacing=spacing
+            new_text = referral_rx_text_from_explicit_selections(
+                provider_type, popup_selections, line_spacing=spacing
             )
             if new_text:
                 txt.delete("1.0", "end")
                 txt.insert("1.0", new_text)
 
-        bp_cb.bind("<<ComboboxSelected>>", _refresh_text_from_dropdowns)
-        dx_cb.bind("<<ComboboxSelected>>", _refresh_text_from_dropdowns)
+        def _remove_sel_entry():
+            idx = sel_listbox.curselection()
+            if not idx:
+                return
+            i = idx[0]
+            if 0 <= i < len(popup_selections):
+                popup_selections.pop(i)
+                _refresh_sel_listbox()
+                _refresh_text_from_selections()
+
+        ttk.Button(lbx_frame, text="Remove selected", command=_remove_sel_entry).grid(
+            row=1, column=0, sticky="w", pady=(2, 0)
+        )
+
+        # ── Add-entry row ────────────────────────────────────────────────────
+        add_row = ttk.Frame(sel_frame)
+        add_row.grid(row=1, column=0, columnspan=5, sticky="ew", pady=(6, 0))
+
+        ttk.Label(add_row, text="Body part:").grid(row=0, column=0, sticky="w", padx=(0, 4))
+        bp_var = tk.StringVar(value=body_part_labels[0] if body_part_labels else "")
+        bp_cb = ttk.Combobox(
+            add_row, textvariable=bp_var, state="readonly", values=body_part_labels, width=26
+        )
+        bp_cb.grid(row=0, column=1, sticky="w", padx=(0, 10))
+
+        ttk.Label(add_row, text="Dx code:").grid(row=0, column=2, sticky="w", padx=(0, 4))
+        dx_var = tk.StringVar(value=dx_displays[0] if dx_displays else "")
+        dx_cb = ttk.Combobox(
+            add_row, textvariable=dx_var,
+            state="readonly" if dx_displays else "disabled",
+            values=dx_displays, width=46
+        )
+        dx_cb.grid(row=0, column=3, sticky="w", padx=(0, 8))
+
+        def _add_sel_entry():
+            bp = (bp_var.get() or "").strip()
+            if not bp:
+                messagebox.showwarning(
+                    "Selection Required", "Please select a body part.", parent=dlg
+                )
+                return
+            disp = (dx_var.get() or "").strip()
+            icd = (display_to_icd.get(disp) or "").strip() if disp else ""
+            popup_selections.append({"body_part": bp, "icd": icd})
+            _refresh_sel_listbox()
+            sel_listbox.see("end")
+            _refresh_text_from_selections()
+
+        ttk.Button(add_row, text="Add", command=_add_sel_entry).grid(row=0, column=4)
 
         # ── Edit label ─────────────────────────────────────────────────────
         ttk.Label(
@@ -3850,23 +3969,17 @@ class App(tk.Tk):
                 parent=dlg,
             )
 
-        def _get_popup_explicit_bp_icd() -> tuple[str, str]:
-            """Return (body_part, icd) from the popup dropdowns."""
-            bp = (bp_var.get() or "").strip()
-            disp = (dx_var.get() or "").strip()
-            icd = (display_to_icd.get(disp) or "").strip() if disp else ""
-            return bp, icd
-
         def _persist_popup_selections():
-            """Save the body part + ICD selection from the popup dropdowns."""
-            bp, icd = _get_popup_explicit_bp_icd()
-            if not bp:
-                return
+            """Save (or clear) the current popup_selections list for this provider."""
             if not hasattr(self, "referral_rx_dx_selections") or not isinstance(
                 self.referral_rx_dx_selections, dict
             ):
                 self.referral_rx_dx_selections = {}
-            self.referral_rx_dx_selections[prov_key] = {"body_part": bp, "icd": icd}
+            if popup_selections:
+                self.referral_rx_dx_selections[prov_key] = list(popup_selections)
+            else:
+                # User removed all entries — clear the stored selection entirely.
+                self.referral_rx_dx_selections.pop(prov_key, None)
             try:
                 self.write_settings({"referral_rx_dx_selections": self.referral_rx_dx_selections})
             except Exception:
@@ -3875,7 +3988,7 @@ class App(tk.Tk):
         def _save_close():
             _persist_rx_line_spacing()
             _persist_popup_selections()
-            bp_now, icd_now = _get_popup_explicit_bp_icd()
+            selections_now = list(popup_selections)
             val = txt.get("1.0", "end").replace("\r\n", "\n").rstrip("\n")
             if not val.strip():
                 messagebox.showwarning(
@@ -3900,7 +4013,7 @@ class App(tk.Tk):
                 self.referral_rx_content_signatures = {}
             sig_exam = self.referral_rx_content_signatures.setdefault(exam, {})
             sig_exam[prov_key] = self._referral_rx_content_signature(
-                payload, provider_type, selected, bp_now, icd_now
+                payload, provider_type, selected, selections_now
             )
             try:
                 self.write_settings({
@@ -4240,18 +4353,42 @@ class App(tk.Tk):
                 pk = (r.get("provider_type") or "").strip().lower()
                 if pk and pk not in ("(select)", "none at this time"):
                     provs_seen.add(pk)
+        # Keys for providers that have just been removed from the referral list.
+        removed_pks: set[str] = set()
         if exam:
             for pk in list((self.referral_letter_text_overrides.get(exam) or {}).keys()):
                 if pk not in provs_seen:
                     self._clear_referral_letter_visit_override(exam, pk)
+                    removed_pks.add(pk)
             for pk in list((self.referral_rx_text_overrides.get(exam) or {}).keys()):
                 if pk not in provs_seen:
                     self._clear_referral_rx_visit_override(exam, pk)
+                    removed_pks.add(pk)
             for pk in provs_seen:
                 if (self.referral_letter_templates.get(pk) or "").strip():
                     self._clear_referral_letter_visit_override(exam, pk)
                 if (self.referral_rx_templates.get(pk) or "").strip():
                     self._clear_referral_rx_visit_override(exam, pk)
+
+        # Also detect removals from referral_rx_dx_selections (in case the exam
+        # key had no override but selections were stored for a now-deleted provider).
+        for pk in list(self.referral_rx_dx_selections.keys()):
+            if pk not in provs_seen:
+                removed_pks.add(pk)
+
+        # Clear stored body-part/ICD selections for every removed provider.
+        if removed_pks:
+            changed = False
+            for pk in removed_pks:
+                if pk in self.referral_rx_dx_selections:
+                    del self.referral_rx_dx_selections[pk]
+                    changed = True
+            if changed:
+                try:
+                    self.write_settings({"referral_rx_dx_selections": self.referral_rx_dx_selections})
+                except Exception:
+                    pass
+
         pr = self.get_current_patient_root() or ""
         try:
             self._export_referral_recommendation_letter_vault(payload, pr)
@@ -5101,10 +5238,10 @@ class App(tk.Tk):
 
         payload = self.make_payload() or {}
         pr = self.get_current_patient_root() or ""
+        mod_slug = safe_slug(modality).lower().replace(" ", "_")
         if pr:
             try:
                 vault_paths = self._export_imaging_recommendation_letter_vault(payload, pr)
-                mod_slug = safe_slug(modality).lower().replace(" ", "_")
                 rx_pdf = ""
                 for pth in vault_paths or []:
                     low = os.path.basename(pth).lower()
@@ -5276,45 +5413,99 @@ class App(tk.Tk):
         def _save_close():
             _persist_rx_line_spacing()
             val = txt.get("1.0", "end").replace("\r\n", "\n").rstrip("\n")
-            if val.strip():
-                if not hasattr(self, "imaging_rx_text_overrides") or not isinstance(
-                    self.imaging_rx_text_overrides, dict
-                ):
-                    self.imaging_rx_text_overrides = {}
-                em = self.imaging_rx_text_overrides.get(exam, {})
-                if not isinstance(em, dict):
-                    em = {}
-                em[mod_key] = val
-                self.imaging_rx_text_overrides[exam] = em
-                if not hasattr(self, "imaging_rx_content_signatures") or not isinstance(
-                    self.imaging_rx_content_signatures, dict
-                ):
-                    self.imaging_rx_content_signatures = {}
-                sig_exam = self.imaging_rx_content_signatures.setdefault(exam, {})
-                sig_exam[mod_key] = self._imaging_letter_content_signature(
-                    payload, modality, selected
+            if not val.strip():
+                messagebox.showwarning(
+                    "Save & Print",
+                    "Prescription text is empty — nothing to save or print.\n\n"
+                    "Edit the text above, then click 'Save & Print'.",
+                    parent=dlg,
                 )
-                try:
-                    self.write_settings({
-                        "imaging_rx_text_overrides": self.imaging_rx_text_overrides,
-                        "imaging_rx_content_signatures": self.imaging_rx_content_signatures,
-                    })
-                except Exception:
-                    pass
-                try:
-                    payload_now = self.make_payload() or {}
-                    pr_now = self.get_current_patient_root() or ""
-                    if pr_now:
-                        self._export_imaging_recommendation_letter_vault(payload_now, pr_now)
-                except Exception:
-                    pass
+                return
+            if not hasattr(self, "imaging_rx_text_overrides") or not isinstance(
+                self.imaging_rx_text_overrides, dict
+            ):
+                self.imaging_rx_text_overrides = {}
+            em = self.imaging_rx_text_overrides.get(exam, {})
+            if not isinstance(em, dict):
+                em = {}
+            em[mod_key] = val
+            self.imaging_rx_text_overrides[exam] = em
+            if not hasattr(self, "imaging_rx_content_signatures") or not isinstance(
+                self.imaging_rx_content_signatures, dict
+            ):
+                self.imaging_rx_content_signatures = {}
+            sig_exam = self.imaging_rx_content_signatures.setdefault(exam, {})
+            sig_exam[mod_key] = self._imaging_letter_content_signature(
+                payload, modality, selected
+            )
+            try:
+                self.write_settings({
+                    "imaging_rx_text_overrides": self.imaging_rx_text_overrides,
+                    "imaging_rx_content_signatures": self.imaging_rx_content_signatures,
+                })
+            except Exception:
+                pass
+            rx_pdf_path = ""
+            try:
+                payload_now = self.make_payload() or {}
+                pr_now = self.get_current_patient_root() or ""
+                if pr_now:
+                    new_vault_paths = self._export_imaging_recommendation_letter_vault(payload_now, pr_now)
+                    for vp in new_vault_paths or []:
+                        if f"__rx_{mod_slug}.pdf" in os.path.basename(vp).lower():
+                            rx_pdf_path = vp
+                            break
+                    try:
+                        self.doc_vault_page.refresh_current_folder()
+                    except Exception:
+                        pass
+                else:
+                    messagebox.showwarning(
+                        "No Patient Loaded",
+                        "No patient chart is currently loaded.\n\n"
+                        "Load a patient first so the Rx PDF can be saved to the vault.",
+                        parent=dlg,
+                    )
+            except Exception as exc:
+                messagebox.showerror(
+                    "Rx PDF Error",
+                    f"Could not generate the Rx PDF:\n\n{exc}",
+                    parent=dlg,
+                )
+            # Fall back to the most recent vault PDF if the export didn't produce a new one.
+            if not rx_pdf_path and pr:
+                rx_pdf_path = self._resolve_imaging_rx_vault_path(pr, exam, modality)
             dlg.destroy()
+            if rx_pdf_path and os.path.isfile(rx_pdf_path):
+                try:
+                    open_with_default_app(rx_pdf_path)
+                except Exception:
+                    pass
+
+        def _open_existing_imaging_rx_pdf():
+            """Open the most recently generated Rx PDF for this modality."""
+            rx_pdf = self._resolve_imaging_rx_vault_path(pr, exam, modality) if pr else ""
+            if rx_pdf and os.path.isfile(rx_pdf):
+                try:
+                    open_with_default_app(rx_pdf)
+                except Exception as exc:
+                    messagebox.showerror("Open PDF", str(exc), parent=dlg)
+            else:
+                messagebox.showinfo(
+                    "No PDF Yet",
+                    "No Rx PDF has been generated yet for this modality.\n\n"
+                    "Click 'Save & Print' to generate and open the PDF.",
+                    parent=dlg,
+                )
 
         ttk.Button(btns, text="Save as Default", command=_save_as_default_template).grid(
             row=0, column=0, padx=(0, 6)
         )
-        ttk.Button(btns, text="Cancel", command=dlg.destroy).grid(row=0, column=1, padx=(0, 6))
-        ttk.Button(btns, text="Save", command=_save_close).grid(row=0, column=2)
+        ttk.Button(btns, text="Open PDF", command=_open_existing_imaging_rx_pdf).grid(
+            row=0, column=1, padx=(0, 6)
+        )
+        ttk.Button(btns, text="Cancel", command=dlg.destroy).grid(row=0, column=2, padx=(0, 6))
+        ttk.Button(btns, text="Save & Print", command=_save_close).grid(row=0, column=3)
 
         self.wait_window(dlg)
 
@@ -7771,13 +7962,29 @@ class App(tk.Tk):
             ):
                 self.referral_rx_dx_selections = {}
             for prov_key, sel in ref_rx_bp_dx_map.items():
-                if not isinstance(prov_key, str) or not isinstance(sel, dict):
+                if not isinstance(prov_key, str):
                     continue
                 pk = prov_key.strip().lower()
-                bp = (sel.get("body_part") or "").strip()
-                icd = (sel.get("icd") or "").strip()
-                if pk and bp:
-                    self.referral_rx_dx_selections[pk] = {"body_part": bp, "icd": icd}
+                if not pk:
+                    continue
+                if isinstance(sel, list):
+                    # New list format: [{body_part, icd}, ...]
+                    cleaned: list[dict] = []
+                    for item in sel:
+                        if not isinstance(item, dict):
+                            continue
+                        bp = (item.get("body_part") or "").strip()
+                        icd = (item.get("icd") or "").strip()
+                        if bp:
+                            cleaned.append({"body_part": bp, "icd": icd})
+                    if cleaned:
+                        self.referral_rx_dx_selections[pk] = cleaned
+                elif isinstance(sel, dict):
+                    # Old single-dict format — upgrade to list on load.
+                    bp = (sel.get("body_part") or "").strip()
+                    icd = (sel.get("icd") or "").strip()
+                    if bp:
+                        self.referral_rx_dx_selections[pk] = [{"body_part": bp, "icd": icd}]
 
         ws_tpl_map = settings.get("work_status_letter_templates", {})
         self.work_status_letter_templates = {}
