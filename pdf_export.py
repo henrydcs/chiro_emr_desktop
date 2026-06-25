@@ -18,7 +18,7 @@ from HOIpdf import build_rof_flowables
 
 from config import (
     LOGO_PATH, CLINIC_NAME, CLINIC_ADDR, CLINIC_PHONE_FAX,
-    PROVIDER_NAME,
+    PROVIDER_NAME, PROVIDER_TITLE, PROVIDER_LICENSE, PROVIDER_NPI,
     REGION_LABELS,
 )
 from utils import normalize_mmddyyyy, today_mmddyyyy, build_sentence
@@ -2028,38 +2028,62 @@ def _draw_imaging_rx_prescription_page(
     dob: str,
     exam_date: str,
     provider: str,
+    title: str = "PRESCRIPTION",
+    subtitle: str = "",
+    layout: str = "prescription",
 ) -> None:
-    """Stationery for official Rx-style imaging prescription (header, footer)."""
+    """Stationery for official Rx-style imaging prescription (header, footer).
+
+    *layout* controls the area between the double rule and the order body:
+      ``"prescription"`` – large standalone Rx symbol (used by referral Rx letters).
+      ``"imaging"``      – title on same row as 'Rx — subtitle' label; no standalone symbol.
+    """
     page_w, page_h = LETTER
     left = 72
     right = page_w - 72
     center_x = page_w / 2.0
     clinic = (CLINIC_NAME or "").strip()
     addr = (CLINIC_ADDR or "").strip()
+    phone_fax = (CLINIC_PHONE_FAX or "").strip()
 
-    # Clinic name + address centered under header band
+    # Clinic name, address, and phone/fax centred at the top.
     name_y = page_h - 42
     if clinic:
         canvas_obj.setFont("Times-Bold", 15)
         canvas_obj.drawCentredString(center_x, name_y, clinic.upper())
+
+    # Track how far down the header has grown so patient fields can be shifted.
+    header_bottom_y = name_y
     if addr:
         canvas_obj.setFont("Times-Roman", 11)
         canvas_obj.drawCentredString(center_x, name_y - 16, addr)
+        header_bottom_y = name_y - 16
+    if phone_fax:
+        canvas_obj.setFont("Times-Roman", 10)
+        canvas_obj.drawCentredString(center_x, header_bottom_y - 14, phone_fax)
+        header_bottom_y = header_bottom_y - 14
 
-    # PRESCRIPTION title (centered; Rx symbol is drawn below the patient rule)
-    title_y = page_h - 95
-    canvas_obj.setFont("Times-Bold", 18)
-    try:
-        canvas_obj.setCharSpace(3.5)
-        canvas_obj.drawCentredString(center_x, title_y, "PRESCRIPTION")
-        canvas_obj.setCharSpace(0)
-    except Exception:
-        canvas_obj.drawCentredString(center_x, title_y, "PRESCRIPTION")
+    # For the "prescription" layout draw a centred title above the patient fields.
+    # The "imaging" layout omits this — the title moves to below the double rule.
+    if layout != "imaging":
+        title_y = page_h - (88 if subtitle else 95)
+        canvas_obj.setFont("Times-Bold", 15)
+        try:
+            canvas_obj.setCharSpace(2.5)
+            canvas_obj.drawCentredString(center_x, title_y, (title or "PRESCRIPTION").upper())
+            canvas_obj.setCharSpace(0)
+        except Exception:
+            canvas_obj.drawCentredString(center_x, title_y, (title or "PRESCRIPTION").upper())
+        if subtitle:
+            canvas_obj.setFont("Times-Italic", 11)
+            canvas_obj.drawCentredString(center_x, title_y - 16, subtitle)
 
-    # Patient name + DOB — value text aligned to a common column
+    # Patient name + DOB — shifted up by half the phone/fax line height when
+    # phone/fax is present so the gap between the header and the fields stays tidy.
     field_font = "Times-Roman"
     field_size = 12
-    field_y = page_h - 142
+    phone_fax_offset = 7 if phone_fax else 0   # half of the 14 pt phone row
+    field_y = page_h - 142 - phone_fax_offset
     canvas_obj.setFont(field_font, field_size)
     try:
         from reportlab.pdfbase.pdfmetrics import stringWidth
@@ -2088,10 +2112,53 @@ def _draw_imaging_rx_prescription_page(
     rule_y = field_y - 10
     _draw_imaging_rx_double_rule(canvas_obj, left, right, rule_y)
 
-    # Rx below the rule, above the order text (body flowables)
-    rx_baseline = rule_y - 48
-    canvas_obj.setFont(IMAGING_RX_SYMBOL_FONT, IMAGING_RX_SYMBOL_SIZE)
-    canvas_obj.drawString(left + 4, rx_baseline, IMAGING_RX_SYMBOL_TEXT)
+    if layout == "imaging":
+        # ── Imaging layout: title + "Rx - subtitle" below the rule ──────────
+        # One blank line (14pt) between the double rule and the title.
+        order_title_y = rule_y - 36   # rule gap (10) + line space (14) + baseline offset (12)
+
+        # Row 1: "OFFICIAL DIAGNOSTIC ORDER" — centred, bold, letter-spaced
+        # Font size matches the clinic name (15pt bold) for visual parity.
+        title_text = (title or "OFFICIAL DIAGNOSTIC ORDER").upper()
+        canvas_obj.setFont("Times-Bold", 15)
+        try:
+            canvas_obj.setCharSpace(1.5)
+            canvas_obj.drawCentredString(center_x, order_title_y, title_text)
+            canvas_obj.setCharSpace(0)
+        except Exception:
+            canvas_obj.drawCentredString(center_x, order_title_y, title_text)
+
+        # Row 2: "Rx" (slightly reduced from before) + " - subtitle" (smaller italic) — centred
+        rx_sub_y = order_title_y - 28
+        rx_font = "Times-Bold"
+        rx_size = 18
+        sub_font = "Times-Italic"
+        sub_size = 12
+        rx_label = "Rx"
+        sub_label = f" - {subtitle}" if subtitle else ""
+
+        try:
+            rx_w = stringWidth(rx_label, rx_font, rx_size)
+            sub_w = stringWidth(sub_label, sub_font, sub_size) if sub_label else 0
+            total_w = rx_w + sub_w
+            block_x = center_x - total_w / 2.0   # left edge of the combined block
+        except Exception:
+            block_x = left
+            rx_w = 26
+
+        canvas_obj.setFont(rx_font, rx_size)
+        canvas_obj.drawString(block_x, rx_sub_y, rx_label)
+
+        if sub_label:
+            # Vertically centre the smaller text against the larger "Rx"
+            sub_y = rx_sub_y + (rx_size - sub_size) / 3.0
+            canvas_obj.setFont(sub_font, sub_size)
+            canvas_obj.drawString(block_x + rx_w, sub_y, sub_label)
+    else:
+        # ── Prescription layout: standalone large Rx symbol ──────────────────
+        rx_baseline = rule_y - 48
+        canvas_obj.setFont(IMAGING_RX_SYMBOL_FONT, IMAGING_RX_SYMBOL_SIZE)
+        canvas_obj.drawString(left + 4, rx_baseline, IMAGING_RX_SYMBOL_TEXT)
 
     footer_y = 98
     canvas_obj.setFont("Times-Roman", 12)
@@ -2115,6 +2182,12 @@ def _build_rx_style_prescription_pdf(
     path: str,
     payload: dict,
     raw_lines: list[str],
+    *,
+    title: str = "PRESCRIPTION",
+    subtitle: str = "",
+    layout: str = "prescription",
+    top_margin: int = 304,
+    initial_spacer_pt: float = 39.6,
 ) -> bool:
     """Shared Rx pad PDF body (imaging + provider referral prescriptions)."""
     if not REPORTLAB_OK:
@@ -2147,7 +2220,8 @@ def _build_rx_style_prescription_pdf(
             styles.add(rx_body)
 
         story: list = []
-        story.append(Spacer(1, 0.55 * inch))
+        if initial_spacer_pt > 0:
+            story.append(Spacer(1, initial_spacer_pt))
         for line in raw_lines:
             if not (line or "").strip():
                 story.append(Spacer(1, 16))
@@ -2163,6 +2237,9 @@ def _build_rx_style_prescription_pdf(
                 dob=dob,
                 exam_date=exam_date,
                 provider=provider,
+                title=title,
+                subtitle=subtitle,
+                layout=layout,
             )
 
         doc = SimpleDocTemplate(
@@ -2170,7 +2247,7 @@ def _build_rx_style_prescription_pdf(
             pagesize=LETTER,
             rightMargin=72,
             leftMargin=72,
-            topMargin=304,
+            topMargin=top_margin,
             bottomMargin=120,
         )
         doc.build(story, onFirstPage=_on_page, onLaterPages=_on_page)
@@ -2187,13 +2264,19 @@ def build_imaging_rx_prescription_pdf(
     editable_body_text: str | None = None,
     line_spacing: str = IMAGING_RX_LINE_SPACING_SINGLE,
 ) -> bool:
+    """Imaging Rx prescription using the shared clinic header / page-number system.
+
+    Uses the same logo + clinic-info + patient-block + 'Title — Page N of N' header
+    as exam reports and referral letters.  The title 'Official Diagnostic Order'
+    appears in the running page header automatically.
     """
-    One-page Rx-style imaging prescription for a single modality.
-    Layout matches clinic prescription pad: clinic name/address, patient, orders, date/signature.
-    """
+    if not REPORTLAB_OK:
+        return False
+
     spacing = (line_spacing or IMAGING_RX_LINE_SPACING_SINGLE).strip().lower()
     if spacing not in (IMAGING_RX_LINE_SPACING_SINGLE, IMAGING_RX_LINE_SPACING_DOUBLE):
         spacing = IMAGING_RX_LINE_SPACING_SINGLE
+
     body_src = (editable_body_text or "").replace("\r\n", "\n").rstrip("\n")
     if body_src:
         raw_lines = imaging_rx_dedupe_study_blocks_text(body_src, spacing).split("\n")
@@ -2201,7 +2284,233 @@ def build_imaging_rx_prescription_pdf(
         raw_lines = imaging_rx_prescription_editable_text(
             payload, modality, selected_icd_by_body_part, line_spacing=spacing
         ).split("\n")
-    return _build_rx_style_prescription_pdf(path, payload, raw_lines)
+
+    if not any((ln or "").strip() for ln in raw_lines):
+        return False
+
+    patient = payload.get("patient") or {}
+    if not isinstance(patient, dict):
+        patient = {}
+    last = (patient.get("last_name") or "").strip()
+    first = (patient.get("first_name") or "").strip()
+    display = (patient.get("display_name") or "").strip() or f"{last}, {first}".strip(", ")
+    dob = normalize_mmddyyyy(patient.get("dob", "")) or (patient.get("dob") or "").strip()
+    doi = _doi_for_imaging_letter(patient, (payload.get("soap") or {}).get("hoi_struct") or {})
+    exam_date = normalize_mmddyyyy(patient.get("exam_date", "")) or today_mmddyyyy()
+
+    DOC_TITLE = "Official Diagnostic Order"
+
+    patient_header = {
+        "display_name": display,
+        "first_name": first,
+        "last_name": last,
+        "dob": dob,
+        "doi": doi or patient.get("doi") or "",
+        "provider": (patient.get("provider") or "").strip(),
+        "exam_date": exam_date,
+    }
+
+    try:
+        styles = getSampleStyleSheet()
+
+        order_title_style = ParagraphStyle(
+            name="ImagingRxOrderTitle",
+            parent=styles["Title"],
+            fontName="Helvetica-Bold",
+            fontSize=14,
+            leading=18,
+            spaceAfter=4,
+            alignment=1,
+        )
+        if "ImagingRxOrderTitle" not in styles.byName:
+            styles.add(order_title_style)
+
+        order_sub_style = ParagraphStyle(
+            name="ImagingRxOrderSub",
+            parent=styles["Normal"],
+            fontName="Helvetica-Oblique",
+            fontSize=11,
+            leading=14,
+            spaceAfter=8,
+            alignment=1,
+        )
+        if "ImagingRxOrderSub" not in styles.byName:
+            styles.add(order_sub_style)
+
+        rx_body_style = ParagraphStyle(
+            name="ImagingRxOrderBody",
+            parent=styles["BodyText"],
+            fontName="Helvetica",
+            fontSize=11,
+            leading=14,
+            alignment=TA_LEFT,
+            spaceAfter=0,
+        )
+        if "ImagingRxOrderBody" not in styles.byName:
+            styles.add(rx_body_style)
+
+        story: list = []
+
+        # Shared header — sets exam name for the running page header.
+        story.append(ExamStart(DOC_TITLE, patient_header, exam_date))
+        story.append(Spacer(1, 0.22 * inch))
+
+        # Centred document title + "Rx - Diagnostic Imaging" subscript.
+        story.append(Paragraph(xml_escape(DOC_TITLE), styles["ImagingRxOrderTitle"]))
+        story.append(Paragraph(
+            '<font size="13"><b>Rx</b></font>'
+            '<font size="11" color="grey"> - Diagnostic Imaging</font>',
+            order_sub_style,
+        ))
+        story.append(Spacer(1, 0.18 * inch))
+
+        # Order lines.
+        for line in raw_lines:
+            if not (line or "").strip():
+                story.append(Spacer(1, 0.12 * inch))
+                continue
+            story.append(Paragraph(xml_escape(line.strip()), styles["ImagingRxOrderBody"]))
+
+        # ── Provider demographics block + Date-signed / Signature footer ─────
+        from reportlab.platypus import HRFlowable
+
+        provider_name  = (patient.get("provider") or PROVIDER_NAME or "").strip()
+        prov_title     = (PROVIDER_TITLE or "").strip()
+        prov_license   = (PROVIDER_LICENSE or "").strip()
+        prov_npi       = (PROVIDER_NPI or "").strip()
+
+        demo_style = ParagraphStyle(
+            name="ImagingRxDemoLine",
+            fontName="Helvetica",
+            fontSize=11,
+            leading=16,
+            spaceAfter=0,
+        )
+        sig_style = ParagraphStyle(
+            name="ImagingRxSigLine",
+            fontName="Helvetica",
+            fontSize=11,
+            leading=14,
+            spaceAfter=0,
+        )
+
+        def _dashed_rule():
+            return HRFlowable(
+                width="100%", thickness=0.75,
+                color=colors.black,
+                dash=(3, 3),
+                spaceBefore=0, spaceAfter=0,
+            )
+
+        demo_lines: list = []
+        if provider_name:
+            demo_lines.append(Paragraph(
+                f"Ordering Provider:  {xml_escape(provider_name)}", demo_style
+            ))
+        if prov_title:
+            demo_lines.append(Paragraph(
+                f"Title:  {xml_escape(prov_title)}", demo_style
+            ))
+        if prov_license:
+            demo_lines.append(Paragraph(
+                f"State Licensure:  {xml_escape(prov_license)}", demo_style
+            ))
+        if prov_npi:
+            demo_lines.append(Paragraph(
+                f"National Provider Identifier <b>(NPI)</b>:  "
+                f"<b>{xml_escape(prov_npi)}</b>",
+                demo_style,
+            ))
+
+        # ── Signature row: 4-column table so each label has its own underline ──
+        # Cols: [date label | date line | sig label | sig line]
+        # Row 1: labels + their underlines
+        # Row 2: empty | empty | empty | provider name (below sig line)
+        prov_name_style = ParagraphStyle(
+            name="ImagingRxProvName",
+            fontName="Helvetica",
+            fontSize=10,
+            leading=13,
+            textColor=colors.HexColor("#333333"),
+        )
+
+        empty = Paragraph("", sig_style)
+        # 5 columns: [date label | date line | gap | sig label | sig line]
+        # Total text width at 72pt margins = 468 pt.
+        TOTAL_W = 468.0
+        date_label_col = 70.0
+        date_line_col = 120.0
+        gap_col = 30.0
+        # Size the provider-signature label column so the gap between its colon
+        # and underline matches the "Date signed:" gap exactly.
+        try:
+            from reportlab.pdfbase.pdfmetrics import stringWidth
+            date_lbl_w = stringWidth("Date signed:", "Helvetica", 11)
+            sig_lbl_w = stringWidth("Provider Signature:", "Helvetica", 11)
+            date_gap = date_label_col - date_lbl_w
+            sig_label_col = sig_lbl_w + date_gap
+        except Exception:
+            sig_label_col = 115.0
+        sig_line_col = TOTAL_W - date_label_col - date_line_col - gap_col - sig_label_col
+        sig_table = Table(
+            [
+                [
+                    Paragraph("Date signed:", sig_style),
+                    empty,
+                    empty,
+                    Paragraph("Provider Signature:", sig_style),
+                    empty,
+                ],
+                [
+                    empty, empty, empty, empty,
+                    Paragraph(xml_escape(provider_name), prov_name_style) if provider_name else empty,
+                ],
+            ],
+            colWidths=[date_label_col, date_line_col, gap_col, sig_label_col, sig_line_col],
+            hAlign="LEFT",
+        )
+        sig_table.setStyle(TableStyle([
+            # Underlines drawn under the date-line and sig-line cells, hugging the
+            # text baseline (VALIGN BOTTOM + tiny bottom pad) so they read inline.
+            ("LINEBELOW",     (1, 0), (1, 0), 0.75, colors.black),  # underline after date
+            ("LINEBELOW",     (4, 0), (4, 0), 0.75, colors.black),  # underline after sig
+            ("LEFTPADDING",   (0, 0), (-1, -1), 0),
+            ("RIGHTPADDING",  (0, 0), (-1, -1), 4),
+            ("VALIGN",        (0, 0), (-1, 0), "BOTTOM"),
+            ("TOPPADDING",    (0, 0), (-1, 0), 2),
+            ("BOTTOMPADDING", (0, 0), (-1, 0), 2),   # line sits just under the text baseline
+            ("VALIGN",        (0, 1), (-1, 1), "TOP"),
+            ("TOPPADDING",    (0, 1), (-1, 1), 3),   # small gap between line and name
+            ("BOTTOMPADDING", (0, 1), (-1, 1), 0),
+        ]))
+
+        footer_block: list = [
+            Spacer(1, 0.42 * inch),   # 3 blank lines after last order item
+            _dashed_rule(),
+            Spacer(1, 0.06 * inch),
+        ]
+        footer_block.extend(demo_lines)
+        footer_block += [
+            Spacer(1, 0.06 * inch),
+            _dashed_rule(),
+            Spacer(1, 0.56 * inch),   # 4 blank lines below second dashed rule
+            sig_table,
+        ]
+
+        story.append(KeepTogether(footer_block))
+
+        doc = SimpleDocTemplate(
+            path,
+            pagesize=LETTER,
+            rightMargin=72,
+            leftMargin=72,
+            topMargin=170,
+            bottomMargin=72,
+        )
+        doc.build(story, canvasmaker=HeaderExamNumberedCanvas)
+        return True
+    except Exception:
+        return False
 
 
 def build_referral_rx_prescription_pdf(

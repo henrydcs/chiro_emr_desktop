@@ -5,10 +5,13 @@ from paths import get_data_dir, patients_dir
 
 from env_config import get_env
 
-PROVIDER_NAME = get_env("PROVIDER_NAME", "")
-CLINIC_NAME = get_env("CLINIC_NAME", "Default Clinic Name")
-CLINIC_ADDR = get_env("CLINIC_ADDR", "")
-CLINIC_PHONE_FAX = get_env("CLINIC_PHONE_FAX", "")
+PROVIDER_NAME     = get_env("PROVIDER_NAME", "")
+PROVIDER_TITLE    = "Licensed Chiropractor"
+PROVIDER_LICENSE  = "California Board of Chiropractic Examiners - Lic # 31821"
+PROVIDER_NPI      = "1154619070"
+CLINIC_NAME       = get_env("CLINIC_NAME", "Default Clinic Name")
+CLINIC_ADDR       = get_env("CLINIC_ADDR", "")
+CLINIC_PHONE_FAX  = get_env("CLINIC_PHONE_FAX", "")
 
 # ----------------- PROJECT ROOT -----------------
 BASE_DIR = os.path.dirname(__file__)
