@@ -2417,8 +2417,8 @@ def build_imaging_rx_prescription_pdf(
             ))
         if prov_npi:
             demo_lines.append(Paragraph(
-                f"National Provider Identifier <b>(NPI)</b>:  "
-                f"<b>{xml_escape(prov_npi)}</b>",
+                f"National Provider Identifier (NPI):  "
+                f"{xml_escape(prov_npi)}",
                 demo_style,
             ))
 
