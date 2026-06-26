@@ -2355,11 +2355,18 @@ def build_imaging_rx_prescription_pdf(
         story.append(ExamStart(DOC_TITLE, patient_header, exam_date))
         story.append(Spacer(1, 0.22 * inch))
 
-        # Centred document title + "Rx - Diagnostic Imaging" subscript.
+        # Centred document title + "Rx - Diagnostic Imaging, <modality>" subscript.
+        ml = (modality or "").strip().lower()
+        if ml == "x-ray":
+            imaging_type_suffix = ", X-rays"
+        elif ml == "mri":
+            imaging_type_suffix = ", MRI"
+        else:
+            imaging_type_suffix = ""
         story.append(Paragraph(xml_escape(DOC_TITLE), styles["ImagingRxOrderTitle"]))
         story.append(Paragraph(
             '<font size="13"><b>Rx</b></font>'
-            '<font size="11" color="grey"> - Diagnostic Imaging</font>',
+            f'<font size="11" color="grey"> - Diagnostic Imaging{imaging_type_suffix}</font>',
             order_sub_style,
         ))
         story.append(Spacer(1, 0.18 * inch))
