@@ -6,6 +6,8 @@ from tkinter import ttk, messagebox
 
 from scrollframe import ScrollFrame
 from work_status_duration_storage import add_custom_duration, all_duration_choices
+from icd10_search_dialog import open_icd10_search_dialog
+from dx_favorites_storage import add_favorite, list_favorites
 
 AUTO_TAG = "[AUTO:DX]"
 
@@ -162,6 +164,18 @@ def _dx_display(label: str, icd10: str) -> str:
 DX_DISPLAY_VALUES = [_dx_display(lbl, code) for (lbl, code) in DX_LIST]
 
 
+def all_dx_display_values() -> list[str]:
+    """Built-in DX_LIST favorites plus clinic-wide Search ICD-10 favorites."""
+    values = list(DX_DISPLAY_VALUES)
+    seen = set(values)
+    for label, code in list_favorites():
+        disp = _dx_display(label, code)
+        if disp and disp not in seen:
+            values.append(disp)
+            seen.add(disp)
+    return values
+
+
 def _parse_display_to_pair(display: str) -> tuple[str, str]:
     """
     Reverse the combobox display back into (label, icd10)
@@ -173,11 +187,14 @@ def _parse_display_to_pair(display: str) -> tuple[str, str]:
     for lbl, code in DX_LIST:
         if _clean(lbl) == s:
             return lbl, code
+    for lbl, code in list_favorites():
+        if _clean(lbl) == s:
+            return lbl, code
     return s, ""
 
 
 class DxBlock(ttk.Frame):
-    def __init__(self, parent):
+    def __init__(self, parent, diagnosis_page=None):
         super().__init__(parent)
 
         # callbacks (bound later)
@@ -185,9 +202,11 @@ class DxBlock(ttk.Frame):
         self._on_remove = None
         self._on_move_up = None
         self._on_move_down = None
+        self._diagnosis_page = diagnosis_page
 
+        display_values = all_dx_display_values()
         self.number_var = tk.StringVar(value="Diagnosis #1")
-        self.dx_display_var = tk.StringVar(value=DX_DISPLAY_VALUES[0])
+        self.dx_display_var = tk.StringVar(value=display_values[0] if display_values else "")
         self.edit_var = tk.StringVar(value="")
 
         # header row
@@ -207,12 +226,13 @@ class DxBlock(ttk.Frame):
         self.dx_cb = ttk.Combobox(
             row1,
             textvariable=self.dx_display_var,
-            values=DX_DISPLAY_VALUES,
+            values=display_values,
             state="readonly",
             width=44,
         )
         self._disable_mousewheel_on_cb(self.dx_cb)
-        self.dx_cb.pack(side="left", padx=(6, 0), fill="x", expand=True)
+        self.dx_cb.pack(side="left", padx=(6, 4), fill="x", expand=True)
+        ttk.Button(row1, text="Search ICD-10…", command=self._open_icd10_search).pack(side="left")
 
         # edit + move buttons
         row2 = ttk.Frame(self)
@@ -243,6 +263,42 @@ class DxBlock(ttk.Frame):
         cb.bind("<MouseWheel>", lambda e: "break")
         cb.bind("<Button-4>", lambda e: "break")
         cb.bind("<Button-5>", lambda e: "break")
+
+    def refresh_dropdown_values(self, *, keep_selection: bool = True) -> None:
+        """Reload shared favorites into this block's combobox."""
+        current = _clean(self.dx_display_var.get()) if keep_selection else ""
+        values = all_dx_display_values()
+        if current and current not in values:
+            values = list(values) + [current]
+        self.dx_cb.configure(values=values)
+        if current:
+            self.dx_display_var.set(current)
+        elif values:
+            self.dx_display_var.set(values[0])
+
+    def _set_display_value(self, display: str) -> None:
+        disp = _clean(display)
+        if not disp:
+            return
+        values = all_dx_display_values()
+        if disp not in values:
+            values = list(values) + [disp]
+        self.dx_cb.configure(values=values)
+        self.dx_display_var.set(disp)
+
+    def _open_icd10_search(self) -> None:
+        picked = open_icd10_search_dialog(self)
+        if not picked:
+            return
+        label, code = picked
+        display = _dx_display(label, code)
+        add_favorite(label, code)
+        page = self._diagnosis_page
+        if page is not None and hasattr(page, "refresh_all_dx_dropdown_values"):
+            page.refresh_all_dx_dropdown_values(select_block=self, display=display)
+        else:
+            self._set_display_value(display)
+            self._call(self._on_change)
     
     def bind_actions(self, on_change, on_remove, on_move_up, on_move_down):
         """Bind / rebind actions safely after the block exists."""
@@ -261,7 +317,10 @@ class DxBlock(ttk.Frame):
         lbl, code = self.get_label_code()
         edit = _clean(self.edit_var.get())
         text = edit if edit else _clean(lbl)
-        return f"{n}. {text} ({code})" if _clean(code) else f"{n}. {text}"
+        code = _clean(code)
+        if code and not code.startswith("-"):
+            return f"{code} – {text}" if text else code
+        return text
 
     def to_dict(self) -> dict:
         lbl, code = self.get_label_code()
@@ -275,16 +334,24 @@ class DxBlock(ttk.Frame):
     def from_dict(self, d: dict):
         d = d or {}
         disp = _clean(d.get("dx_display", ""))
-        if disp and disp in DX_DISPLAY_VALUES:
+        lbl = _clean(d.get("dx_label", ""))
+        code = _clean(d.get("icd10", ""))
+        values = all_dx_display_values()
+
+        if disp and " — " in disp:
+            self._set_display_value(disp)
+        elif disp and disp in values:
             self.dx_display_var.set(disp)
-        else:
-            lbl = _clean(d.get("dx_label", ""))
-            code = _clean(d.get("icd10", ""))
-            display = _dx_display(lbl, code) if lbl else DX_DISPLAY_VALUES[0]
-            if display not in DX_DISPLAY_VALUES and lbl:
-                self.dx_display_var.set(lbl)
-            else:
-                self.dx_display_var.set(display if display in DX_DISPLAY_VALUES else DX_DISPLAY_VALUES[0])
+        elif lbl or code:
+            display = _dx_display(lbl, code) if (lbl or code) else (values[0] if values else "")
+            if display in values:
+                self.dx_display_var.set(display)
+            elif display:
+                self._set_display_value(display)
+            elif values:
+                self.dx_display_var.set(values[0])
+        elif values:
+            self.dx_display_var.set(values[0])
 
         self.edit_var.set(d.get("edit_text", "") or "")
 
@@ -1573,11 +1640,26 @@ class DiagnosisPage(ttk.Frame):
         self.load_prior_visit_dx_codes(silent=False)
 
     # ---------- blocks ----------
+    def refresh_all_dx_dropdown_values(
+        self,
+        select_block: DxBlock | None = None,
+        display: str = "",
+    ) -> None:
+        """Sync every Dx combobox to the shared favorites list."""
+        disp = _clean(display)
+        for b in self.blocks:
+            if select_block is not None and b is select_block and disp:
+                b._set_display_value(disp)
+            else:
+                b.refresh_dropdown_values(keep_selection=True)
+        if select_block is not None:
+            self._on_blocks_changed()
+
     def add_block(self):
         if len(self.blocks) >= self.max_blocks:
             return
 
-        b = DxBlock(self.grid_area)
+        b = DxBlock(self.grid_area, diagnosis_page=self)
 
         # Bind AFTER creation so ↑/↓ always works immediately
         b.bind_actions(
@@ -1675,7 +1757,7 @@ class DiagnosisPage(ttk.Frame):
             self.blocks.clear()
 
             for bd in prior_blocks:
-                b = DxBlock(self.grid_area)
+                b = DxBlock(self.grid_area, diagnosis_page=self)
                 b.bind_actions(
                     on_change=self._on_blocks_changed,
                     on_remove=lambda bb=b: self.remove_block(bb),
@@ -1686,7 +1768,7 @@ class DiagnosisPage(ttk.Frame):
                 self.blocks.append(b)
 
             if not self.blocks:
-                b = DxBlock(self.grid_area)
+                b = DxBlock(self.grid_area, diagnosis_page=self)
                 b.bind_actions(
                     on_change=self._on_blocks_changed,
                     on_remove=lambda bb=b: self.remove_block(bb),
@@ -1904,7 +1986,7 @@ class DiagnosisPage(ttk.Frame):
 
             blocks = data.get("blocks") or []
             for bd in blocks:
-                b = DxBlock(self.grid_area)
+                b = DxBlock(self.grid_area, diagnosis_page=self)
 
                 b.bind_actions(
                     on_change=self._on_blocks_changed,

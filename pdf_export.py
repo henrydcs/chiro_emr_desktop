@@ -4166,6 +4166,8 @@ def _diagnosis_text_from_struct(dx_struct: dict) -> str:
     """
     Convert DiagnosisPage.to_dict() format into a printable text block.
     Always builds from blocks (diagnosis section). The "text" field is general notes.
+
+    Print format (Live Preview + PDF): ``ICD10 – description`` (no numbering).
     """
     if not isinstance(dx_struct, dict):
         return ""
@@ -4175,7 +4177,6 @@ def _diagnosis_text_from_struct(dx_struct: dict) -> str:
         return ""
 
     lines = []
-    n = 1
     for b in blocks:
         if not isinstance(b, dict):
             continue
@@ -4184,15 +4185,17 @@ def _diagnosis_text_from_struct(dx_struct: dict) -> str:
         code = _resolve_icd_from_dx_block(b)
         edit = (b.get("edit_text") or "").strip()
 
-        text = edit or label
-        if not text:
+        # Skip DX_LIST separator / blank rows
+        if label.startswith("-") or (code or "").startswith("-"):
             continue
 
-        if code:
-            lines.append(f"{n}. {text} ({code})")
-        else:
-            lines.append(f"{n}. {text}")
-        n += 1
+        text = edit or label
+        if code and text:
+            lines.append(f"{code} – {text}")
+        elif code:
+            lines.append(code)
+        elif text:
+            lines.append(text)
 
     return "\n".join(lines).strip()
 
@@ -5572,10 +5575,10 @@ def payload_to_exam_sections(payload: dict):
     objectives_text = (soap.get("objectives") or "").strip()
     objectives_struct = soap.get("objectives_struct") or {}
 
-    dx_text = (soap.get("diagnosis") or "").strip()
+    dx_struct = soap.get("diagnosis_struct") or {}
+    dx_text = _diagnosis_text_from_struct(dx_struct) if isinstance(dx_struct, dict) else ""
     if not dx_text:
-        dx_struct = soap.get("diagnosis_struct") or {}
-        dx_text = _diagnosis_text_from_struct(dx_struct)
+        dx_text = _strip_dx_auto_tag((soap.get("diagnosis") or "").strip())
 
     diagnosis = dx_text
 

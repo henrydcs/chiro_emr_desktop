@@ -53,6 +53,21 @@ def db_dir() -> Path:
     """Root folder for SQLite databases"""
     return get_data_dir() / "db"
 
+
+def icd10_source_dir() -> Path:
+    """CMS ICD-10-CM source files (e.g. icd10cm_codes_YYYY.txt)."""
+    return db_dir() / "ICD10" / "Source"
+
+
+def icd10_codes_file() -> Path | None:
+    """Newest icd10cm_codes_*.txt under the ICD-10 Source folder, if any."""
+    src = icd10_source_dir()
+    if not src.is_dir():
+        return None
+    matches = sorted(src.glob("icd10cm_codes_*.txt"), key=lambda p: p.name.lower())
+    return matches[-1] if matches else None
+
+
 def global_vault_dir() -> Path:
     """Clinic-wide document vault (shared across all patient charts).
 
