@@ -8,6 +8,7 @@ from scrollframe import ScrollFrame
 from work_status_duration_storage import add_custom_duration, all_duration_choices
 from icd10_search_dialog import open_icd10_search_dialog
 from dx_favorites_storage import add_favorite, list_favorites
+from dx_favorites_dialog import open_search_dx_favorites_dialog
 
 AUTO_TAG = "[AUTO:DX]"
 
@@ -165,7 +166,7 @@ DX_DISPLAY_VALUES = [_dx_display(lbl, code) for (lbl, code) in DX_LIST]
 
 
 def all_dx_display_values() -> list[str]:
-    """Built-in DX_LIST favorites plus clinic-wide Search ICD-10 favorites."""
+    """Built-in DX_LIST favorites plus all favorites from favorite blocks."""
     values = list(DX_DISPLAY_VALUES)
     seen = set(values)
     for label, code in list_favorites():
@@ -217,6 +218,11 @@ class DxBlock(ttk.Frame):
 
         self.remove_btn = ttk.Button(header, text="Remove", command=lambda: self._call(self._on_remove))
         self.remove_btn.pack(side="right")
+        ttk.Button(
+            header,
+            text="Search Dx Favorites",
+            command=self._open_search_dx_favorites,
+        ).pack(side="right", padx=(0, 6))
 
         # dx dropdown row
         row1 = ttk.Frame(self)
@@ -294,6 +300,24 @@ class DxBlock(ttk.Frame):
         display = _dx_display(label, code)
         add_favorite(label, code)
         page = self._diagnosis_page
+        if page is not None and hasattr(page, "refresh_all_dx_dropdown_values"):
+            page.refresh_all_dx_dropdown_values(select_block=self, display=display)
+        else:
+            self._set_display_value(display)
+            self._call(self._on_change)
+
+    def _open_search_dx_favorites(self) -> None:
+        page = self._diagnosis_page
+
+        def _on_saved():
+            if page is not None and hasattr(page, "refresh_all_dx_dropdown_values"):
+                page.refresh_all_dx_dropdown_values()
+
+        picked = open_search_dx_favorites_dialog(self, on_saved=_on_saved)
+        if not picked:
+            return
+        label, code = picked
+        display = _dx_display(label, code)
         if page is not None and hasattr(page, "refresh_all_dx_dropdown_values"):
             page.refresh_all_dx_dropdown_values(select_block=self, display=display)
         else:
