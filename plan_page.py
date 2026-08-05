@@ -668,6 +668,11 @@ class PlanPage(ttk.Frame):
             text="Auto-generate Plan narrative",
             variable=self.auto_plan_var
         ).pack(side="left")
+        ttk.Button(
+            auto_row,
+            text="Set All (other)",
+            command=self._set_schedule_all_other,
+        ).pack(side="left", padx=(12, 0))
 
         self._btn_print_schedule = ttk.Button(
             sched_box,
@@ -932,6 +937,15 @@ class PlanPage(ttk.Frame):
                 self.on_change()
             except Exception:
                 pass
+
+    def _set_schedule_all_other(self) -> None:
+        if self.auto_plan_var.get():
+            self.auto_plan_var.set(False)
+        self.freq_var.set("(other)")
+        self.duration_var.set("(other)")
+        self.reeval_var.set("(other)")
+        self._sync_other_entries()
+        self._notify_change()
 
     def _sync_other_entries(self):
         self.freq_other_entry.configure(state=("normal" if self.freq_var.get() == "(other)" else "disabled"))

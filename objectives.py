@@ -1,9 +1,19 @@
 # objectives.py
 import tkinter as tk
-from tkinter import ttk, messagebox
+from tkinter import ttk, messagebox, simpledialog
 from config import REGION_OPTIONS, REGION_LABELS, REGION_MUSCLES
 
 from family_social_history_page import FamilySocialHistoryPage
+from pdf_export import normalize_adl_dict
+from scrollframe import ScrollFrame
+from adl_items_storage import DEFAULT_ADL_ITEMS, list_items as get_adl_item_labels
+from adl_items_storage import add_item as add_global_adl_item
+from adl_items_storage import rename_item as rename_global_adl_item
+from adl_items_storage import delete_item as delete_global_adl_item
+from adl_items_storage import save_items as save_global_adl_items
+from adl_items_storage import list_items as list_global_adl_items
+from adl_items_storage import get_prefix as get_global_adl_prefix
+from adl_items_storage import set_prefix as set_global_adl_prefix
 
 # Independent template file for Objectives on Canvas (dropdown builders + template editor).
 OBJECTIVES_CANVAS_TEMPLATES_FILENAME = "objectives_canvas_doc_templates.json"
@@ -92,19 +102,47 @@ REGION_ROM_MOTIONS = {
 }
 
 
-ADL_ITEMS = [
-    "Sitting tolerance decreased",
-    "Standing tolerance decreased",
-    "Walking tolerance decreased",
-    "Lifting/carrying limited",
-    "Bending/twisting limited",
-    "Driving tolerance decreased",
-    "Sleep disrupted",
-    "Work duties limited",
-    "Household chores limited",
-]
+ADL_ITEMS = DEFAULT_ADL_ITEMS
 
-ADL_SEV_CHOICES = list(range(0, 10))  # 0-9
+ADL_SEV_CHOICES = ["(select)"] + [str(i) for i in range(10)]  # 0-9
+ADL_GRID_COLUMNS = 2
+ADL_SCROLL_HEIGHT = 280
+
+
+def _adl_rows_per_column(total: int, columns: int = ADL_GRID_COLUMNS) -> int:
+    if total <= 0:
+        return 0
+    return (total + columns - 1) // columns
+
+
+def _adl_grid_position_column_major(index: int, total: int) -> tuple[int, int]:
+    """Map flat index to (row, col): left column top-down, then right column."""
+    if total <= 0:
+        return 0, 0
+    rows_per_col = _adl_rows_per_column(total)
+    grid_c = index // rows_per_col
+    grid_r = index % rows_per_col
+    return grid_r, grid_c
+
+
+def _adl_index_from_grid_column_major(grid_r: int, grid_c: int, total: int) -> int:
+    rows_per_col = _adl_rows_per_column(total)
+    return grid_c * rows_per_col + grid_r
+
+
+def _adl_move_top_right_to_bottom_left(items: list[str]) -> list[str] | None:
+    """Move the top-right item to the bottom of the left column."""
+    total = len(items)
+    if total <= 1:
+        return None
+    rows_per_col = _adl_rows_per_column(total)
+    top_right_idx = rows_per_col
+    if top_right_idx >= total:
+        return None
+    out = list(items)
+    item = out.pop(top_right_idx)
+    out.insert(rows_per_col - 1, item)
+    return out
 
 
 
@@ -701,9 +739,13 @@ class VitalsInspectionPanel(ttk.Frame):
         self.grip_compare_var = tk.StringVar(value="(none)")
 
         # --- ADLs / Functional Status (GLOBAL) ---
-        self.adl_sev_var = tk.IntVar(value=-1)  # -1 = not selected
-        self.adl_checks = {label: tk.BooleanVar(value=False) for label in ADL_ITEMS}
+        self.adl_prefix_var = tk.StringVar(value="")
         self.adl_notes_var = tk.StringVar(value="")
+        self.adl_entry_rows: list[dict] = []
+        self.adl_scroll: ScrollFrame | None = None
+        self.adl_items_frame: ttk.Frame | None = None
+        self.adl_selected_label: str | None = None
+        self._adl_prefix_sync = False
 
 
         # Notes (separate)
@@ -726,6 +768,8 @@ class VitalsInspectionPanel(ttk.Frame):
         for v in vars_to_trace:
             v.trace_add("write", lambda *_: self._changed())
 
+        self.adl_prefix_var.trace_add("write", self._on_adl_prefix_changed)
+
         # ✅ Sublux motion restriction checkboxes (BooleanVars)
         for v in self.sublux_motion_vars.values():
             v.trace_add("write", lambda *_: self._changed())
@@ -733,11 +777,20 @@ class VitalsInspectionPanel(ttk.Frame):
         for v in self.sublux_region_vars.values():
             v.trace_add("write", lambda *_: self._changed())
 
-        self.adl_sev_var.trace_add("write", lambda *_: self._changed())  # ✅ NEW
-        for v in self.adl_checks.values():  # ✅ NEW
-            v.trace_add("write", lambda *_: self._changed())
-
         self.active.trace_add("write", lambda *_: self._show_active())
+
+    def _load_global_adl_prefix(self) -> None:
+        self._adl_prefix_sync = True
+        try:
+            self.adl_prefix_var.set(get_global_adl_prefix())
+        finally:
+            self._adl_prefix_sync = False
+
+    def _on_adl_prefix_changed(self, *_args) -> None:
+        if self._adl_prefix_sync:
+            return
+        set_global_adl_prefix(self.adl_prefix_var.get())
+        self._changed()
 
 
     def _build_ui(self):
@@ -789,7 +842,7 @@ class VitalsInspectionPanel(ttk.Frame):
             ttk.Radiobutton(self.radios_frame, text="Grip", value="Grip", variable=self.active).pack(side="left", padx=(0, 8))
             ttk.Radiobutton(self.radios_frame, text="ADLs", value="ADLs", variable=self.active).pack(side="left")
 
-            self.container.pack(fill="x", padx=10, pady=(0, 8))
+            self.container.pack(fill="both", expand=True, padx=10, pady=(0, 8))
             self._show_active()
         else:
             self.container.pack_forget()
@@ -1050,46 +1103,394 @@ class VitalsInspectionPanel(ttk.Frame):
 
     def _build_adl_panel(self):
         f = self.adl_frame
+        f.columnconfigure(0, weight=1)
+        f.rowconfigure(1, weight=1)
 
-        # Title row
         ttk.Label(f, text="Functional Status / ADLs", font=("Segoe UI", 9, "bold")).grid(
             row=0, column=0, sticky="w"
         )
 
-        # Severity dropdown (0-9)
-        ttk.Label(f, text="ADL Impact Severity (0–9):").grid(row=1, column=0, sticky="w", pady=(8, 2))
+        self.adl_scroll = ScrollFrame(f)
+        self.adl_scroll.grid(row=1, column=0, sticky="nsew", pady=(8, 0))
+        try:
+            self.adl_scroll.canvas.configure(height=ADL_SCROLL_HEIGHT)
+        except Exception:
+            pass
 
-        self.adl_sev_cb = ttk.Combobox(
-            f,
-            values=["(select)"] + [str(i) for i in range(10)],
-            width=10,
-            state="readonly",
+        body = self.adl_scroll.content
+        body.columnconfigure(0, weight=1)
+
+        self.adl_items_frame = ttk.Frame(body)
+        self.adl_items_frame.grid(row=0, column=0, sticky="ew", pady=(0, 6))
+        for col in range(ADL_GRID_COLUMNS):
+            self.adl_items_frame.columnconfigure(col, weight=1, uniform="adl_col")
+
+        if not self.adl_entry_rows:
+            self._init_adl_rows_from_global()
+            self._render_adl_entry_rows()
+
+        prefix_fr = ttk.Frame(body)
+        prefix_fr.grid(row=1, column=0, sticky="ew", pady=(4, 4))
+        prefix_fr.columnconfigure(1, weight=1)
+        ttk.Label(prefix_fr, text="Prefix:").grid(row=0, column=0, sticky="w")
+        ttk.Entry(prefix_fr, textvariable=self.adl_prefix_var).grid(
+            row=0, column=1, sticky="ew", padx=(8, 0)
         )
-        self._disable_mousewheel_on_cb(self.adl_sev_cb)
-        self.adl_sev_cb.grid(row=1, column=1, sticky="w", padx=(10, 0), pady=(8, 2))
-        self.adl_sev_cb.set("(select)")
+        self._load_global_adl_prefix()
 
-        def _adl_sev_changed(_evt=None):
-            v = (self.adl_sev_cb.get() or "").strip()
-            self.adl_sev_var.set(int(v) if v.isdigit() else -1)
+        btn_fr = ttk.Frame(body)
+        btn_fr.grid(row=2, column=0, sticky="w", pady=(2, 4))
+        ttk.Button(btn_fr, text="+ Add", command=self._add_adl_item).pack(side="left", padx=(0, 6))
+        ttk.Button(btn_fr, text="Re-Name", command=self._rename_adl_item).pack(side="left", padx=(0, 6))
+        ttk.Button(btn_fr, text="Delete", command=self._delete_adl_item).pack(side="left")
+        ttk.Button(btn_fr, text="Set All (select)", command=self._clear_all_adl_ratings).pack(
+            side="left", padx=(6, 0)
+        )
 
-        self.adl_sev_cb.bind("<<ComboboxSelected>>", _adl_sev_changed)
+        notes = CollapsibleAutoNotes(body, "ADL Notes", self.adl_notes_var, on_change=self._changed)
+        notes.grid(row=3, column=0, sticky="ew", pady=(4, 8))
 
-        # Checkboxes (2 columns)
-        chk = ttk.Frame(f)
-        chk.grid(row=2, column=0, columnspan=2, sticky="ew", pady=(8, 4))
-        chk.columnconfigure(0, weight=1)
-        chk.columnconfigure(1, weight=1)
+    def _clear_all_adl_ratings(self) -> None:
+        for row in self.adl_entry_rows:
+            row["severity"].set(-1)
+            cb = row.get("combo")
+            if cb is not None:
+                cb.set("(select)")
+        self._changed()
 
-        for i, label in enumerate(ADL_ITEMS):
-            r, c = divmod(i, 2)
-            ttk.Checkbutton(chk, text=label, variable=self.adl_checks[label]).grid(
-                row=r, column=c, sticky="w", padx=6, pady=2
+    def _refresh_adl_scroll(self) -> None:
+        if self.adl_scroll is None:
+            return
+        try:
+            self.adl_scroll.canvas.update_idletasks()
+            self.adl_scroll._on_content_configure()
+        except Exception:
+            pass
+
+    def _adl_severity_map(self) -> dict[str, int]:
+        out: dict[str, int] = {}
+        for row in self.adl_entry_rows:
+            label = (row.get("label") or "").strip()
+            if not label:
+                continue
+            try:
+                sev = int(row["severity"].get())
+            except Exception:
+                sev = -1
+            out[label] = sev
+        return out
+
+    def _init_adl_rows_from_global(self, severities: dict[str, int] | None = None) -> None:
+        severities = severities or {}
+        self.adl_entry_rows = []
+        for label in get_adl_item_labels():
+            sev = severities.get(label, -1)
+            self._append_adl_entry_row(label, severity=sev, legacy=False, render=False)
+
+    def _append_adl_entry_row(
+        self,
+        label: str,
+        *,
+        severity: int = -1,
+        legacy: bool = False,
+        render: bool = True,
+    ) -> None:
+        label = (label or "").strip()
+        if not label:
+            return
+        sev_var = tk.IntVar(value=int(severity) if int(severity) >= 0 else -1)
+        sev_var.trace_add("write", lambda *_: self._changed())
+        self.adl_entry_rows.append(
+            {"label": label, "severity": sev_var, "legacy": bool(legacy)}
+        )
+        if render:
+            self._render_adl_entry_rows(select_label=label)
+
+    def _select_adl_row(self, label: str) -> None:
+        label = (label or "").strip()
+        if not label:
+            return
+        self.adl_selected_label = label
+        self._render_adl_entry_rows(select_label=label)
+
+    def _render_adl_entry_rows(self, *, select_label: str | None = None) -> None:
+        if self.adl_items_frame is None:
+            return
+        if select_label:
+            self.adl_selected_label = select_label
+        for child in self.adl_items_frame.winfo_children():
+            child.destroy()
+
+        global_labels = {x.lower() for x in get_adl_item_labels()}
+        global_count = sum(
+            1
+            for row in self.adl_entry_rows
+            if not row.get("legacy")
+            and (row.get("label") or "").strip().lower() in global_labels
+        )
+        legacy_start_row = _adl_rows_per_column(global_count)
+
+        for i, row in enumerate(self.adl_entry_rows):
+            label = row["label"]
+            selected = label == self.adl_selected_label
+            is_global = (
+                not row.get("legacy")
+                and label.strip().lower() in global_labels
             )
 
-        # Notes (collapsible like the others)
-        notes = CollapsibleAutoNotes(f, "ADL Notes", self.adl_notes_var, on_change=self._changed)
-        notes.grid(row=3, column=0, columnspan=100, sticky="ew", pady=(8, 0))
+            if is_global:
+                grid_r, grid_c = _adl_grid_position_column_major(i, global_count)
+            else:
+                legacy_i = i - global_count
+                grid_r = legacy_start_row + legacy_i // ADL_GRID_COLUMNS
+                grid_c = legacy_i % ADL_GRID_COLUMNS
+
+            cell = ttk.Frame(self.adl_items_frame)
+            cell.grid(row=grid_r, column=grid_c, sticky="nw", padx=(0, 8), pady=2)
+
+            inner = ttk.Frame(cell)
+            inner.pack(anchor="w", fill="x")
+
+            lbl = ttk.Label(
+                inner,
+                text=label,
+                wraplength=180,
+                font=("Segoe UI", 9, "bold") if selected else ("Segoe UI", 9),
+                cursor="hand2",
+            )
+            lbl.pack(side="left")
+            lbl.bind("<Button-1>", lambda _e, lbl_text=label: self._select_adl_row(lbl_text))
+
+            cb = ttk.Combobox(
+                inner,
+                values=ADL_SEV_CHOICES,
+                width=8,
+                state="readonly",
+            )
+            self._disable_mousewheel_on_cb(cb)
+            sev = int(row["severity"].get())
+            cb.set(str(sev) if 0 <= sev <= 9 else "(select)")
+
+            def _make_handler(var: tk.IntVar, combobox: ttk.Combobox):
+                def _on_selected(_evt=None):
+                    v = (combobox.get() or "").strip()
+                    var.set(int(v) if v.isdigit() else -1)
+                    self._changed()
+                return _on_selected
+
+            cb.bind("<<ComboboxSelected>>", _make_handler(row["severity"], cb))
+            cb.pack(side="left", padx=(4, 0))
+
+            if is_global:
+                down_target = _adl_index_from_grid_column_major(grid_r + 1, grid_c, global_count)
+                can_up = grid_r > 0 or (grid_r == 0 and grid_c == 1 and global_count > 1)
+                up_state = "normal" if can_up else "disabled"
+                down_state = "normal" if down_target < global_count else "disabled"
+                ttk.Button(
+                    inner,
+                    text="↑",
+                    width=2,
+                    state=up_state,
+                    command=lambda idx=i: self._move_adl_item(idx, -1),
+                ).pack(side="left", padx=(2, 0))
+                ttk.Button(
+                    inner,
+                    text="↓",
+                    width=2,
+                    state=down_state,
+                    command=lambda idx=i: self._move_adl_item(idx, 1),
+                ).pack(side="left", padx=(1, 0))
+
+            row["combo"] = cb
+
+        self._refresh_adl_scroll()
+
+    def _rebuild_adl_rows(
+        self,
+        severities: dict[str, int],
+        *,
+        select_label: str | None = None,
+    ) -> None:
+        global_labels = get_adl_item_labels()
+        global_set = {x.lower() for x in global_labels}
+        self.adl_entry_rows = []
+        for label in global_labels:
+            self._append_adl_entry_row(
+                label, severity=severities.get(label, -1), legacy=False, render=False
+            )
+        for label, sev in severities.items():
+            if label.lower() not in global_set:
+                self._append_adl_entry_row(label, severity=sev, legacy=True, render=False)
+        self._render_adl_entry_rows(select_label=select_label)
+
+    def _add_adl_item(self) -> None:
+        label = simpledialog.askstring(
+            "Add ADL Item",
+            "Enter ADL description:",
+            parent=self,
+        )
+        if label is None:
+            return
+        label = label.strip()
+        if not label:
+            messagebox.showwarning("Add ADL Item", "Description cannot be empty.", parent=self)
+            return
+        if not add_global_adl_item(label):
+            messagebox.showinfo("Add ADL Item", "That ADL item already exists.", parent=self)
+            return
+        severities = self._adl_severity_map()
+        self._rebuild_adl_rows(severities, select_label=label)
+        self._changed()
+
+    def _get_selected_adl_row(self) -> dict | None:
+        if not self.adl_selected_label:
+            return None
+        for row in self.adl_entry_rows:
+            if row.get("label") == self.adl_selected_label:
+                return row
+        return None
+
+    def _rename_adl_item(self) -> None:
+        row = self._get_selected_adl_row()
+        if row is None:
+            messagebox.showinfo(
+                "Re-Name ADL Item",
+                "Select an ADL item first (click its label).",
+                parent=self,
+            )
+            return
+        old_label = (row.get("label") or "").strip()
+        new_label = simpledialog.askstring(
+            "Re-Name ADL Item",
+            "Enter new description:",
+            initialvalue=old_label,
+            parent=self,
+        )
+        if new_label is None:
+            return
+        new_label = new_label.strip()
+        if not new_label:
+            messagebox.showwarning("Re-Name ADL Item", "Description cannot be empty.", parent=self)
+            return
+        if new_label.lower() == old_label.lower():
+            return
+        for other in self.adl_entry_rows:
+            if other is not row and other.get("label", "").strip().lower() == new_label.lower():
+                messagebox.showinfo("Re-Name ADL Item", "That ADL item already exists.", parent=self)
+                return
+        is_global = not row.get("legacy")
+        if is_global:
+            if not rename_global_adl_item(old_label, new_label):
+                messagebox.showerror("Re-Name ADL Item", "Could not rename that item.", parent=self)
+                return
+            severities = self._adl_severity_map()
+            if old_label in severities:
+                severities[new_label] = severities.pop(old_label)
+            self._rebuild_adl_rows(severities, select_label=new_label)
+        else:
+            row["label"] = new_label
+            self._select_adl_row(new_label)
+            self._render_adl_entry_rows(select_label=new_label)
+        self._changed()
+
+    def _delete_adl_item(self) -> None:
+        row = self._get_selected_adl_row()
+        if row is None:
+            messagebox.showinfo(
+                "Delete ADL Item",
+                "Select an ADL item first (click its label).",
+                parent=self,
+            )
+            return
+        label = (row.get("label") or "").strip()
+        if not label:
+            return
+        is_global = not row.get("legacy")
+        if is_global:
+            if not messagebox.askyesno(
+                "Delete ADL Item",
+                f"Delete \"{label}\"?\n\nThis removes the item from the clinic-wide ADL list for all future notes.",
+                parent=self,
+            ):
+                return
+            delete_global_adl_item(label)
+        elif not messagebox.askyesno(
+            "Delete ADL Item",
+            f"Remove \"{label}\" from this note?\n\n(This item is from an older ADL list and is not in the current clinic-wide list.)",
+            parent=self,
+        ):
+            return
+        self.adl_entry_rows = [r for r in self.adl_entry_rows if r.get("label") != label]
+        self.adl_selected_label = None
+        if not self.adl_entry_rows:
+            self._init_adl_rows_from_global()
+        self._render_adl_entry_rows()
+        self._changed()
+
+    def _move_adl_item(self, index: int, delta: int) -> None:
+        if index < 0 or index >= len(self.adl_entry_rows):
+            return
+        row = self.adl_entry_rows[index]
+        if row.get("legacy"):
+            return
+
+        global_count = sum(1 for r in self.adl_entry_rows if not r.get("legacy"))
+        if index >= global_count:
+            return
+
+        grid_r, grid_c = _adl_grid_position_column_major(index, global_count)
+        label = row["label"]
+        items = list_global_adl_items()
+
+        if delta == -1 and grid_r == 0 and grid_c == 1:
+            moved = _adl_move_top_right_to_bottom_left(items)
+            if not moved:
+                return
+            save_global_adl_items(moved)
+            severities = self._adl_severity_map()
+            self._rebuild_adl_rows(severities, select_label=label)
+            self._changed()
+            return
+
+        new_r = grid_r + delta
+        if new_r < 0:
+            return
+        new_index = _adl_index_from_grid_column_major(new_r, grid_c, global_count)
+        if new_index < 0 or new_index >= global_count:
+            return
+
+        if index >= len(items) or new_index >= len(items):
+            return
+        items[index], items[new_index] = items[new_index], items[index]
+        save_global_adl_items(items)
+        severities = self._adl_severity_map()
+        self._rebuild_adl_rows(severities, select_label=label)
+        self._changed()
+
+    def _load_adl_from_dict(self, adl: dict) -> None:
+        adl = normalize_adl_dict(adl or {})
+        self._load_global_adl_prefix()
+        self.adl_notes_var.set(adl.get("notes") or "")
+        self.adl_selected_label = None
+
+        saved: dict[str, int] = {}
+        for ent in adl.get("entries") or []:
+            if not isinstance(ent, dict):
+                continue
+            label = (ent.get("label") or "").strip()
+            if not label:
+                continue
+            try:
+                sev = int(ent.get("severity", -1))
+            except Exception:
+                sev = -1
+            saved[label] = sev
+
+        if saved or get_adl_item_labels():
+            self._rebuild_adl_rows(saved)
+        else:
+            self._init_adl_rows_from_global()
+            self._render_adl_entry_rows()
 
     def _toggle_sublux_level(self, level: str):
         level = (level or "").strip()
@@ -1238,9 +1639,9 @@ class VitalsInspectionPanel(ttk.Frame):
         ])        
 
         adl_any = (
-            int(self.adl_sev_var.get()) != -1 or
-            any(v.get() for v in self.adl_checks.values()) or
-            (self.adl_notes_var.get() or "").strip()
+            (self.adl_prefix_var.get() or "").strip()
+            or any(int(r["severity"].get()) >= 0 for r in self.adl_entry_rows)
+            or (self.adl_notes_var.get() or "").strip()
         )
 
         return vitals_any or posture_any or sublux_any or grip_any or adl_any
@@ -1279,10 +1680,11 @@ class VitalsInspectionPanel(ttk.Frame):
                 "compare": self.grip_compare_var.get(),
                 "notes": self.grip_notes_var.get(),
             },
-            # ✅ NEW: ADLs
             "adl": {
-                "severity": int(self.adl_sev_var.get()),
-                "items": [k for k, v in self.adl_checks.items() if v.get()],
+                "entries": [
+                    {"label": r["label"], "severity": int(r["severity"].get())}
+                    for r in self.adl_entry_rows
+                ],
                 "notes": self.adl_notes_var.get(),
             },
         }
@@ -1344,22 +1746,7 @@ class VitalsInspectionPanel(ttk.Frame):
         self.grip_compare_var.set(g.get("compare", "(none)"))
         self.grip_notes_var.set(g.get("notes", ""))
 
-                # ✅ ADLs restore
-        adl = data.get("adl") or {}
-
-        sev = int(adl.get("severity", -1))
-        self.adl_sev_var.set(sev)
-
-        # keep the combobox display in sync too
-        if hasattr(self, "adl_sev_cb"):
-            self.adl_sev_cb.set(str(sev) if 0 <= sev <= 9 else "(select)")
-
-        # restore checkmarks
-        selected = set(adl.get("items") or [])
-        for label, var in self.adl_checks.items():
-            var.set(label in selected)
-
-        self.adl_notes_var.set(adl.get("notes", ""))
+        self._load_adl_from_dict(data.get("adl") or {})
         self._apply_open_state()
 
     def reset(self):
@@ -1385,12 +1772,13 @@ class VitalsInspectionPanel(ttk.Frame):
         self.sublux_notes_var.set("") 
         self.grip_notes_var.set("")
 
-        self.adl_sev_var.set(-1)
-        if hasattr(self, "adl_sev_cb"):
-            self.adl_sev_cb.set("(select)")
-        for v in self.adl_checks.values():
-            v.set(False)
-        self.adl_notes_var.set("")        
+        self._load_global_adl_prefix()
+        self.adl_notes_var.set("")
+        self.adl_selected_label = None
+        self.adl_entry_rows = []
+        if self.adl_items_frame is not None:
+            self._init_adl_rows_from_global()
+            self._render_adl_entry_rows()
 
         # ✅ Sublux reset (PUT IT HERE)
         for v in self.sublux_region_vars.values():

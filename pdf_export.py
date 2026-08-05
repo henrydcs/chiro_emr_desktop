@@ -3303,76 +3303,201 @@ def _rom_cell_flowables(motion: str, lines: list[str], styles):
     return out
 
 def _build_adl_paragraph(adl: dict, styles):
+    """Legacy wrapper — returns first flowable Paragraph if any."""
+    flow = _build_adl_flowables(adl, styles, doc_width=468)
+    for item in flow:
+        if hasattr(item, "text"):
+            return item
+    return flow[0] if flow else None
+
+
+def normalize_adl_dict(adl: dict | None) -> dict:
+    """Normalize ADL data to {prefix, entries: [{label, severity}], notes}."""
     if not isinstance(adl, dict):
-        return None
-
-    sev = adl.get("severity", -1)
-    try:
-        sev = int(sev)
-    except Exception:
-        sev = -1
-
-    items = adl.get("items") or []
-    if not isinstance(items, list):
-        items = []
-
+        adl = {}
     notes = (adl.get("notes") or "").strip()
+    from adl_items_storage import get_prefix as get_global_adl_prefix
 
-    if sev == -1 and not items and not notes:
-        return None
+    prefix = get_global_adl_prefix().strip()
 
-    parts = []
-    if sev != -1:
-        # uses your existing SEVERITY_LABELS mapping
-        parts.append(f"ADL Overall Impact Severity: {sev} — {SEVERITY_LABELS.get(sev, '')}".strip())
+    if isinstance(adl.get("entries"), list):
+        entries: list[dict] = []
+        seen_labels: set[str] = set()
+        for ent in adl.get("entries") or []:
+            if not isinstance(ent, dict):
+                continue
+            label = (ent.get("label") or "").strip()
+            if not label:
+                continue
+            try:
+                sev = int(ent.get("severity", -1))
+            except Exception:
+                sev = -1
+            if sev < -1 or sev > 9:
+                sev = -1
+            key = label.lower()
+            if key in seen_labels:
+                continue
+            seen_labels.add(key)
+            entries.append({"label": label, "severity": sev})
+        return {"prefix": prefix, "entries": entries, "notes": notes}
 
-    clean_items = [str(x).strip() for x in items if str(x).strip()]
-    if clean_items:
-        parts.append("Activities of Daily Living: " + ", ".join(clean_items))
+    # Legacy checkbox + overall severity format
+    try:
+        old_sev = int(adl.get("severity", -1))
+    except Exception:
+        old_sev = -1
+    if old_sev < -1 or old_sev > 9:
+        old_sev = -1
+    checked = {str(x).strip() for x in (adl.get("items") or []) if str(x).strip()}
+    from adl_items_storage import list_items as get_adl_item_labels
+
+    entries = []
+    adl_template = get_adl_item_labels()
+    for label in adl_template:
+        if label in checked:
+            entries.append({"label": label, "severity": old_sev if old_sev >= 0 else -1})
+        else:
+            entries.append({"label": label, "severity": -1})
+    for label in sorted(checked):
+        if label not in adl_template:
+            entries.append(
+                {"label": label, "severity": old_sev if old_sev >= 0 else -1}
+            )
+    return {"prefix": prefix, "entries": entries, "notes": notes}
+
+
+def _adl_short_label(label: str) -> str:
+    s = (label or "").strip()
+    for suffix in (" tolerance decreased", " limited", " disrupted"):
+        if s.lower().endswith(suffix):
+            return s[: -len(suffix)].strip()
+    return s
+
+
+def _adl_rated_display_cells(adl: dict) -> list[str]:
+    adl = normalize_adl_dict(adl)
+    cells: list[str] = []
+    for ent in adl.get("entries") or []:
+        if not isinstance(ent, dict):
+            continue
+        label = (ent.get("label") or "").strip()
+        try:
+            sev = int(ent.get("severity", -1))
+        except Exception:
+            sev = -1
+        if sev < 0 or not label:
+            continue
+        desc = _sev_label(sev)
+        if not desc:
+            continue
+        cells.append(f"{_adl_short_label(label)} - {desc}")
+    return cells
+
+
+def _adl_cells_to_two_column_rows(cells: list[str]) -> list[tuple[str, str]]:
+    """Pair rated ADL cells: left column top-down, then right column top-down."""
+    n = len(cells)
+    if not n:
+        return []
+    rows_per_col = (n + 1) // 2
+    rows: list[tuple[str, str]] = []
+    for r in range(rows_per_col):
+        left = cells[r]
+        right_idx = rows_per_col + r
+        right = cells[right_idx] if right_idx < n else ""
+        rows.append((left, right))
+    return rows
+
+
+def _build_adl_flowables(adl: dict, styles, doc_width: float) -> list:
+    adl = normalize_adl_dict(adl)
+    prefix = (adl.get("prefix") or "").strip()
+    notes = (adl.get("notes") or "").strip()
+    cells = _adl_rated_display_cells(adl)
+    if not cells and not notes:
+        return []
+
+    from reportlab.platypus import Paragraph, Spacer, Table, TableStyle
+
+    out: list = []
+    body = styles["BodyText"]
+
+    if prefix and cells:
+        out.append(Paragraph(xml_escape(prefix), body))
+        if cells or notes:
+            line_h = getattr(body, "leading", None) or (body.fontSize * 1.2)
+            out.append(Spacer(1, line_h / 72.0 * inch))
+
+    if cells:
+        try:
+            col_gap = 0.18 * inch
+            col_width = (doc_width - col_gap) / 2.0
+            pair_rows = _adl_cells_to_two_column_rows(cells)
+            table_rows = []
+            for left, right in pair_rows:
+                table_rows.append(
+                    [
+                        Paragraph(xml_escape(left), body) if left else Paragraph("", body),
+                        Paragraph(xml_escape(right), body) if right else Paragraph("", body),
+                    ]
+                )
+            tbl = Table(table_rows, colWidths=[col_width, col_width])
+            tbl.setStyle(
+                TableStyle(
+                    [
+                        ("VALIGN", (0, 0), (-1, -1), "TOP"),
+                        ("LEFTPADDING", (0, 0), (-1, -1), 0),
+                        ("RIGHTPADDING", (0, 0), (0, -1), col_gap / 2),
+                        ("LEFTPADDING", (1, 0), (1, -1), col_gap / 2),
+                        ("RIGHTPADDING", (1, 0), (1, -1), 0),
+                        ("TOPPADDING", (0, 0), (-1, -1), 0),
+                        ("BOTTOMPADDING", (0, 0), (-1, -1), 2),
+                    ]
+                )
+            )
+            out.append(tbl)
+            out.append(Spacer(1, 0.04 * inch))
+        except Exception:
+            safe = xml_escape(", ".join(cells))
+            out.append(Paragraph(safe, body))
+
+    if notes:
+        out.append(Paragraph(xml_escape("Notes: " + notes), body))
+    return out
+
+
+def adl_dict_to_plain_text(adl: dict, *, line_width: int = 88) -> str:
+    """
+    Build plain-text ADL content for Live Preview.
+    Prefix line, blank line, then two-column rated items (no numeric scale shown).
+    """
+    adl = normalize_adl_dict(adl)
+    prefix = (adl.get("prefix") or "").strip()
+    notes = (adl.get("notes") or "").strip()
+    cells = _adl_rated_display_cells(adl)
+    if not cells and not notes:
+        return ""
+
+    parts: list[str] = []
+    if cells:
+        if prefix:
+            parts.append(prefix)
+            parts.append("")
+        pairs = _adl_cells_to_two_column_rows(cells)
+        max_left = max(len(left) for left, _right in pairs)
+        col_gap = 3
+        for left, right in pairs:
+            if right:
+                parts.append(left.ljust(max_left + col_gap) + right)
+            else:
+                parts.append(left)
 
     if notes:
         parts.append("Notes: " + notes)
-
-    safe = xml_escape("\n".join(parts)).replace("\n", "<br/>")
-    return Paragraph(safe, styles["BodyText"])
-
-def adl_dict_to_plain_text(adl: dict) -> str:
-    """
-    Build plain-text ADL content for Live Preview, mirroring _build_adl_paragraph.
-    Returns empty string if no content.
-    """
-    if not isinstance(adl, dict):
-        return ""
-
-    sev = adl.get("severity", -1)
-    try:
-        sev = int(sev)
-    except Exception:
-        sev = -1
-
-    items = adl.get("items") or []
-    if not isinstance(items, list):
-        items = []
-
-    notes = (adl.get("notes") or "").strip()
-
-    if sev == -1 and not items and not notes:
-        return ""
-
-    parts = []
-    if sev != -1:
-        parts.append(f"ADL Overall Impact Severity: {sev} — {SEVERITY_LABELS.get(sev, '')}".strip())
-
-    clean_items = [str(x).strip() for x in items if str(x).strip()]
-    if clean_items:
-        parts.append("Activities of Daily Living: " + ", ".join(clean_items))
-
-    if notes:
-        parts.append("Notes: " + notes)
-
     return "\n".join(parts)
 
-def build_objectives_flowables(objectives_struct: dict, styles, doc_width: float, *, include_adl: bool = True):
+def build_objectives_flowables(objectives_struct: dict, styles, doc_width: float):
 
     rom_merged = {}
     rom_notes = None
@@ -3391,11 +3516,6 @@ def build_objectives_flowables(objectives_struct: dict, styles, doc_width: float
         sublux_para = _build_sublux_paragraph(sublux, styles)
         sublux_notes = _notes_paragraph(_clean_val(sublux.get("notes")), styles)
 
-        adl_para = None
-        if include_adl:
-            adl = global_struct.get("adl") or {}
-            adl_para = _build_adl_paragraph(adl, styles)
-
         vit_tbl = _build_vitals_table(vitals, doc_width)
         pos_para = _build_posture_paragraph(posture, styles)
         grip_para = _build_grip_paragraph(grip, styles)
@@ -3404,7 +3524,7 @@ def build_objectives_flowables(objectives_struct: dict, styles, doc_width: float
         pos_notes = _notes_paragraph(_clean_val(posture.get("notes")), styles)
         grip_notes = _notes_paragraph(_clean_val(grip.get("notes")), styles)
 
-        if vit_tbl or pos_para or grip_para or adl_para or vit_notes or pos_notes or grip_notes or sublux_para or sublux_notes:
+        if vit_tbl or pos_para or grip_para or vit_notes or pos_notes or grip_notes or sublux_para or sublux_notes:
 
             printed_any = True            
 
@@ -3446,7 +3566,7 @@ def build_objectives_flowables(objectives_struct: dict, styles, doc_width: float
                 if grip_notes:
                     out.append(Spacer(1, 0.10 * inch))
                     out.append(grip_notes)
-                out.append(Spacer(1, 0.12 * inch))        
+                out.append(Spacer(1, 0.12 * inch))
            
             out.append(Spacer(1, 0.06 * inch))
 
@@ -3668,7 +3788,7 @@ def build_objectives_flowables(objectives_struct: dict, styles, doc_width: float
                                    
     return out if printed_any else []
 
-def objectives_struct_to_live_preview_runs(objectives_struct: dict, *, include_adl: bool = True) -> list[tuple[str, str | None]]:
+def objectives_struct_to_live_preview_runs(objectives_struct: dict) -> list[tuple[str, str | None]]:
     """
     Build Live Preview runs from objectives_struct, mirroring PDF structure.
     Returns [(chunk, tag), ...] with:
@@ -6049,18 +6169,18 @@ def build_combined_pdf(path: str, payloads: list):
 
 
         # ✅ Functional Status / ADLs — printed after Subjectives
-        adl_para = None
+        adl_flow: list = []
         try:
             gs = (objectives_struct or {}).get("global") or {}
             adl = gs.get("adl") or {}
-            adl_para = _build_adl_paragraph(adl, styles)
+            adl_flow = _build_adl_flowables(adl, styles, doc_width)
         except Exception:
-            adl_para = None
+            adl_flow = []
 
-        if adl_para:
+        if adl_flow:
             story.append(Paragraph("<b>Functional Status</b>", styles["Heading3"]))
             story.append(Spacer(1, 0.08 * inch))
-            story.append(adl_para)
+            story.extend(adl_flow)
             story.append(Spacer(1, 0.12 * inch))
 
         fs_flow = build_family_social_flowables(soap, styles)
