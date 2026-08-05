@@ -8458,6 +8458,12 @@ class App(tk.Tk):
             same code the button on the Diagnosis page uses.  This is the single
             source of truth for "carry diagnosis codes forward".
 
+        HOI handling:
+          - HOI history (MOI, DOI, injury type, prior care, meds, diagnostics,
+            HOI canvas, etc.) is preserved from the current exam on all template
+            applies except an Initials template on Initial 1 when no prior saved
+            exam exists (the patient's first visit).
+
         All non-block diagnosis fields (assessment, prognosis, causation,
         imaging_recs, referrals, employment/work status, notes) come from the
         template as the author saved them.
@@ -8503,6 +8509,16 @@ class App(tk.Tk):
         merged_soap = dict(current_soap)
         for k, v in template_soap.items():
             merged_soap[k] = v
+
+        # Preserve HOI history on follow-up visits; only an Initials template on
+        # the patient's very first exam (Initial 1, no prior saved exam) may replace it.
+        allow_template_hoi = (
+            template_category_slug == TEMPLATE_CATEGORY_INITIALS_SLUG
+            and self._get_prior_exam_dx_blocks() is None
+            and (self.current_exam.get() or "").strip().lower() == "initial 1"
+        )
+        if not allow_template_hoi and isinstance(current_soap.get("hoi_struct"), dict):
+            merged_soap["hoi_struct"] = copy.deepcopy(current_soap["hoi_struct"])
 
         # If template carries subjectives blocks with stale "narrative" alongside
         # structured fields, strip narratives before applying (descriptor-driven auto text).
