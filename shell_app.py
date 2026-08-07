@@ -17,10 +17,11 @@ import os
 import re
 import subprocess
 import sys
+import threading
 import tkinter as tk
 from datetime import datetime
 from pathlib import Path
-from tkinter import messagebox, ttk
+from tkinter import filedialog, messagebox, ttk
 
 import shutil
 
@@ -617,6 +618,8 @@ class ShellLayout(tk.Frame):
 
                 page = DemographicsPage(self.page_area, self)
                 self.demographics_page = page
+            elif nav_id == "admin":
+                page = AdminPage(self.page_area)
             else:
                 page = PlaceholderPage(self.page_area, label)
             self._pages[nav_id] = page
@@ -712,6 +715,106 @@ class PlaceholderPage(tk.Frame):
         card.pack(fill="both", expand=True)
         tk.Label(body, text=f"The {title} workspace will be built later.",
                  bg=COLOR_CARD, fg=COLOR_MUTED, font=FONT_BASE).pack(anchor="w", pady=20)
+
+
+class AdminPage(tk.Frame):
+    def __init__(self, parent: tk.Misc):
+        super().__init__(parent, bg=COLOR_BG_APP)
+        wrap = tk.Frame(self, bg=COLOR_BG_APP)
+        wrap.pack(fill="both", expand=True, padx=20, pady=20)
+
+        tk.Label(wrap, text="Admin", bg=COLOR_BG_APP,
+                 fg=COLOR_TEXT, font=FONT_TITLE).pack(anchor="w")
+
+        card, body = make_card(wrap, "Patient PDF backup")
+        card.pack(fill="x", pady=(12, 0))
+
+        tk.Label(
+            body,
+            text=(
+                "Copy every patient's exam PDFs (pdfs/) and vault letters "
+                "(vault/) to a folder such as a thumb drive.\n"
+                "Existing files at the same path are overwritten."
+            ),
+            bg=COLOR_CARD,
+            fg=COLOR_MUTED,
+            font=FONT_BASE,
+            justify="left",
+            wraplength=640,
+        ).pack(anchor="w", pady=(8, 12))
+
+        self._copy_btn = tk.Button(
+            body,
+            text="Copy All Patient PDFs…",
+            command=self._copy_all_patient_pdfs,
+            bg=COLOR_CARD,
+            fg=COLOR_ACCENT,
+            relief="flat",
+            bd=0,
+            font=FONT_BASE_BOLD,
+            cursor="hand2",
+            activebackground=COLOR_CARD,
+            activeforeground="#1D4ED8",
+        )
+        self._copy_btn.pack(anchor="w", pady=(0, 12))
+
+    def _copy_all_patient_pdfs(self) -> None:
+        dest = filedialog.askdirectory(
+            parent=self,
+            title="Choose folder for patient PDF backup",
+        )
+        if not dest:
+            return
+
+        dest_path = Path(dest)
+        try:
+            dest_has_files = dest_path.is_dir() and any(dest_path.iterdir())
+        except Exception:
+            dest_has_files = False
+
+        if dest_has_files:
+            if not messagebox.askyesno(
+                "Overwrite existing files?",
+                "The destination folder is not empty.\n\n"
+                "Matching PDF paths will be overwritten.\n\nContinue?",
+                parent=self,
+            ):
+                return
+
+        if not messagebox.askokcancel(
+            "Protected health information",
+            "This will copy patient PDFs containing PHI to:\n"
+            f"{dest}\n\n"
+            "Continue?",
+            parent=self,
+        ):
+            return
+
+        self._copy_btn.configure(state="disabled")
+
+        def _worker() -> None:
+            from pdf_bulk_copy import copy_all_patient_pdfs
+
+            summary = copy_all_patient_pdfs(dest_path)
+
+            def _done() -> None:
+                self._copy_btn.configure(state="normal")
+                err_count = len(summary.get("errors") or [])
+                msg = (
+                    f"Destination:\n{dest}\n\n"
+                    f"Patients scanned: {summary.get('patients_scanned', 0)}\n"
+                    f"Patients with PDFs: {summary.get('patients_with_pdfs', 0)}\n"
+                    f"Files copied: {summary.get('files_copied', 0)}\n"
+                    f"Files overwritten: {summary.get('files_overwritten', 0)}\n"
+                    f"Errors: {err_count}"
+                )
+                if err_count:
+                    msg += "\n\nFirst errors:\n" + "\n".join(summary["errors"][:5])
+                messagebox.showinfo("PDF backup complete", msg, parent=self)
+
+            self.after(0, _done)
+
+        threading.Thread(target=_worker, daemon=True).start()
 
 
 class DashboardPage(tk.Frame):
