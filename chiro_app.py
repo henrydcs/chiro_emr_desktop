@@ -164,6 +164,13 @@ TEMPLATE_CATEGORIES = [
 # Only "initials" templates may replace diagnosis from the template file;
 # other categories keep diagnosis aligned with the previous saved exam (see apply_template_to_current_exam).
 TEMPLATE_CATEGORY_INITIALS_SLUG = "initials"
+# Follow-up categories keep the patient's HOI on apply; Therapy Only / Initials use the saved template.
+TEMPLATE_CATEGORIES_PRESERVE_HOI = frozenset({
+    "re_exams",
+    "review_of_findings",
+    "chiro_visits",
+    "finals",
+})
 
 
 def _canonical_imaging_body_part_label(body_part: str, body_parts: list[str]) -> str | None:
@@ -8459,10 +8466,10 @@ class App(tk.Tk):
             source of truth for "carry diagnosis codes forward".
 
         HOI handling:
-          - HOI history (MOI, DOI, injury type, prior care, meds, diagnostics,
-            HOI canvas, etc.) is preserved from the current exam on all template
-            applies except an Initials template on Initial 1 when no prior saved
-            exam exists (the patient's first visit).
+          - Re-Exams, Review of Findings, Chiro Visits, and Finals: HOI is kept
+            from the current exam (templates usually change Subjectives / Plan only).
+          - Therapy Only and Initials: HOI comes from the template file as saved
+            (e.g. empty MOI on a therapy-only macro clears Mechanism of Injury).
 
         All non-block diagnosis fields (assessment, prognosis, causation,
         imaging_recs, referrals, employment/work status, notes) come from the
@@ -8510,14 +8517,11 @@ class App(tk.Tk):
         for k, v in template_soap.items():
             merged_soap[k] = v
 
-        # Preserve HOI history on follow-up visits; only an Initials template on
-        # the patient's very first exam (Initial 1, no prior saved exam) may replace it.
-        allow_template_hoi = (
-            template_category_slug == TEMPLATE_CATEGORY_INITIALS_SLUG
-            and self._get_prior_exam_dx_blocks() is None
-            and (self.current_exam.get() or "").strip().lower() == "initial 1"
-        )
-        if not allow_template_hoi and isinstance(current_soap.get("hoi_struct"), dict):
+        # Preserve HOI on follow-up macro categories only (not Therapy Only / Initials).
+        if (
+            template_category_slug in TEMPLATE_CATEGORIES_PRESERVE_HOI
+            and isinstance(current_soap.get("hoi_struct"), dict)
+        ):
             merged_soap["hoi_struct"] = copy.deepcopy(current_soap["hoi_struct"])
 
         # If template carries subjectives blocks with stale "narrative" alongside
