@@ -6,6 +6,12 @@ from tkinter import ttk, messagebox
 
 from scrollframe import ScrollFrame
 from work_status_duration_storage import add_custom_duration, all_duration_choices
+from imaging_catalog_storage import (
+    add_custom_body_part,
+    add_custom_modality,
+    all_body_part_choices,
+    all_modality_choices,
+)
 from icd10_search_dialog import open_icd10_search_dialog
 from dx_favorites_storage import add_favorite, list_favorites
 from dx_favorites_dialog import open_search_dx_favorites_dialog
@@ -137,18 +143,6 @@ def generate_prognosis_paragraph(self):
         f"and overall health status, the prognosis is considered {prognosis_level}."
         "Progress will be monitored and reassessed throughout the course of care."
     )
-
-IMAGING_MODALITIES = ["(select)", "X-ray", "MRI", "CT", "Ultrasound"]
-IMAGING_PARTS = [
-    "(select)",
-    "Cervical Spine", "Thoracic Spine", "Lumbar Spine",
-    "Right Shoulder", "Left Shoulder", "B/L Shoulders",
-    "Right Elbow", "Left Elbow", "B/L Elbows",
-    "Right Wrist", "Left Wrist", "B/L Wrists",
-    "Right Hip", "Left Hip", "B/L Hips",
-    "Right Knee", "Left Knee", "B/L Knees",
-    "Right Ankle", "Left Ankle", "B/L Ankles",
-]
 
 REFERRAL_CHOICES = [
     "(select)",
@@ -803,6 +797,78 @@ class DiagnosisPage(ttk.Frame):
         self.work_duration_search_var.set("")
         self._on_work_status_fields_changed()
 
+    def _refresh_imaging_mod_cb_values(self) -> None:
+        if not hasattr(self, "cb_img_mod"):
+            return
+        cur = (self.img_mod_var.get() or "").strip()
+        vals = all_modality_choices()
+        self.cb_img_mod["values"] = vals
+        if cur and cur in vals:
+            self.img_mod_var.set(cur)
+
+    def _refresh_imaging_part_cb_values(self) -> None:
+        if not hasattr(self, "cb_img_part"):
+            return
+        cur = (self.img_part_var.get() or "").strip()
+        vals = all_body_part_choices()
+        self.cb_img_part["values"] = vals
+        if cur and cur in vals:
+            self.img_part_var.set(cur)
+
+    def _add_imaging_mod_from_search(self) -> None:
+        raw = (self.img_mod_search_var.get() or "").strip()
+        if not raw:
+            messagebox.showinfo(
+                "Imaging Type",
+                'Type an imaging type first (e.g., "MRI").',
+                parent=self.winfo_toplevel(),
+            )
+            return
+        existing = {x.strip().lower() for x in all_modality_choices()}
+        if raw.lower() in existing:
+            match = next((x for x in all_modality_choices() if x.lower() == raw.lower()), raw)
+            self.img_mod_var.set(match)
+            self.img_mod_search_var.set("")
+            self._refresh_imaging_mod_cb_values()
+            return
+        if not add_custom_modality(raw):
+            messagebox.showinfo(
+                "Imaging Type",
+                "That imaging type is already in the list.",
+                parent=self.winfo_toplevel(),
+            )
+            return
+        self._refresh_imaging_mod_cb_values()
+        self.img_mod_var.set(raw)
+        self.img_mod_search_var.set("")
+
+    def _add_imaging_part_from_search(self) -> None:
+        raw = (self.img_part_search_var.get() or "").strip()
+        if not raw:
+            messagebox.showinfo(
+                "Body Part",
+                'Type a body part first (e.g., "Right Ankle").',
+                parent=self.winfo_toplevel(),
+            )
+            return
+        existing = {x.strip().lower() for x in all_body_part_choices()}
+        if raw.lower() in existing:
+            match = next((x for x in all_body_part_choices() if x.lower() == raw.lower()), raw)
+            self.img_part_var.set(match)
+            self.img_part_search_var.set("")
+            self._refresh_imaging_part_cb_values()
+            return
+        if not add_custom_body_part(raw):
+            messagebox.showinfo(
+                "Body Part",
+                "That body part is already in the list.",
+                parent=self.winfo_toplevel(),
+            )
+            return
+        self._refresh_imaging_part_cb_values()
+        self.img_part_var.set(raw)
+        self.img_part_search_var.set("")
+
     def _open_work_status_letter_editor(self) -> None:
         if not self._work_status_letter_ready():
             messagebox.showinfo(
@@ -1165,16 +1231,59 @@ class DiagnosisPage(ttk.Frame):
 
         self.img_mod_var = tk.StringVar(value="(select)")
         self.img_part_var = tk.StringVar(value="(select)")
+        self.img_mod_search_var = tk.StringVar(value="")
+        self.img_part_search_var = tk.StringVar(value="")
 
-        cb_img_mod = ttk.Combobox(img_row, textvariable=self.img_mod_var, values=IMAGING_MODALITIES, state="readonly")
-        self._disable_mousewheel_on_cb(cb_img_mod)
-        cb_img_mod.grid(row=0, column=0, sticky="ew", padx=(0, 6))
-        cb_img_part = ttk.Combobox(img_row, textvariable=self.img_part_var, values=IMAGING_PARTS, state="readonly")
-        self._disable_mousewheel_on_cb(cb_img_part)
-        cb_img_part.grid(row=0, column=1, sticky="ew", padx=(6, 0))
+        self.cb_img_mod = ttk.Combobox(
+            img_row,
+            textvariable=self.img_mod_var,
+            values=all_modality_choices(),
+            state="readonly",
+        )
+        self._disable_mousewheel_on_cb(self.cb_img_mod)
+        self.cb_img_mod.grid(row=0, column=0, sticky="ew", padx=(0, 6))
+        self.cb_img_part = ttk.Combobox(
+            img_row,
+            textvariable=self.img_part_var,
+            values=all_body_part_choices(),
+            state="readonly",
+        )
+        self._disable_mousewheel_on_cb(self.cb_img_part)
+        self.cb_img_part.grid(row=0, column=1, sticky="ew", padx=(6, 0))
+
+        img_search_row = ttk.Frame(img_box)
+        img_search_row.grid(row=1, column=0, sticky="ew", padx=8, pady=(0, 4))
+        img_search_row.columnconfigure(0, weight=1)
+        img_search_row.columnconfigure(1, weight=1)
+
+        mod_search_col = ttk.Frame(img_search_row)
+        mod_search_col.grid(row=0, column=0, sticky="ew", padx=(0, 6))
+        mod_search_col.columnconfigure(0, weight=1)
+        ttk.Label(mod_search_col, text="Add imaging type:").grid(row=0, column=0, columnspan=2, sticky="w")
+        ttk.Entry(mod_search_col, textvariable=self.img_mod_search_var).grid(
+            row=1, column=0, sticky="ew", pady=(4, 0)
+        )
+        ttk.Button(
+            mod_search_col,
+            text="+ Add",
+            command=self._add_imaging_mod_from_search,
+        ).grid(row=1, column=1, padx=(6, 0), pady=(4, 0))
+
+        part_search_col = ttk.Frame(img_search_row)
+        part_search_col.grid(row=0, column=1, sticky="ew", padx=(6, 0))
+        part_search_col.columnconfigure(0, weight=1)
+        ttk.Label(part_search_col, text="Add body part:").grid(row=0, column=0, columnspan=2, sticky="w")
+        ttk.Entry(part_search_col, textvariable=self.img_part_search_var).grid(
+            row=1, column=0, sticky="ew", pady=(4, 0)
+        )
+        ttk.Button(
+            part_search_col,
+            text="+ Add",
+            command=self._add_imaging_part_from_search,
+        ).grid(row=1, column=1, padx=(6, 0), pady=(4, 0))
 
         img_btns = ttk.Frame(img_box)
-        img_btns.grid(row=1, column=0, sticky="w", padx=8, pady=(0, 6))
+        img_btns.grid(row=2, column=0, sticky="w", padx=8, pady=(0, 6))
         ttk.Button(img_btns, text="Add", command=self._add_imaging_rec).pack(side="left")
         ttk.Button(img_btns, text="Remove Selected", command=self._remove_imaging_rec).pack(side="left", padx=(8, 0))
         ttk.Button(img_btns, text="Remove All", command=self._remove_all_imaging_recs).pack(side="left", padx=(8, 0))
@@ -1182,14 +1291,14 @@ class DiagnosisPage(ttk.Frame):
         self.imaging_letter_btns.pack(side="left")
 
         self.imaging_list = tk.Listbox(img_box, height=4, selectmode=tk.EXTENDED)
-        self.imaging_list.grid(row=2, column=0, sticky="ew", padx=8, pady=(0, 8))
+        self.imaging_list.grid(row=3, column=0, sticky="ew", padx=8, pady=(0, 8))
         self.imaging_list.bind("<Double-Button-1>", self._on_imaging_list_click)
         if not hasattr(self, "imaging_notes_var"):
             self.imaging_notes_var = tk.StringVar(value="")
-        ttk.Label(img_box, text="Notes (general text):").grid(row=3, column=0, sticky="w", padx=8, pady=(14, 4))
+        ttk.Label(img_box, text="Notes (general text):").grid(row=4, column=0, sticky="w", padx=8, pady=(14, 4))
         self.imaging_notes = tk.Text(img_box, height=4, wrap="word", font=("Segoe UI", 9))
-        self.imaging_notes.grid(row=4, column=0, sticky="nsew", padx=8, pady=(0, 8))
-        img_box.rowconfigure(4, weight=1)
+        self.imaging_notes.grid(row=5, column=0, sticky="nsew", padx=8, pady=(0, 8))
+        img_box.rowconfigure(5, weight=1)
         try:
             self.imaging_notes.delete("1.0", "end")
             self.imaging_notes.insert("1.0", self.imaging_notes_var.get() or "")
@@ -1925,6 +2034,8 @@ class DiagnosisPage(ttk.Frame):
             try:
                 self.img_mod_var.set("(select)")
                 self.img_part_var.set("(select)")
+                self.img_mod_search_var.set("")
+                self.img_part_search_var.set("")
                 self.ref_var.set("(select)")
             except Exception:
                 pass
@@ -2072,7 +2183,13 @@ class DiagnosisPage(ttk.Frame):
             try:
                 self.img_mod_var.set("(select)")
                 self.img_part_var.set("(select)")
+                if hasattr(self, "img_mod_search_var"):
+                    self.img_mod_search_var.set("")
+                if hasattr(self, "img_part_search_var"):
+                    self.img_part_search_var.set("")
                 self.ref_var.set("(select)")
+                self._refresh_imaging_mod_cb_values()
+                self._refresh_imaging_part_cb_values()
             except Exception:
                 pass
 
