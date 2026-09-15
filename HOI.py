@@ -409,6 +409,7 @@ class HOIPage(ttk.Frame):
     AA_ACCIDENT_TYPES = ["Moving Vehicle Accident", "Parked Vehicle Accident", "Intersection Accident", "Other"]
     AA_OTHER_VEHICLE_PART = ["front", "rear", "left side", "right side"]
     AA_PATIENT_SIDE = ["driver side", "passenger side", "front", "rear"]
+    AA_OCCUPANT_ROLE = ["driver", "passenger"]
     AA_RESEMBLES = ["rear-end", "T-bone", "head-on", "sideswipe", "other"]
 
     # Slip/Fall specifics
@@ -1233,6 +1234,7 @@ class HOIPage(ttk.Frame):
         self.aa_other_part_var = tk.StringVar(value=self.AA_OTHER_VEHICLE_PART[0])
         self.aa_patient_side_var = tk.StringVar(value=self.AA_PATIENT_SIDE[0])
         self.aa_resembles_var = tk.StringVar(value=self.AA_RESEMBLES[0])
+        self.aa_occupant_role_var = tk.StringVar(value=self.AA_OCCUPANT_ROLE[0])
 
         # slip/fall
         self.sf_circumstance_var = tk.StringVar(value=self.SF_CIRCUMSTANCES[0])
@@ -1276,6 +1278,7 @@ class HOIPage(ttk.Frame):
             self.imaging_done_var,
             self.aa_moving_var, self.aa_other_part_var,
             self.aa_patient_side_var, self.aa_resembles_var,
+            self.aa_occupant_role_var,
             self.sf_circumstance_var, self.sf_landing_var,
             self.db_location_var, self.db_severity_var,
         ]
@@ -1512,6 +1515,10 @@ class HOIPage(ttk.Frame):
                 f"{self.aa_patient_side_var.get().strip().lower()}, and the mechanism of injury "
                 f"most closely resembles a {self.aa_resembles_var.get().strip().lower()} collision."
             ]
+            if (self.aa_occupant_role_var.get() or "").strip().lower() == "passenger":
+                p1_parts.append("Patient was a passenger in the vehicle that was impacted.")
+            else:
+                p1_parts.append("Patient was the driver of the vehicle that was impacted.")
 
             typed_course = _clean(self.course_notes_var.get())
             if typed_course:
@@ -1855,9 +1862,27 @@ class HOIPage(ttk.Frame):
         ttk.Radiobutton(sex_row, text="Unknown", value="(unknown)", variable=self.sex_var).pack(side="left", padx=(10, 0))
 
         ttk.Label(f, text="Type:").grid(row=1, column=0, sticky="w", padx=10, pady=10)
-        cb_type_injury = ttk.Combobox(f, textvariable=self.injury_type_var, values=self.INJURY_TYPES, state="readonly", width=18)
+        type_row = ttk.Frame(f)
+        type_row.grid(row=1, column=1, columnspan=3, sticky="w", padx=10, pady=10)
+        cb_type_injury = ttk.Combobox(
+            type_row,
+            textvariable=self.injury_type_var,
+            values=self.INJURY_TYPES,
+            state="readonly",
+            width=18,
+        )
         self._disable_mousewheel_on_cb(cb_type_injury)
-        cb_type_injury.grid(row=1, column=1, sticky="w", padx=10, pady=10)
+        cb_type_injury.pack(side="left")
+        ttk.Label(type_row, text="The patient was:").pack(side="left", padx=(16, 6))
+        cb_occupant_role = ttk.Combobox(
+            type_row,
+            textvariable=self.aa_occupant_role_var,
+            values=self.AA_OCCUPANT_ROLE,
+            state="readonly",
+            width=12,
+        )
+        self._disable_mousewheel_on_cb(cb_occupant_role)
+        cb_occupant_role.pack(side="left")
 
         panel = ttk.Frame(f)
         panel.grid(row=2, column=0, columnspan=4, sticky="ew", padx=10, pady=(0, 10))
@@ -2324,6 +2349,7 @@ class HOIPage(ttk.Frame):
                     "other_vehicle_part": self.aa_other_part_var.get(),
                     "patient_side": self.aa_patient_side_var.get(),
                     "resembles": self.aa_resembles_var.get(),
+                    "occupant_role": self.aa_occupant_role_var.get(),
                 },
                 "slip_fall": {
                     "circumstance": self.sf_circumstance_var.get(),
@@ -2470,6 +2496,10 @@ class HOIPage(ttk.Frame):
             self.aa_other_part_var.set(aa.get("other_vehicle_part", self.AA_OTHER_VEHICLE_PART[0]))
             self.aa_patient_side_var.set(aa.get("patient_side", self.AA_PATIENT_SIDE[0]))
             self.aa_resembles_var.set(aa.get("resembles", self.AA_RESEMBLES[0]))
+            occ = aa.get("occupant_role", self.AA_OCCUPANT_ROLE[0])
+            if occ not in self.AA_OCCUPANT_ROLE:
+                occ = self.AA_OCCUPANT_ROLE[0]
+            self.aa_occupant_role_var.set(occ)
 
             sf = struct.get("slip_fall") or {}
             self.sf_circumstance_var.set(sf.get("circumstance", self.SF_CIRCUMSTANCES[0]))
@@ -2702,6 +2732,7 @@ class HOIPage(ttk.Frame):
         self.aa_other_part_var.set(self.AA_OTHER_VEHICLE_PART[0])
         self.aa_patient_side_var.set(self.AA_PATIENT_SIDE[0])
         self.aa_resembles_var.set(self.AA_RESEMBLES[0])
+        self.aa_occupant_role_var.set(self.AA_OCCUPANT_ROLE[0])
 
         self.sf_circumstance_var.set(self.SF_CIRCUMSTANCES[0])
         self.sf_landing_var.set(self.SF_LANDING[0])
