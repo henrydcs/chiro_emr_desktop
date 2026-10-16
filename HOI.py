@@ -493,7 +493,7 @@ class HOIPage(ttk.Frame):
     _INTRO_EXAM_SCOPE_OPTIONS = (
         "a physical examination including orthopedic, neurological, and functional assessments as clinically indicated",
         "a focused re-examination of previously identified findings",
-        "a final clinical examination and record review",
+        "a final clinical examination and final chart review",
     )
 
     def apply_rof_intro_preset_for_mode(self, mode: str, *, update_mode: bool = True) -> None:

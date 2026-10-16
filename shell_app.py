@@ -1970,8 +1970,8 @@ class PatientsPage(tk.Frame):
         doi = (profile.get("doi") or "").strip()
         addr = profile.get("address")
 
-        field_pair(0, 0, "First name", first)
-        field_pair(0, 1, "Last name", last)
+        field_pair(0, 0, "Last name", last)
+        field_pair(0, 1, "First name", first)
         field_pair(1, 0, "Date of birth", dob)
         field_pair(1, 1, "Date of injury", doi or "—")
         field_pair(1, 2, "Gender", gender)
@@ -2112,12 +2112,12 @@ class PatientsPage(tk.Frame):
             ent.grid(row=row, column=col, sticky="ew", padx=(0, 14), pady=(0, 12))
             return ent
 
-        # Row 0: First/Last labels
-        label(0, 0, "First Name", required=True)
-        label(0, 1, "Last Name", required=True)
-        # Row 1: First/Last entries
-        entry(1, 0, self.f_first)
-        entry(1, 1, self.f_last)
+        # Row 0: Last/First labels (last name left, first name right)
+        label(0, 0, "Last Name", required=True)
+        label(0, 1, "First Name", required=True)
+        # Row 1: Last/First entries
+        entry(1, 0, self.f_last)
+        entry(1, 1, self.f_first)
 
         # Row 2: DOB / DOI / Gender labels
         label(2, 0, "Date of Birth", required=True)

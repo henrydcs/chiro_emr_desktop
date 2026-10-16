@@ -12,6 +12,7 @@ from imaging_catalog_storage import (
     all_body_part_choices,
     all_modality_choices,
 )
+from referral_provider_storage import add_custom_referral_provider, all_referral_provider_choices
 from icd10_search_dialog import open_icd10_search_dialog
 from dx_favorites_storage import add_favorite, list_favorites
 from dx_favorites_dialog import open_search_dx_favorites_dialog
@@ -143,13 +144,6 @@ def generate_prognosis_paragraph(self):
         f"and overall health status, the prognosis is considered {prognosis_level}."
         "Progress will be monitored and reassessed throughout the course of care."
     )
-
-REFERRAL_CHOICES = [
-    "(select)",
-    "Orthopedist", "Neurologist", "Pain Management", "Primary Care",
-    "Physical Therapy", "Radiology", "Chiropractic Specialty", "Psychology", "None at this time"
-]
-
 
 def _dx_display(label: str, icd10: str) -> str:
     icd10 = _clean(icd10)
@@ -869,6 +863,45 @@ class DiagnosisPage(ttk.Frame):
         self.img_part_var.set(raw)
         self.img_part_search_var.set("")
 
+    def _refresh_referral_cb_values(self) -> None:
+        if not hasattr(self, "cb_ref"):
+            return
+        cur = (self.ref_var.get() or "").strip()
+        vals = all_referral_provider_choices()
+        self.cb_ref["values"] = vals
+        if cur and cur in vals:
+            self.ref_var.set(cur)
+
+    def _add_referral_provider_from_search(self) -> None:
+        raw = (self.ref_search_var.get() or "").strip()
+        if not raw:
+            messagebox.showinfo(
+                "Referral Provider",
+                'Type a provider type first (e.g., "Dentist").',
+                parent=self.winfo_toplevel(),
+            )
+            return
+        existing = {x.strip().lower() for x in all_referral_provider_choices()}
+        if raw.lower() in existing:
+            match = next(
+                (x for x in all_referral_provider_choices() if x.lower() == raw.lower()),
+                raw,
+            )
+            self.ref_var.set(match)
+            self.ref_search_var.set("")
+            self._refresh_referral_cb_values()
+            return
+        if not add_custom_referral_provider(raw):
+            messagebox.showinfo(
+                "Referral Provider",
+                "That provider is already in the list.",
+                parent=self.winfo_toplevel(),
+            )
+            return
+        self._refresh_referral_cb_values()
+        self.ref_var.set(raw)
+        self.ref_search_var.set("")
+
     def _open_work_status_letter_editor(self) -> None:
         if not self._work_status_letter_ready():
             messagebox.showinfo(
@@ -1319,12 +1352,31 @@ class DiagnosisPage(ttk.Frame):
         ref_box.columnconfigure(0, weight=1)
 
         self.ref_var = tk.StringVar(value="(select)")
-        cb_ref = ttk.Combobox(ref_box, textvariable=self.ref_var, values=REFERRAL_CHOICES, state="readonly")
-        self._disable_mousewheel_on_cb(cb_ref)
-        cb_ref.grid(row=0, column=0, sticky="ew", padx=8, pady=(8, 4))
+        self.ref_search_var = tk.StringVar(value="")
+        self.cb_ref = ttk.Combobox(
+            ref_box,
+            textvariable=self.ref_var,
+            values=all_referral_provider_choices(),
+            state="readonly",
+        )
+        self._disable_mousewheel_on_cb(self.cb_ref)
+        self.cb_ref.grid(row=0, column=0, sticky="ew", padx=8, pady=(8, 4))
+
+        ref_add_row = ttk.Frame(ref_box)
+        ref_add_row.grid(row=1, column=0, sticky="ew", padx=8, pady=(0, 4))
+        ref_add_row.columnconfigure(0, weight=1)
+        ttk.Label(ref_add_row, text="Add provider type:").grid(row=0, column=0, columnspan=2, sticky="w")
+        ttk.Entry(ref_add_row, textvariable=self.ref_search_var).grid(
+            row=1, column=0, sticky="ew", pady=(4, 0)
+        )
+        ttk.Button(
+            ref_add_row,
+            text="+ Add",
+            command=self._add_referral_provider_from_search,
+        ).grid(row=1, column=1, padx=(6, 0), pady=(4, 0))
 
         ref_btns = ttk.Frame(ref_box)
-        ref_btns.grid(row=1, column=0, sticky="w", padx=8, pady=(0, 6))
+        ref_btns.grid(row=2, column=0, sticky="w", padx=8, pady=(0, 6))
         ttk.Button(ref_btns, text="Add", command=self._add_referral).pack(side="left")
         ttk.Button(ref_btns, text="Remove Selected", command=self._remove_referral).pack(side="left", padx=(8, 0))
         ttk.Button(ref_btns, text="Remove All", command=self._remove_all_referrals).pack(side="left", padx=(8, 0))
@@ -1332,14 +1384,14 @@ class DiagnosisPage(ttk.Frame):
         self.referral_letter_btns.pack(side="left")
 
         self.ref_list = tk.Listbox(ref_box, height=4, selectmode=tk.EXTENDED)
-        self.ref_list.grid(row=2, column=0, sticky="ew", padx=8, pady=(0, 8))
+        self.ref_list.grid(row=3, column=0, sticky="ew", padx=8, pady=(0, 8))
         self.ref_list.bind("<Double-Button-1>", self._on_ref_list_click)
         if not hasattr(self, "referrals_notes_var"):
             self.referrals_notes_var = tk.StringVar(value="")
-        ttk.Label(ref_box, text="Notes (general text):").grid(row=3, column=0, sticky="w", padx=8, pady=(14, 4))
+        ttk.Label(ref_box, text="Notes (general text):").grid(row=4, column=0, sticky="w", padx=8, pady=(14, 4))
         self.referrals_notes = tk.Text(ref_box, height=4, wrap="word", font=("Segoe UI", 9))
-        self.referrals_notes.grid(row=4, column=0, sticky="nsew", padx=8, pady=(0, 8))
-        ref_box.rowconfigure(4, weight=1)
+        self.referrals_notes.grid(row=5, column=0, sticky="nsew", padx=8, pady=(0, 8))
+        ref_box.rowconfigure(5, weight=1)
         try:
             self.referrals_notes.delete("1.0", "end")
             self.referrals_notes.insert("1.0", self.referrals_notes_var.get() or "")
@@ -2037,6 +2089,8 @@ class DiagnosisPage(ttk.Frame):
                 self.img_mod_search_var.set("")
                 self.img_part_search_var.set("")
                 self.ref_var.set("(select)")
+                if hasattr(self, "ref_search_var"):
+                    self.ref_search_var.set("")
             except Exception:
                 pass
 
@@ -2188,8 +2242,11 @@ class DiagnosisPage(ttk.Frame):
                 if hasattr(self, "img_part_search_var"):
                     self.img_part_search_var.set("")
                 self.ref_var.set("(select)")
+                if hasattr(self, "ref_search_var"):
+                    self.ref_search_var.set("")
                 self._refresh_imaging_mod_cb_values()
                 self._refresh_imaging_part_cb_values()
+                self._refresh_referral_cb_values()
             except Exception:
                 pass
 
