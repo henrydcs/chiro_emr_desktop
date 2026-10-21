@@ -26,10 +26,17 @@ from tkinter import filedialog, messagebox, ttk
 import shutil
 
 import auth
-from config import PATIENT_SUBDIR_EXAMS, PATIENTS_ID_ROOT
+from config import EXAM_INDEX_SUBDIR, PATIENT_SUBDIR_EXAMS, PATIENTS_ID_ROOT
 from paths import get_data_dir
 from patient_storage import get_patient_root, new_patient_id
-from utils import find_patient_folder_by_id, normalize_mmddyyyy, to_last_first
+from utils import (
+    ensure_patient_dirs,
+    find_patient_folder_by_id,
+    normalize_mmddyyyy,
+    safe_slug,
+    today_mmddyyyy,
+    to_last_first,
+)
 
 # ---------------- App constants ----------------
 
@@ -39,6 +46,7 @@ NAV_ITEMS: list[tuple[str, str]] = [
     ("documents", "Documents"),
     ("billing", "Billing"),
     ("demographics", "Demographics"),
+    ("analytics", "Analytics"),
     ("providers", "Providers"),
     ("appt_types", "Appt Types"),
     ("team", "Team"),
@@ -297,6 +305,117 @@ def get_last_visit_date(folder: Path) -> str:
     return visits[0]["exam_date"] if visits else ""
 
 
+_EXAM_INDEX_FILENAME = "_exam_index.json"
+
+# (kind, button label, exam name prefix, button color)
+_CREATE_ENCOUNTER_TYPES: list[tuple[str, str, str, str]] = [
+    ("initial", "Initial", "Initial", "#2563EB"),
+    ("re_exam", "Re-Exam", "Re-Exam", "#7C3AED"),
+    ("rof", "ROF", "Review of Findings", "#0EA5E9"),
+    ("final", "Final", "Final", "#DB2777"),
+    ("chiro", "Chiropractic Visit", "Chiro Visit", "#16A34A"),
+]
+
+
+def _read_exam_index(folder: Path) -> list[str]:
+    primary = folder / EXAM_INDEX_SUBDIR / _EXAM_INDEX_FILENAME
+    legacy = folder / PATIENT_SUBDIR_EXAMS / _EXAM_INDEX_FILENAME
+    path = primary if primary.is_file() else legacy
+    if not path.is_file():
+        return []
+    try:
+        data = json.loads(path.read_text(encoding="utf-8")) or {}
+    except Exception:
+        return []
+    names = []
+    seen = set()
+    for item in data.get("exams") or []:
+        name = (item or "").strip() if isinstance(item, str) else ""
+        key = name.lower()
+        if name and key not in seen:
+            seen.add(key)
+            names.append(name)
+    return names
+
+
+def _write_exam_index(folder: Path, names: list[str]) -> None:
+    ensure_patient_dirs(folder)
+    index_dir = folder / EXAM_INDEX_SUBDIR
+    index_dir.mkdir(parents=True, exist_ok=True)
+    path = index_dir / _EXAM_INDEX_FILENAME
+    tmp = path.with_suffix(".json.tmp")
+    with open(tmp, "w", encoding="utf-8") as f:
+        json.dump({"exams": list(names)}, f, indent=2)
+    os.replace(tmp, path)
+
+
+def _next_exam_number(names: list[str], prefix: str) -> int:
+    pat = re.compile(rf"^\s*{re.escape(prefix)}\s+(\d+)\s*$", re.IGNORECASE)
+    used = set()
+    for name in names:
+        match = pat.match((name or "").strip())
+        if match:
+            try:
+                used.add(int(match.group(1)))
+            except Exception:
+                pass
+    n = 1
+    while n in used:
+        n += 1
+    return n
+
+
+def _create_encounter_exam_file(folder: Path, exam_name: str, exam_date: str) -> Path:
+    """Copy the newest exam forward (or start a blank one) and set its visit date."""
+    ensure_patient_dirs(folder)
+    visits = collect_visits_for_patient(folder)
+    payload: dict = {}
+    if visits:
+        try:
+            loaded = json.loads(Path(visits[0]["path"]).read_text(encoding="utf-8")) or {}
+            if isinstance(loaded, dict):
+                payload = loaded
+        except Exception:
+            payload = {}
+    if not payload:
+        profile = read_patient_profile(folder)
+        payload = {
+            "patient": {
+                "patient_id": (profile.get("patient_id") or "").strip(),
+                "last_name": profile.get("last_name") or "",
+                "first_name": profile.get("first_name") or "",
+                "dob": profile.get("dob") or "",
+                "doi": profile.get("doi") or "",
+                "claim": profile.get("claim") or "",
+                "provider": profile.get("provider") or "",
+            },
+            "soap": {},
+        }
+
+    payload["exam"] = exam_name
+    patient = payload.get("patient")
+    if not isinstance(patient, dict):
+        patient = {}
+        payload["patient"] = patient
+    patient["exam_date"] = exam_date
+
+    exams_dir = folder / PATIENT_SUBDIR_EXAMS
+    exams_dir.mkdir(parents=True, exist_ok=True)
+    path = exams_dir / f"{safe_slug(exam_name)}.json"
+    tmp = path.with_suffix(".json.tmp")
+    with open(tmp, "w", encoding="utf-8") as f:
+        json.dump(payload, f, indent=2)
+    os.replace(tmp, path)
+
+    names = _read_exam_index(folder)
+    if not names:
+        names = [v["exam_name"] for v in reversed(visits)]
+    if exam_name.lower() not in {n.lower() for n in names}:
+        names.append(exam_name)
+    _write_exam_index(folder, names)
+    return path
+
+
 def collect_visits_for_patient(folder: Path) -> list[dict]:
     """Return list of {exam_name, exam_date, provider, path} sorted newest first."""
     out: list[dict] = []
@@ -540,6 +659,7 @@ class ShellLayout(tk.Frame):
         self.appt_types_page: "ApptTypesPage | None" = None
         self.providers_page: "ProvidersPage | None" = None
         self.demographics_page: "DemographicsPage | None" = None
+        self.analytics_page: "AnalyticsPage | None" = None
 
         self._build()
         self.show_page("dashboard")
@@ -618,6 +738,11 @@ class ShellLayout(tk.Frame):
 
                 page = DemographicsPage(self.page_area, self)
                 self.demographics_page = page
+            elif nav_id == "analytics":
+                from analytics_page import AnalyticsPage
+
+                page = AnalyticsPage(self.page_area, self)
+                self.analytics_page = page
             elif nav_id == "admin":
                 page = AdminPage(self.page_area)
             else:
@@ -1187,6 +1312,7 @@ class DocumentsPage(tk.Frame):
                 f"{patient['label']} — no encounters yet. "
                 "Click below to start the first visit."
             )
+            self._make_create_encounter_row(patient)
             self._make_start_first_visit_row(patient)
             return
 
@@ -1194,6 +1320,7 @@ class DocumentsPage(tk.Frame):
             f"{patient['label']} — {len(visits)} encounter(s). Click a row to open SOAP."
         )
 
+        self._make_create_encounter_row(patient)
         for visit in visits:
             self._make_encounter_row(visit)
 
@@ -1245,6 +1372,166 @@ class DocumentsPage(tk.Frame):
                  text="The visit will appear here automatically once you save it.",
                  bg=COLOR_CARD, fg=COLOR_MUTED, font=FONT_SMALL
                  ).pack(anchor="center", pady=(6, 4))
+
+    def _make_create_encounter_row(self, patient: dict) -> None:
+        """Top-of-list card that opens the Create Encounter popup."""
+        row = tk.Frame(self.enc_inner, bg=COLOR_CARD,
+                       highlightbackground=COLOR_BORDER,
+                       highlightthickness=1, cursor="hand2")
+        row.pack(fill="x", padx=8, pady=4)
+
+        marker = tk.Label(row, text=" + ",
+                          bg="#EEF2FF", fg=COLOR_ACCENT, font=FONT_BASE_BOLD,
+                          padx=4)
+        marker.pack(side="left", fill="y")
+
+        text_box = tk.Frame(row, bg=COLOR_CARD)
+        text_box.pack(side="left", fill="both", expand=True, padx=8, pady=8)
+
+        title = tk.Label(text_box, text="Create Encounter",
+                         bg=COLOR_CARD, fg=COLOR_TEXT, font=FONT_BASE_BOLD)
+        title.pack(anchor="w")
+
+        def open_create(_e=None):
+            self._show_create_encounter_popup(patient)
+
+        for w in (row, marker, text_box, title):
+            w.bind("<Button-1>", open_create)
+
+        def hover_in(_e=None):
+            row.configure(bg="#F8FAFC")
+            text_box.configure(bg="#F8FAFC")
+            title.configure(bg="#F8FAFC")
+
+        def hover_out(_e=None):
+            row.configure(bg=COLOR_CARD)
+            text_box.configure(bg=COLOR_CARD)
+            title.configure(bg=COLOR_CARD)
+
+        row.bind("<Enter>", hover_in)
+        row.bind("<Leave>", hover_out)
+
+    def _show_create_encounter_popup(self, patient: dict) -> None:
+        """Date plus visit type. Does not use the SOAP visit-type or date popups."""
+        dlg = tk.Toplevel(self.winfo_toplevel())
+        dlg.title("Create Encounter")
+        dlg.configure(bg="#FFFFFF")
+        dlg.transient(self.winfo_toplevel())
+        dlg.grab_set()
+        dlg.resizable(False, False)
+
+        wrap = tk.Frame(dlg, bg="#FFFFFF", padx=20, pady=16)
+        wrap.pack(fill="both", expand=True)
+
+        date_var = tk.StringVar()
+        tk.Label(
+            wrap, text="Please enter date of Exam or Visit:",
+            bg="#FFFFFF", fg="#0F172A", font=("Segoe UI", 10),
+        ).pack(anchor="w")
+        date_entry = tk.Entry(
+            wrap, textvariable=date_var, width=16,
+            font=("Segoe UI", 10), relief="solid", bd=1,
+        )
+        date_entry.pack(anchor="w", pady=(4, 6))
+
+        def use_today():
+            date_var.set(today_mmddyyyy())
+
+        tk.Button(
+            wrap, text="Use Today's date", command=use_today, cursor="hand2",
+            bg="#F1F5F9", fg="#0F172A", activebackground="#E2E8F0",
+            activeforeground="#0F172A", relief="flat", bd=0,
+            font=("Segoe UI", 10), padx=12, pady=6,
+        ).pack(anchor="w", pady=(0, 12))
+
+        tk.Label(
+            wrap, text="What type of visit will this be?",
+            bg="#FFFFFF", fg="#0F172A", font=("Segoe UI", 12, "bold"),
+        ).pack(anchor="w")
+
+        who = (patient.get("label") or "").strip()
+        if who:
+            tk.Label(
+                wrap, text=who,
+                bg="#FFFFFF", fg="#2563EB", font=("Segoe UI", 10, "bold"),
+            ).pack(anchor="w", pady=(4, 12))
+
+        btn_grid = tk.Frame(wrap, bg="#FFFFFF")
+        btn_grid.pack(fill="x")
+        for i in range(2):
+            btn_grid.columnconfigure(i, weight=1)
+
+        def choose(prefix: str):
+            raw = (date_var.get() or "").strip()
+            normalized = normalize_mmddyyyy(raw) if raw else ""
+            if not re.fullmatch(r"\d{2}/\d{2}/\d{4}", normalized or ""):
+                messagebox.showinfo(
+                    "Date required",
+                    "Enter a date (MM/DD/YYYY) or click Use Today's date, then choose a visit type.",
+                    parent=dlg,
+                )
+                return
+            try:
+                dlg.grab_release()
+            except Exception:
+                pass
+            dlg.destroy()
+            self._open_created_encounter(patient, prefix, normalized)
+
+        placements = (
+            (0, 0, 1, _CREATE_ENCOUNTER_TYPES[0]),
+            (0, 1, 1, _CREATE_ENCOUNTER_TYPES[1]),
+            (1, 0, 1, _CREATE_ENCOUNTER_TYPES[2]),
+            (1, 1, 1, _CREATE_ENCOUNTER_TYPES[3]),
+            (2, 0, 2, _CREATE_ENCOUNTER_TYPES[4]),
+        )
+        for row_i, col_i, span, (_kind, label, prefix, color) in placements:
+            btn = tk.Button(
+                btn_grid, text=label, cursor="hand2",
+                bg="#F8FAFC", fg=color, activebackground="#EEF2FF",
+                activeforeground=color, relief="solid", bd=1,
+                font=("Segoe UI", 10, "bold"), padx=14, pady=10,
+                highlightthickness=1, highlightbackground="#E5E7EB",
+                command=lambda p=prefix: choose(p),
+            )
+            btn.grid(row=row_i, column=col_i, columnspan=span,
+                     sticky="nsew", padx=4, pady=4)
+
+        dlg.protocol("WM_DELETE_WINDOW", dlg.destroy)
+        dlg.update_idletasks()
+        host = self.winfo_toplevel()
+        x = host.winfo_rootx() + max(20, (host.winfo_width() - dlg.winfo_reqwidth()) // 2)
+        y = host.winfo_rooty() + max(20, (host.winfo_height() - dlg.winfo_reqheight()) // 2)
+        dlg.geometry(f"+{x}+{y}")
+        dlg.lift()
+        date_entry.focus_force()
+
+    def _open_created_encounter(self, patient: dict, prefix: str, exam_date: str) -> None:
+        if self._soap_proc is not None and self._soap_proc.poll() is None:
+            messagebox.showinfo(
+                "SOAP open",
+                "The SOAP builder is already open. Exit it first.",
+            )
+            return
+        folder_s = patient.get("folder") or ""
+        pid = (patient.get("patient_id") or "").strip()
+        if not folder_s or not pid:
+            messagebox.showerror("Create Encounter", "This patient is missing a folder or patient id.")
+            return
+        folder = Path(folder_s)
+        names = _read_exam_index(folder)
+        for visit in collect_visits_for_patient(folder):
+            if visit["exam_name"].lower() not in {n.lower() for n in names}:
+                names.append(visit["exam_name"])
+        exam_name = f"{prefix} {_next_exam_number(names, prefix)}"
+        try:
+            path = _create_encounter_exam_file(folder, exam_name, exam_date)
+        except Exception as e:
+            messagebox.showerror("Create Encounter", f"Could not create the encounter.\n\n{e}")
+            return
+        # --patient-id tells SOAP the visit was already chosen, so its popups stay closed.
+        # The visit date is already stored on the new exam and loads into Demographics.
+        self._launch_soap(["--open-exam", str(path), "--patient-id", pid])
 
     def _make_encounter_row(self, visit: dict) -> None:
         row = tk.Frame(self.enc_inner, bg=COLOR_CARD,
