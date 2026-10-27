@@ -154,9 +154,13 @@ def _read_demographics_from_any_exam(folder: Path) -> dict:
             last = (patient.get("last_name") or "").strip()
             first = (patient.get("first_name") or "").strip()
             dob = (patient.get("dob") or "").strip()
+            doi = (patient.get("doi") or "").strip()
             pid = (patient.get("patient_id") or "").strip()
             if last or first or dob or pid:
-                return {"last_name": last, "first_name": first, "dob": dob, "patient_id": pid}
+                return {
+                    "last_name": last, "first_name": first,
+                    "dob": dob, "doi": doi, "patient_id": pid,
+                }
     return {}
 
 
@@ -196,6 +200,7 @@ def patient_record_from_folder(folder: Path) -> dict | None:
     last = (patient.get("last_name") or "").strip()
     first = (patient.get("first_name") or "").strip()
     dob = (patient.get("dob") or "").strip()
+    doi = (patient.get("doi") or "").strip()
 
     if not last and not first:
         fl, ff = _names_from_folder_name(folder.name)
@@ -209,6 +214,7 @@ def patient_record_from_folder(folder: Path) -> dict | None:
         "last": last,
         "first": first,
         "dob": dob,
+        "doi": doi,
         "label": label,
     }
 
@@ -365,7 +371,80 @@ def _next_exam_number(names: list[str], prefix: str) -> int:
     return n
 
 
-def _create_encounter_exam_file(folder: Path, exam_name: str, exam_date: str) -> Path:
+# Same presets the History of Illness introduction used for these three visit types.
+_ENCOUNTER_INTRO_PRESETS: dict[str, tuple[str, str, str, str]] = {
+    "Initial": (
+        "incident",
+        "initial chiropractic evaluation",
+        "evaluate the nature and extent of the reported injuries",
+        "a physical examination including orthopedic, neurological, and functional assessments as clinically indicated",
+    ),
+    "Re-Exam": (
+        "accident",
+        "re-examination",
+        "assess clinical progress since the prior evaluation",
+        "a focused re-examination of previously identified findings",
+    ),
+    "Final": (
+        "incident",
+        "final evaluation",
+        "determine maximum medical improvement status",
+        "a final clinical examination and final chart review",
+    ),
+}
+
+
+def _apply_encounter_intro_preset(payload: dict, prefix: str) -> None:
+    """Store the opening-note mode, dropdowns, and paragraph on a new encounter file."""
+    mode = (prefix or "").strip()
+    preset = _ENCOUNTER_INTRO_PRESETS.get(mode)
+    if preset is None:
+        return
+
+    event_word, eval_type, purpose, scope = preset
+    soap = payload.get("soap")
+    if not isinstance(soap, dict):
+        soap = {}
+        payload["soap"] = soap
+    hoi = soap.get("hoi_struct")
+    if not isinstance(hoi, dict):
+        hoi = {}
+        soap["hoi_struct"] = hoi
+    rof = hoi.get("rof")
+    if not isinstance(rof, dict):
+        rof = {}
+        hoi["rof"] = rof
+    intro = rof.get("intro")
+    if not isinstance(intro, dict):
+        intro = {}
+        rof["intro"] = intro
+
+    consent = intro.get("consent", True)
+    consent = consent if isinstance(consent, bool) else bool(consent)
+    intro["event_word"] = event_word
+    intro["eval_type"] = eval_type
+    intro["purpose"] = purpose
+    intro["exam_scope"] = scope
+    intro["consent"] = consent
+
+    patient = payload.get("patient") if isinstance(payload.get("patient"), dict) else {}
+    first = (patient.get("first_name") or "").strip() or "The patient"
+    last = (patient.get("last_name") or "").strip() or "the patient"
+    doi_block = hoi.get("doi") if isinstance(hoi.get("doi"), dict) else {}
+    doi = (doi_block.get("date") or "").strip() or (patient.get("doi") or "").strip() or "____/____/________"
+    parts = [
+        f"{first} {last} presented to the clinic for an {eval_type} regarding injuries allegedly sustained in an {event_word} that occurred on {doi}.",
+        f"The purpose of this evaluation is to {purpose}.",
+        f"Our patient provided a history and underwent {scope}.",
+    ]
+    if consent:
+        parts.append("Informed consent was obtained prior to the commencement of the evaluation.")
+
+    rof["mode"] = mode
+    rof["auto_paragraph"] = " ".join(parts)
+
+
+def _create_encounter_exam_file(folder: Path, exam_name: str, exam_date: str, prefix: str = "") -> Path:
     """Copy the newest exam forward (or start a blank one) and set its visit date."""
     ensure_patient_dirs(folder)
     visits = collect_visits_for_patient(folder)
@@ -398,6 +477,7 @@ def _create_encounter_exam_file(folder: Path, exam_name: str, exam_date: str) ->
         patient = {}
         payload["patient"] = patient
     patient["exam_date"] = exam_date
+    _apply_encounter_intro_preset(payload, prefix)
 
     exams_dir = folder / PATIENT_SUBDIR_EXAMS
     exams_dir.mkdir(parents=True, exist_ok=True)
@@ -1313,7 +1393,6 @@ class DocumentsPage(tk.Frame):
                 "Click below to start the first visit."
             )
             self._make_create_encounter_row(patient)
-            self._make_start_first_visit_row(patient)
             return
 
         self.enc_hint_var.set(
@@ -1525,7 +1604,7 @@ class DocumentsPage(tk.Frame):
                 names.append(visit["exam_name"])
         exam_name = f"{prefix} {_next_exam_number(names, prefix)}"
         try:
-            path = _create_encounter_exam_file(folder, exam_name, exam_date)
+            path = _create_encounter_exam_file(folder, exam_name, exam_date, prefix)
         except Exception as e:
             messagebox.showerror("Create Encounter", f"Could not create the encounter.\n\n{e}")
             return
@@ -1754,8 +1833,11 @@ class DocumentsPage(tk.Frame):
         self.active_patient = patient
         label = patient.get("label") or "(unnamed)"
         dob = (patient.get("dob") or "").strip()
+        doi = (patient.get("doi") or "").strip()
         if dob:
             label = f"{label}    DOB {dob}"
+        if doi:
+            label = f"{label}    DOI {doi}"
         self.patient_name_var.set(label)
         write_shell_state({
             "active_patient_id": patient.get("patient_id"),
@@ -2057,18 +2139,19 @@ class PatientsPage(tk.Frame):
                         highlightbackground=COLOR_BORDER, highlightthickness=1)
         card.pack(fill="both", expand=True)
 
-        cols = ("name", "dob", "gender", "phone", "email", "last_visit")
+        cols = ("name", "dob", "doi", "last_visit", "gender", "phone", "email")
         col_titles = {
             "name": "NAME",
             "dob": "DATE OF BIRTH",
+            "doi": "DATE OF INJURY",
+            "last_visit": "LAST VISIT",
             "gender": "GENDER",
             "phone": "PHONE",
             "email": "EMAIL",
-            "last_visit": "LAST VISIT",
         }
         col_widths = {
-            "name": 220, "dob": 120, "gender": 90,
-            "phone": 130, "email": 220, "last_visit": 120,
+            "name": 220, "dob": 120, "doi": 130, "last_visit": 120,
+            "gender": 90, "phone": 130, "email": 220,
         }
 
         # Style headings + rows
@@ -2117,7 +2200,7 @@ class PatientsPage(tk.Frame):
         q = (getattr(self, "filter_var", tk.StringVar()).get() or "").strip().lower()
 
         all_patients = list_all_patients()
-        rows: list[tuple[dict, str, str, str, str, str, str]] = []
+        rows: list[tuple[dict, str, str, str, str, str, str, str]] = []
         for rec in all_patients:
             folder = Path(rec["folder"])
             profile = read_patient_profile(folder)
@@ -2125,6 +2208,7 @@ class PatientsPage(tk.Frame):
             last = (profile.get("last_name") or rec.get("last") or "").strip()
             first = (profile.get("first_name") or rec.get("first") or "").strip()
             dob = (profile.get("dob") or rec.get("dob") or "").strip()
+            doi = (profile.get("doi") or rec.get("doi") or "").strip()
             gender = (profile.get("gender") or "").strip().upper()
             phone = (profile.get("phone") or "").strip()
             email = (profile.get("email") or "").strip()
@@ -2132,18 +2216,20 @@ class PatientsPage(tk.Frame):
 
             name = to_last_first(last, first) or folder.name
             if q:
-                hay = " ".join([name, dob, gender, phone, email]).lower()
+                hay = " ".join([name, dob, doi, gender, phone, email]).lower()
                 if q not in hay:
                     continue
-            rows.append((rec, name, dob, gender, phone, email, last_visit))
+            rows.append((rec, name, dob, doi, last_visit, gender, phone, email))
 
         # Sort
         def sort_key(item):
-            _rec, name, dob, gender, phone, email, lv = item
+            _rec, name, dob, doi, lv, gender, phone, email = item
             if self._sort_col == "name":
                 return name.lower()
             if self._sort_col == "dob":
                 return dob
+            if self._sort_col == "doi":
+                return doi
             if self._sort_col == "gender":
                 return gender
             if self._sort_col == "phone":
@@ -2156,10 +2242,10 @@ class PatientsPage(tk.Frame):
 
         rows.sort(key=sort_key, reverse=self._sort_desc)
 
-        for rec, name, dob, gender, phone, email, lv in rows:
+        for rec, name, dob, doi, lv, gender, phone, email in rows:
             row_id = self._tree.insert(
                 "", "end",
-                values=(name, dob, gender, phone, email, lv),
+                values=(name, dob, doi, lv, gender, phone, email),
                 tags=("name_link",),
             )
             self._row_to_rec[row_id] = rec
@@ -2600,6 +2686,16 @@ class PatientsPage(tk.Frame):
             "label": to_last_first(last, first) or pid,
         }
         self._selected_rec = new_rec
+
+        if self._form_mode != "edit":
+            try:
+                doc = self.shell.documents_page
+                if doc:
+                    doc.set_active_patient(new_rec)
+                self.shell.show_page("documents")
+            except Exception:
+                self._open_detail(new_rec)
+            return
 
         # If the edited patient is the active patient on the Documents page,
         # push the refreshed record over so its header and Encounters list

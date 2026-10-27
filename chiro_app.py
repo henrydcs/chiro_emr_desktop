@@ -392,7 +392,7 @@ class App(tk.Tk):
         self.exam_date_var = tk.StringVar(value=today_mmddyyyy())
         self.claim_var = tk.StringVar(value="")       
 
-        self.provider_var = tk.StringVar(value=PROVIDER_NAME)
+        self.provider_var = tk.StringVar(value=self._listed_provider_name())
 
         self.current_exam = tk.StringVar(value="")
         self.current_page = tk.StringVar(value="HOI History")
@@ -7154,6 +7154,15 @@ class App(tk.Tk):
         out.sort(key=sort_key, reverse=True)
         return out
 
+    def _listed_provider_name(self) -> str:
+        """Name shown in the Providers section. Does not change that section."""
+        try:
+            from providers_storage import default_provider_label
+            name = (default_provider_label() or "").strip()
+        except Exception:
+            name = ""
+        return name or (PROVIDER_NAME or "").strip()
+
     def _apply_demographics_from_patient_folder(self, folder: Path):
         patient = self._read_patient_json_from_folder(folder)
         pid = (patient.get("patient_id") or "").strip() or _patient_id_from_folder_name(folder.name)
@@ -7168,7 +7177,7 @@ class App(tk.Tk):
         )
         self.claim_var.set(patient.get("claim", "") or "")
         prov = (patient.get("provider") or "").strip()
-        self.provider_var.set(prov if prov else PROVIDER_NAME)
+        self.provider_var.set(prov if prov else self._listed_provider_name())
 
         # Mirror the new active patient back to the shell so when SOAP exits,
         # the Documents page reflects the latest selection.
@@ -9145,7 +9154,7 @@ class App(tk.Tk):
             self.claim_var.set(patient.get("claim", ""))
             
             prov = (patient.get("provider") or "").strip()
-            self.provider_var.set(prov if prov else "")
+            self.provider_var.set(prov if prov else self._listed_provider_name())
 
             # ----- Identity overlay from patient.json (single source of truth) -----
             # Exam JSONs carry their own embedded patient block which can drift from
