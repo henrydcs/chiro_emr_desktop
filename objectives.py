@@ -745,6 +745,7 @@ class VitalsInspectionPanel(ttk.Frame):
         self.adl_scroll: ScrollFrame | None = None
         self.adl_items_frame: ttk.Frame | None = None
         self.adl_selected_label: str | None = None
+        self.adl_all_source_label: str | None = None
         self._adl_prefix_sync = False
 
 
@@ -1146,6 +1147,9 @@ class VitalsInspectionPanel(ttk.Frame):
         ttk.Button(btn_fr, text="Set All (select)", command=self._clear_all_adl_ratings).pack(
             side="left", padx=(6, 0)
         )
+        ttk.Button(btn_fr, text="All", command=self._apply_all_adl_ratings).pack(
+            side="left", padx=(6, 0)
+        )
 
         notes = CollapsibleAutoNotes(body, "ADL Notes", self.adl_notes_var, on_change=self._changed)
         notes.grid(row=3, column=0, sticky="ew", pady=(4, 8))
@@ -1156,6 +1160,30 @@ class VitalsInspectionPanel(ttk.Frame):
             cb = row.get("combo")
             if cb is not None:
                 cb.set("(select)")
+        self._changed()
+
+    def _apply_all_adl_ratings(self) -> None:
+        label = (self.adl_all_source_label or "").strip()
+        if not label:
+            return
+        source = next(
+            (row for row in self.adl_entry_rows if (row.get("label") or "").strip() == label),
+            None,
+        )
+        if source is None:
+            return
+        try:
+            sev = int(source["severity"].get())
+        except Exception:
+            sev = -1
+        if not 0 <= sev <= 9:
+            return
+        shown = str(sev)
+        for row in self.adl_entry_rows:
+            row["severity"].set(sev)
+            cb = row.get("combo")
+            if cb is not None:
+                cb.set(shown)
         self._changed()
 
     def _refresh_adl_scroll(self) -> None:
@@ -1211,6 +1239,7 @@ class VitalsInspectionPanel(ttk.Frame):
         if not label:
             return
         self.adl_selected_label = label
+        self.adl_all_source_label = label
         self._render_adl_entry_rows(select_label=label)
 
     def _render_adl_entry_rows(self, *, select_label: str | None = None) -> None:
@@ -1271,14 +1300,15 @@ class VitalsInspectionPanel(ttk.Frame):
             sev = int(row["severity"].get())
             cb.set(str(sev) if 0 <= sev <= 9 else "(select)")
 
-            def _make_handler(var: tk.IntVar, combobox: ttk.Combobox):
+            def _make_handler(var: tk.IntVar, combobox: ttk.Combobox, row_label: str):
                 def _on_selected(_evt=None):
                     v = (combobox.get() or "").strip()
                     var.set(int(v) if v.isdigit() else -1)
+                    self.adl_all_source_label = row_label
                     self._changed()
                 return _on_selected
 
-            cb.bind("<<ComboboxSelected>>", _make_handler(row["severity"], cb))
+            cb.bind("<<ComboboxSelected>>", _make_handler(row["severity"], cb, label))
             cb.pack(side="left", padx=(4, 0))
 
             if is_global:
@@ -1422,6 +1452,8 @@ class VitalsInspectionPanel(ttk.Frame):
             return
         self.adl_entry_rows = [r for r in self.adl_entry_rows if r.get("label") != label]
         self.adl_selected_label = None
+        if (self.adl_all_source_label or "").strip() == label:
+            self.adl_all_source_label = None
         if not self.adl_entry_rows:
             self._init_adl_rows_from_global()
         self._render_adl_entry_rows()
@@ -1472,6 +1504,7 @@ class VitalsInspectionPanel(ttk.Frame):
         self._load_global_adl_prefix()
         self.adl_notes_var.set(adl.get("notes") or "")
         self.adl_selected_label = None
+        self.adl_all_source_label = None
 
         saved: dict[str, int] = {}
         for ent in adl.get("entries") or []:
@@ -1775,6 +1808,7 @@ class VitalsInspectionPanel(ttk.Frame):
         self._load_global_adl_prefix()
         self.adl_notes_var.set("")
         self.adl_selected_label = None
+        self.adl_all_source_label = None
         self.adl_entry_rows = []
         if self.adl_items_frame is not None:
             self._init_adl_rows_from_global()
