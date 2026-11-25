@@ -825,6 +825,10 @@ class ShellLayout(tk.Frame):
                 self.analytics_page = page
             elif nav_id == "admin":
                 page = AdminPage(self.page_area)
+            elif nav_id == "clinics":
+                from clinic_setup_ui import ClinicSetupPage
+
+                page = ClinicSetupPage(self.page_area)
             else:
                 page = PlaceholderPage(self.page_area, label)
             self._pages[nav_id] = page
@@ -894,6 +898,11 @@ class ShellLayout(tk.Frame):
             except Exception:
                 pass
         page = self._pages.get(nav_id)
+        if nav_id == "clinics" and hasattr(page, "reload"):
+            try:
+                page.reload()
+            except Exception:
+                pass
         if nav_id == "dashboard" and isinstance(page, DashboardPage):
             try:
                 page.refresh()
@@ -2779,6 +2788,9 @@ class EmrShellApp(tk.Tk):
         self.current_user: str | None = None
 
         self._show_login()
+        self.update_idletasks()
+        from clinic_setup_ui import offer_first_run_clinic_setup
+        offer_first_run_clinic_setup(self)
 
     def _set_initial_geometry(self, login: bool):
         sw = self.winfo_screenwidth()

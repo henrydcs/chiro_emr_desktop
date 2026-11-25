@@ -119,7 +119,7 @@ from config import (
     REGION_LABELS,
     SETTINGS_PATH,
     AUTOSAVE_DEBOUNCE_MS,
-    LOGO_PATH, PROVIDER_NAME, CLINIC_NAME, CLINIC_ADDR, CLINIC_PHONE_FAX,
+    LOGO_PATH, PROVIDER_NAME, CLINIC_NAME, CLINIC_ADDR, CLINIC_PHONE_FAX, CLINIC_EMAIL,
     YEAR_CASES_ROOT, NEXT_YEAR_CASES_ROOT, BASE_DIR,
     PATIENT_SUBDIR_EXAMS, PATIENT_SUBDIR_PDFS, EXAM_INDEX_SUBDIR,
 )
@@ -6008,7 +6008,7 @@ class App(tk.Tk):
         if os.path.exists(LOGO_PATH) and PIL_OK:
             try:
                 img = Image.open(LOGO_PATH).convert("RGBA")
-                img = img.resize((110, 110))
+                img = img.resize((128, 128))
                 self._tk_logo_image = ImageTk.PhotoImage(img)
                 logo_label.configure(image=self._tk_logo_image)
             except Exception:
@@ -6023,6 +6023,7 @@ class App(tk.Tk):
         ttk.Label(clinic_text, text=CLINIC_NAME, font=("Segoe UI", 18, "bold")).pack(anchor="w")
         ttk.Label(clinic_text, text=CLINIC_ADDR, font=("Segoe UI", 12)).pack(anchor="w", pady=(2, 0))
         ttk.Label(clinic_text, text=CLINIC_PHONE_FAX, font=("Segoe UI", 12)).pack(anchor="w", pady=(2, 0))
+        ttk.Label(clinic_text, text=CLINIC_EMAIL, font=("Segoe UI", 12)).pack(anchor="w", pady=(2, 0))
 
         # separator + accent should hide/show with the header too
         self.header_separator = ttk.Separator(self.header_container)

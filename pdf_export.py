@@ -16,8 +16,9 @@ from reportlab.lib import colors
 from reportlab.lib.styles import getSampleStyleSheet
 from HOIpdf import build_rof_flowables
 
+from clinic_profile import layout_value
 from config import (
-    LOGO_PATH, CLINIC_NAME, CLINIC_ADDR, CLINIC_PHONE_FAX,
+    LOGO_PATH, CLINIC_NAME, CLINIC_ADDR, CLINIC_PHONE_FAX, CLINIC_EMAIL,
     PROVIDER_NAME, PROVIDER_TITLE, PROVIDER_LICENSE, PROVIDER_NPI,
     REGION_LABELS,
 )
@@ -4165,15 +4166,18 @@ class HeaderExamNumberedCanvas(canvas_module.Canvas):
         right = page_w - 72
 
         y_top = page_h - 40
-        clinic_block_height = 58
+        name_size = layout_value("clinic_name_size")
+        detail_size = layout_value("clinic_detail_size")
+        text_line_gap = max(name_size + 2, detail_size + 5)
+        clinic_block_height = 26 + 3 * text_line_gap
 
-        logo_w, logo_h = 50, 50
+        logo_w = layout_value("logo_width")
+        logo_h = layout_value("logo_height")
         PDF_LOGO_X_OFFSET = 0
-        PDF_LOGO_Y_OFFSET = -35
+        PDF_LOGO_Y_OFFSET = layout_value("logo_y_offset")
 
         text_top = y_top + 10
-        text_line_gap = 16
-        text_lines = 3
+        text_lines = 4
         text_block_height = text_line_gap * text_lines
 
         logo_x = left + PDF_LOGO_X_OFFSET
@@ -4195,11 +4199,12 @@ class HeaderExamNumberedCanvas(canvas_module.Canvas):
             except Exception:
                 pass
 
-        self.setFont("Helvetica-Bold", 14)
+        self.setFont("Helvetica-Bold", name_size)
         self.drawString(text_x, text_y, CLINIC_NAME)
-        self.setFont("Helvetica", 11)
-        self.drawString(text_x, text_y - 16, CLINIC_ADDR)
-        self.drawString(text_x, text_y - 32, CLINIC_PHONE_FAX)
+        self.setFont("Helvetica", detail_size)
+        self.drawString(text_x, text_y - text_line_gap, CLINIC_ADDR)
+        self.drawString(text_x, text_y - (2 * text_line_gap), CLINIC_PHONE_FAX)
+        self.drawString(text_x, text_y - (3 * text_line_gap), CLINIC_EMAIL)
 
         sep_y = y_top - clinic_block_height
         self.setLineWidth(0.5)

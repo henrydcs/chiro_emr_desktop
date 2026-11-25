@@ -12,13 +12,39 @@ PROVIDER_NPI      = "1154619070"
 CLINIC_NAME       = get_env("CLINIC_NAME", "Default Clinic Name")
 CLINIC_ADDR       = get_env("CLINIC_ADDR", "")
 CLINIC_PHONE_FAX  = get_env("CLINIC_PHONE_FAX", "")
+CLINIC_EMAIL      = get_env("CLINIC_EMAIL", "")
 
 # ----------------- PROJECT ROOT -----------------
 BASE_DIR = os.path.dirname(__file__)
 
 # ----------------- ASSETS -----------------
 ASSETS_DIR = os.path.join(BASE_DIR, "assets")
-LOGO_PATH = os.path.join(ASSETS_DIR, "clinic_logo.png")  # PNG
+_DEFAULT_LOGO_PATH = os.path.join(ASSETS_DIR, "clinic_logo.png")  # PNG
+
+# Per-computer clinic profile (data folder). Until one is saved, these
+# names keep the values above, read again each time a header or PDF is drawn.
+from clinic_profile import ClinicPath, ClinicText, install_defaults
+
+install_defaults(
+    {
+        "provider_name": PROVIDER_NAME,
+        "provider_license": PROVIDER_LICENSE,
+        "provider_npi": PROVIDER_NPI,
+        "clinic_name": CLINIC_NAME,
+        "clinic_addr": CLINIC_ADDR,
+        "clinic_phone_fax": CLINIC_PHONE_FAX,
+        "clinic_email": CLINIC_EMAIL,
+    },
+    _DEFAULT_LOGO_PATH,
+)
+PROVIDER_NAME = ClinicText("provider_name")
+PROVIDER_LICENSE = ClinicText("provider_license")
+PROVIDER_NPI = ClinicText("provider_npi")
+CLINIC_NAME = ClinicText("clinic_name")
+CLINIC_ADDR = ClinicText("clinic_addr")
+CLINIC_PHONE_FAX = ClinicText("clinic_phone_fax")
+CLINIC_EMAIL = ClinicText("clinic_email")
+LOGO_PATH = ClinicPath()
 
 # ----------------- CASE STORAGE (PHI-safe, external) -----------------
 ACTIVE_YEAR = 2026

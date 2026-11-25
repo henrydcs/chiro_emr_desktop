@@ -16,7 +16,7 @@ try:
 except Exception:
     REPORTLAB_OK = False
 
-from config import CLINIC_NAME, CLINIC_ADDR, CLINIC_PHONE_FAX, LOGO_PATH
+from config import CLINIC_NAME, CLINIC_ADDR, CLINIC_PHONE_FAX, CLINIC_EMAIL, LOGO_PATH
 from billing_ledger import compute_cash_balance, encounter_amount_due
 from billing_pi_case import case_status_label, load_pi_case
 from billing_pi_ledger import compute_pi_balance, list_pi_posted_encounters, load_pi_ledger
@@ -165,8 +165,8 @@ def _draw_header_band(c: "pdf_canvas.Canvas", page_w: float, page_h: float) -> f
     """Logo + clinic block. Returns the Y coord just below the band."""
     margin = 0.55 * inch
     band_top = page_h - margin
-    logo_w = 1.05 * inch
-    logo_h = 1.05 * inch
+    logo_w = 1.25 * inch
+    logo_h = 1.25 * inch
 
     logo_x = margin
     logo_y = band_top - logo_h
@@ -197,6 +197,7 @@ def _draw_header_band(c: "pdf_canvas.Canvas", page_w: float, page_h: float) -> f
     c.setFillColor(colors.HexColor(COLOR_TEXT_MUTED))
     c.drawString(text_x, text_top - 30, (CLINIC_ADDR or "").strip())
     c.drawString(text_x, text_top - 44, (CLINIC_PHONE_FAX or "").strip())
+    c.drawString(text_x, text_top - 58, (CLINIC_EMAIL or "").strip())
 
     rule_y = logo_y - 14
     c.setStrokeColor(colors.HexColor(COLOR_BORDER))
